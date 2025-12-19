@@ -4,7 +4,7 @@ import {
     FolderOpen, Grid, List, Search, X, Filter,
     SortAsc, ChevronDown, Clock, BookOpen, Play
 } from 'lucide-react'
-import { getAllCourses, getRecentlyWatchedVideos } from '../utils/db'
+import { getAllCourses, getRecentlyWatchedVideos, addCourse, addModule, addVideo } from '../utils/db'
 import { useSettings } from '../contexts/SettingsContext'
 import CourseCard from '../components/course/CourseCard'
 import LoadingSpinner from '../components/common/LoadingSpinner'
@@ -146,9 +146,15 @@ function HomePage() {
         try {
             let courseData
             if (isFileSystemAccessSupported()) {
+                console.log('Using File System Access API')
                 const handle = await window.showDirectoryPicker()
+                console.log('Selected folder:', handle.name)
                 courseData = await scanCourseFolder(handle)
+                console.log('Scanned course data:', courseData)
+                console.log('Modules found:', courseData?.modules?.length || 0)
+                console.log('Total videos:', courseData?.totalVideos || 0)
             } else {
+                console.log('Using fallback picker')
                 const input = document.createElement('input')
                 input.type = 'file'
                 input.webkitdirectory = true
@@ -160,21 +166,88 @@ function HomePage() {
                 })
 
                 if (files.length === 0) return
-                courseData = await scanFolderFromFiles(files)
+
+                // Get folder name from first file's path
+                const firstFile = files[0]
+                const pathParts = firstFile.webkitRelativePath.split('/')
+                const folderName = pathParts[0]
+                console.log('Folder name:', folderName, 'Files count:', files.length)
+
+                courseData = await scanFolderFromFiles(files, folderName)
+                console.log('Scanned course data:', courseData)
             }
 
             if (courseData) {
+                if (courseData.modules?.length === 0 && courseData.totalVideos === 0) {
+                    alert('No videos found in the selected folder. Make sure your folder contains MP4, WebM, MOV, OGG, AVI, or MKV files.')
+                }
                 setImportData(courseData)
+            } else {
+                alert('Failed to scan folder. Please try again.')
             }
         } catch (err) {
             if (err.name !== 'AbortError') {
                 console.error('Import failed:', err)
+                alert('Import failed: ' + err.message)
             }
         }
     }
 
     function toggleViewMode() {
         updateSettings({ viewMode: viewMode === 'grid' ? 'list' : 'grid' })
+    }
+
+    // Handle import confirmation - save course to database
+    async function handleImportConfirm(editedData) {
+        try {
+            console.log('Saving course to database:', editedData)
+
+            // Combine original import data with edited data
+            const courseData = {
+                ...importData,
+                title: editedData.title,
+                thumbnailData: editedData.thumbnailData,
+            }
+
+            // Add the course to database
+            const savedCourse = await addCourse(courseData)
+            console.log('Course saved:', savedCourse.id)
+
+            // Add modules and videos
+            for (const module of editedData.modules) {
+                const savedModule = await addModule({
+                    courseId: savedCourse.id,
+                    title: module.title,
+                    originalTitle: module.originalTitle,
+                    order: module.order,
+                    totalDuration: module.totalDuration,
+                    totalVideos: module.videos?.length || 0
+                })
+                console.log('Module saved:', savedModule.id)
+
+                // Add videos for this module
+                for (const video of (module.videos || [])) {
+                    await addVideo({
+                        courseId: savedCourse.id,
+                        moduleId: savedModule.id,
+                        title: video.title,
+                        originalTitle: video.originalTitle,
+                        fileName: video.fileName,
+                        relativePath: video.relativePath,
+                        duration: video.duration,
+                        order: video.order,
+                        fileHandle: video.fileHandle
+                    })
+                }
+            }
+
+            console.log('Import complete!')
+            setImportData(null)
+            loadCourses()
+        } catch (err) {
+            console.error('Failed to save course:', err)
+            alert('Failed to save course: ' + err.message)
+        }
     }
 
     function toggleFilter(type, value) {
@@ -494,11 +567,9 @@ function HomePage() {
             {/* Import Preview Modal */}
             <ImportPreviewModal
                 courseStructure={importData}
-                onConfirm={() => {
-                    setImportData(null)
-                    loadCourses()
-                }}
+                onConfirm={handleImportConfirm}
                 onCancel={() => setImportData(null)}
+                existingCourseNames={courses.map(c => c.title)}
             />
 
             {/* Edit Course Modal */}

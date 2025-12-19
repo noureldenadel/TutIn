@@ -614,6 +614,7 @@ export async function scanCourseFolder(directoryHandle, onProgress = () => { }) 
  * Clean a course title from folder name
  */
 function cleanCourseTitle(name) {
+    if (!name) return 'Untitled Course'
     return name
         // Remove leading numbers and separators
         .replace(/^[\d\s._-]+/, '')
@@ -626,6 +627,7 @@ function cleanCourseTitle(name) {
  * Clean a module title from folder name
  */
 function cleanModuleTitle(name) {
+    if (!name) return 'Untitled Module'
     return name
         // Remove leading numbers like "01_", "1.", "01 -", etc.
         .replace(/^[\d]+[\s._-]*/, '')
@@ -638,6 +640,7 @@ function cleanModuleTitle(name) {
  * Clean a video title from filename
  */
 function cleanVideoTitle(name) {
+    if (!name) return 'Untitled Video'
     return name
         // Remove file extension
         .replace(/\.[^.]+$/, '')

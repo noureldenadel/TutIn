@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import {
     X, Upload, Folder, Video, Clock, AlertTriangle,
     ChevronDown, ChevronRight, Pencil, Check, Image
@@ -24,6 +24,20 @@ function ImportPreviewModal({
     const [thumbnailPreview, setThumbnailPreview] = useState(null)
     const [expandedModules, setExpandedModules] = useState({})
     const fileInputRef = useRef(null)
+
+    // Sync courseStructure prop changes to state
+    useEffect(() => {
+        if (courseStructure) {
+            setCourseName(courseStructure.title || '')
+            setModules(
+                courseStructure.modules?.map(m => ({
+                    ...m,
+                    isEditing: false,
+                    editedTitle: m.title
+                })) || []
+            )
+        }
+    }, [courseStructure])
 
     // Check for duplicate course name
     const isDuplicate = existingCourseNames.some(
