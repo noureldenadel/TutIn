@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useCallback } from 'react'
 import { Link } from 'react-router-dom'
 import {
     FolderOpen, Grid, List, Search, X, Filter,
-    SortAsc, ChevronDown, Clock, BookOpen, Play
+    SortAsc, ChevronDown, Clock, BookOpen, Play, Youtube
 } from 'lucide-react'
 import { getAllCourses, getRecentlyWatchedVideos, addCourse, addModule, addVideo } from '../utils/db'
 import { useSettings } from '../contexts/SettingsContext'
@@ -10,6 +10,7 @@ import CourseCard from '../components/course/CourseCard'
 import LoadingSpinner from '../components/common/LoadingSpinner'
 import ImportPreviewModal from '../components/course/ImportPreviewModal'
 import EditCourseModal from '../components/course/EditCourseModal'
+import YouTubeImportModal from '../components/course/YouTubeImportModal'
 import { scanCourseFolder, scanFolderFromFiles, isFileSystemAccessSupported } from '../utils/fileSystem'
 
 function HomePage() {
@@ -33,6 +34,8 @@ function HomePage() {
         return localStorage.getItem('mearn_sort') || 'lastAccessed'
     })
     const [showSortMenu, setShowSortMenu] = useState(false)
+    const [showYouTubeModal, setShowYouTubeModal] = useState(false)
+    const [showAddMenu, setShowAddMenu] = useState(false)
 
     // Load courses on mount
     useEffect(() => {
@@ -144,15 +147,20 @@ function HomePage() {
     // Handle folder import
     async function handleImportClick() {
         try {
+            // ... (existing import logic) ...
             let courseData
             if (isFileSystemAccessSupported()) {
                 console.log('Using File System Access API')
                 const handle = await window.showDirectoryPicker()
                 console.log('Selected folder:', handle.name)
+                // Check if checks if course already exists by folderHandle or title
+                // Note: comparing handles is hard, better to compare titles or path if available
+                // Simplest: Check name first
+                /* 
+                   We scan first to get the title. 
+                   Alternatively, check if handle.name matches any originalTitle?
+                */
                 courseData = await scanCourseFolder(handle)
-                console.log('Scanned course data:', courseData)
-                console.log('Modules found:', courseData?.modules?.length || 0)
-                console.log('Total videos:', courseData?.totalVideos || 0)
             } else {
                 console.log('Using fallback picker')
                 const input = document.createElement('input')
@@ -167,17 +175,22 @@ function HomePage() {
 
                 if (files.length === 0) return
 
-                // Get folder name from first file's path
                 const firstFile = files[0]
                 const pathParts = firstFile.webkitRelativePath.split('/')
                 const folderName = pathParts[0]
-                console.log('Folder name:', folderName, 'Files count:', files.length)
 
                 courseData = await scanFolderFromFiles(files, folderName)
-                console.log('Scanned course data:', courseData)
             }
 
             if (courseData) {
+                // Check for duplicates
+                const dupe = courses.find(c => c.title === courseData.title || c.originalTitle === courseData.title)
+                if (dupe) {
+                    if (!confirm(`A course named "${courseData.title}" already exists. Do you want to import it again as a duplicate?`)) {
+                        return
+                    }
+                }
+
                 if (courseData.modules?.length === 0 && courseData.totalVideos === 0) {
                     alert('No videos found in the selected folder. Make sure your folder contains MP4, WebM, MOV, OGG, AVI, or MKV files.')
                 }
@@ -206,6 +219,7 @@ function HomePage() {
             const courseData = {
                 ...importData,
                 title: editedData.title,
+                instructor: editedData.instructor,
                 thumbnailData: editedData.thumbnailData,
             }
 
@@ -214,19 +228,23 @@ function HomePage() {
             console.log('Course saved:', savedCourse.id)
 
             // Add modules and videos
-            for (const module of editedData.modules) {
+            /* FIX: Use index for explicit ordering to match preview */
+            for (let i = 0; i < editedData.modules.length; i++) {
+                const module = editedData.modules[i]
                 const savedModule = await addModule({
                     courseId: savedCourse.id,
                     title: module.title,
                     originalTitle: module.originalTitle,
-                    order: module.order,
+                    order: i, // Explicit order from array index
                     totalDuration: module.totalDuration,
                     totalVideos: module.videos?.length || 0
                 })
                 console.log('Module saved:', savedModule.id)
 
                 // Add videos for this module
-                for (const video of (module.videos || [])) {
+                const videos = module.videos || []
+                for (let j = 0; j < videos.length; j++) {
+                    const video = videos[j]
                     await addVideo({
                         courseId: savedCourse.id,
                         moduleId: savedModule.id,
@@ -235,7 +253,7 @@ function HomePage() {
                         fileName: video.fileName,
                         relativePath: video.relativePath,
                         duration: video.duration,
-                        order: video.order,
+                        order: j, // Explicit order from array index
                         fileHandle: video.fileHandle
                     })
                 }
@@ -247,6 +265,54 @@ function HomePage() {
         } catch (err) {
             console.error('Failed to save course:', err)
             alert('Failed to save course: ' + err.message)
+        }
+    }
+
+    async function handleYouTubeImport(courseData) {
+        try {
+            // Check for duplicates
+            const dupe = courses.find(c => c.title === courseData.title)
+            if (dupe) {
+                if (!confirm(`A course named "${courseData.title}" already exists. Do you want to import it again?`)) {
+                    return
+                }
+            }
+
+            console.log('Saving YouTube course:', courseData)
+            const savedCourse = await addCourse(courseData)
+
+            // Add module and videos
+            if (courseData.modules?.[0]) {
+                const module = courseData.modules[0]
+                const savedModule = await addModule({
+                    courseId: savedCourse.id,
+                    title: module.title,
+                    originalTitle: module.title,
+                    order: 0,
+                    totalDuration: 0, // YouTube duration requires separate fetch or player
+                    totalVideos: module.videos.length
+                })
+
+                for (let i = 0; i < module.videos.length; i++) {
+                    const video = module.videos[i]
+                    await addVideo({
+                        courseId: savedCourse.id,
+                        moduleId: savedModule.id,
+                        title: video.title,
+                        originalTitle: video.title,
+                        youtubeId: video.youtubeId,
+                        url: video.url,
+                        duration: 0,
+                        order: i // Explicit order
+                    })
+                }
+            }
+
+            setShowYouTubeModal(false)
+            loadCourses()
+        } catch (err) {
+            console.error('Failed to save YouTube course:', err)
+            alert('Failed to save: ' + err.message)
         }
     }
 
@@ -324,13 +390,52 @@ function HomePage() {
                     </p>
                 </div>
 
-                <button
-                    onClick={handleImportClick}
-                    className="btn-primary flex items-center gap-2"
-                >
-                    <FolderOpen className="w-5 h-5" />
-                    Add Course
-                </button>
+                <div className="relative">
+                    <div className="flex bg-primary rounded-lg overflow-hidden">
+                        <button
+                            onClick={handleImportClick}
+                            className="flex items-center gap-2 px-4 py-2 text-white hover:bg-primary-dark transition-colors"
+                        >
+                            <FolderOpen className="w-5 h-5" />
+                            Add Course
+                        </button>
+                        <div className="w-[1px] bg-white/20" />
+                        <button
+                            onClick={() => setShowAddMenu(!showAddMenu)}
+                            className="px-2 py-2 text-white hover:bg-primary-dark transition-colors"
+                        >
+                            <ChevronDown className="w-4 h-4" />
+                        </button>
+                    </div>
+
+                    {showAddMenu && (
+                        <>
+                            <div className="fixed inset-0 z-10" onClick={() => setShowAddMenu(false)} />
+                            <div className="absolute right-0 mt-2 w-48 py-2 bg-white dark:bg-dark-surface rounded-lg shadow-lg border border-light-border dark:border-dark-border z-20">
+                                <button
+                                    onClick={() => {
+                                        handleImportClick()
+                                        setShowAddMenu(false)
+                                    }}
+                                    className="w-full px-4 py-2 text-left text-sm hover:bg-light-surface dark:hover:bg-dark-bg flex items-center gap-2"
+                                >
+                                    <FolderOpen className="w-4 h-4" />
+                                    Local Folder
+                                </button>
+                                <button
+                                    onClick={() => {
+                                        setShowYouTubeModal(true)
+                                        setShowAddMenu(false)
+                                    }}
+                                    className="w-full px-4 py-2 text-left text-sm hover:bg-light-surface dark:hover:bg-dark-bg flex items-center gap-2"
+                                >
+                                    <Youtube className="w-4 h-4 text-red-600" />
+                                    From YouTube
+                                </button>
+                            </div>
+                        </>
+                    )}
+                </div>
             </div>
 
             {/* Search, Filter, and Sort Bar */}
@@ -492,8 +597,8 @@ function HomePage() {
                             key={course.id}
                             course={course}
                             viewMode={viewMode}
-                            onDelete={loadCourses}
-                            onEdit={(course) => setEditingCourse(course)}
+                            onRefresh={loadCourses}
+                            onEdit={() => setEditingCourse(course)}
                         />
                     ))}
                 </div>
@@ -578,6 +683,13 @@ function HomePage() {
                 isOpen={!!editingCourse}
                 onClose={() => setEditingCourse(null)}
                 onSave={loadCourses}
+            />
+
+            {/* YouTube Import Modal */}
+            <YouTubeImportModal
+                isOpen={showYouTubeModal}
+                onClose={() => setShowYouTubeModal(false)}
+                onImport={handleYouTubeImport}
             />
         </div>
     )

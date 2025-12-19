@@ -69,6 +69,14 @@
 - [x] Improved button styling (gradients, shadows)
 - [x] Accessibility improvements (aria labels, tooltips)
 
+### Phase 8: AI Features
+- [x] Whisper AI transcription (Transformers.js in-browser)
+- [x] Gemini AI summarization via OpenRouter
+- [x] Structured summaries (title, bullet points, notes, action items)
+- [x] Manual file picker for browsers without File System Access API
+- [x] Retry logic for API rate limiting
+- [x] Fallback to extractive summary if API fails
+
 ---
 
 ## 🔄 In Progress / Testing
@@ -84,7 +92,7 @@
 ## 📋 Planned Features
 
 ### High Priority
-- [ ] Drag-and-drop to reorder modules/videos
+- [x] Drag-and-drop to reorder modules/videos
 - [ ] Batch operations (mark multiple as complete)
 - [ ] Course statistics dashboard
 - [ ] Time spent tracking per video
@@ -164,5 +172,8 @@ The File System Access API only works in Chromium browsers. For Firefox/Safari s
 - Add React Query for data fetching patterns
 
 
-add ai to like zoom
-add aability to connect to youtube or yanfaa
+### AI Improvements
+- [ ] Support for YouTube video transcription
+- [ ] Multiple AI model options (different Whisper sizes)
+- [ ] Custom summarization prompts
+- [ ] Export transcripts as SRT/VTT subtitles

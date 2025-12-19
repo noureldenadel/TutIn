@@ -342,7 +342,9 @@ export async function addVideo(videoData) {
         completedAt: null,
         watchCount: 0,
         tags: videoData.tags || [],
-        bookmarks: []
+        bookmarks: [],
+        youtubeId: videoData.youtubeId || null,
+        url: videoData.url || null
     }
 
     return new Promise((resolve, reject) => {

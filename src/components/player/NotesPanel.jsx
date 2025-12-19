@@ -12,7 +12,8 @@ function NotesPanel({
     courseId,
     currentTime = 0,
     onSeek,
-    isCollapsed: initialCollapsed = false
+    isCollapsed: initialCollapsed = false,
+    hideHeader = false
 }) {
     const [notes, setNotes] = useState([])
     const [isCollapsed, setIsCollapsed] = useState(initialCollapsed)
@@ -122,22 +123,24 @@ function NotesPanel({
     if (!video) return null
 
     return (
-        <div className="bg-white dark:bg-dark-surface border border-light-border dark:border-dark-border rounded-lg overflow-hidden">
+        <div className={`bg-white dark:bg-dark-surface border border-light-border dark:border-dark-border rounded-lg overflow-hidden ${hideHeader ? 'border-0' : ''}`}>
             {/* Header */}
-            <button
-                onClick={() => setIsCollapsed(!isCollapsed)}
-                className="w-full px-4 py-3 flex items-center justify-between bg-light-surface dark:bg-dark-bg hover:bg-gray-100 dark:hover:bg-dark-surface transition-colors"
-            >
-                <div className="flex items-center gap-3">
-                    <span className="font-medium">Notes</span>
-                    {notes.length > 0 && (
-                        <span className="bg-primary/10 text-primary text-xs px-2 py-0.5 rounded-full">
-                            {notes.length}
-                        </span>
-                    )}
-                </div>
-                {isCollapsed ? <ChevronDown className="w-5 h-5" /> : <ChevronUp className="w-5 h-5" />}
-            </button>
+            {!hideHeader && (
+                <button
+                    onClick={() => setIsCollapsed(!isCollapsed)}
+                    className="w-full px-4 py-3 flex items-center justify-between bg-light-surface dark:bg-dark-bg hover:bg-gray-100 dark:hover:bg-dark-surface transition-colors"
+                >
+                    <div className="flex items-center gap-3">
+                        <span className="font-medium">Notes</span>
+                        {notes.length > 0 && (
+                            <span className="bg-primary/10 text-primary text-xs px-2 py-0.5 rounded-full">
+                                {notes.length}
+                            </span>
+                        )}
+                    </div>
+                    {isCollapsed ? <ChevronDown className="w-5 h-5" /> : <ChevronUp className="w-5 h-5" />}
+                </button>
+            )}
 
             {/* Content */}
             {!isCollapsed && (

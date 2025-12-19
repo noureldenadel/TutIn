@@ -5,7 +5,6 @@ import { getCourse, getModulesByCourse, getVideosByModule, updateCourse } from '
 import LoadingSpinner from '../components/common/LoadingSpinner'
 import VideoPlayer from '../components/player/VideoPlayer'
 import PlaylistSidebar from '../components/player/PlaylistSidebar'
-import NotesPanel from '../components/player/NotesPanel'
 
 function CoursePlayerPage() {
     const { courseId } = useParams()
@@ -156,21 +155,40 @@ function CoursePlayerPage() {
                 <div className={`flex-1 flex flex-col overflow-y-auto ${sidebarCollapsed ? '' : 'lg:mr-[360px]'}`}>
                     {currentVideo ? (
                         <>
-                            <VideoPlayer
-                                ref={videoRef}
-                                video={currentVideo}
-                                courseId={courseId}
-                                onComplete={handleVideoComplete}
-                                onNext={handleNextVideo}
-                                onTimeUpdate={setCurrentTime}
-                            />
-                            <div className="p-4">
-                                <NotesPanel
+                            <div className="aspect-video bg-black sticky top-0 z-20">
+                                <VideoPlayer
+                                    ref={videoRef}
                                     video={currentVideo}
                                     courseId={courseId}
-                                    currentTime={currentTime}
-                                    onSeek={(time) => videoRef.current?.seekTo?.(time)}
+                                    onComplete={handleVideoComplete}
+                                    onNext={handleNextVideo}
+                                    onTimeUpdate={setCurrentTime}
                                 />
+                            </div>
+
+                            {/* Video Info Section */}
+                            <div className="p-6 max-w-4xl mx-auto w-full space-y-6">
+                                <div>
+                                    <h2 className="text-2xl font-bold mb-2">{currentVideo.title}</h2>
+                                    <h3 className="text-lg text-light-text-secondary dark:text-dark-text-secondary">
+                                        {modules.find(m => m.id === currentVideo.moduleId)?.title}
+                                    </h3>
+                                </div>
+
+                                <div className="flex items-center gap-4 pt-6 border-t border-light-border dark:border-dark-border">
+                                    <div className="w-12 h-12 rounded-full bg-light-surface dark:bg-dark-surface border border-light-border dark:border-dark-border flex items-center justify-center overflow-hidden">
+                                        {/* Placeholder Avatar or Initials currently as we don't have direct avatar URL in course model usually */}
+                                        <span className="text-lg font-bold text-primary">
+                                            {course?.instructor ? course.instructor.charAt(0).toUpperCase() : 'I'}
+                                        </span>
+                                    </div>
+                                    <div>
+                                        <p className="font-semibold">{course?.instructor || 'Instructor'}</p>
+                                        <p className="text-sm text-light-text-secondary dark:text-dark-text-secondary">
+                                            Course Instructor
+                                        </p>
+                                    </div>
+                                </div>
                             </div>
                         </>
                     ) : (
@@ -189,6 +207,9 @@ function CoursePlayerPage() {
                     isCollapsed={sidebarCollapsed}
                     onToggle={() => setSidebarCollapsed(!sidebarCollapsed)}
                     onRefresh={loadCourseData}
+                    courseId={courseId}
+                    currentTime={currentTime}
+                    onSeek={(time) => videoRef.current?.seekTo?.(time)}
                 />
             </div>
         </div>

@@ -1,11 +1,13 @@
 import { useState, useMemo } from 'react'
 import {
     ChevronDown, ChevronRight, ChevronLeft, Check,
-    Play, Clock, Pencil, History, Star
+    Pencil
 } from 'lucide-react'
-import { formatDuration, markVideoComplete, toggleVideoFavorite } from '../../utils/db'
-import { getRelativeTime } from '../../utils/timeUtils'
+import { formatDuration, markVideoComplete, updateModule, updateVideo } from '../../utils/db'
 import EditModuleModal from './EditModuleModal'
+import NotesPanel from './NotesPanel'
+import BulkEditPlaylist from './BulkEditPlaylist'
+import AISummaryPanel from './AISummaryPanel'
 
 function PlaylistSidebar({
     course,
@@ -14,28 +16,25 @@ function PlaylistSidebar({
     onVideoSelect,
     isCollapsed,
     onToggle,
-    onRefresh
+    onRefresh,
+    // Props for NotesPanel
+    courseId,
+    currentTime,
+    onSeek
 }) {
     const [expandedModules, setExpandedModules] = useState(() => {
         // Expand all modules by default
         return modules.reduce((acc, m) => ({ ...acc, [m.id]: true }), {})
     })
     const [editingModule, setEditingModule] = useState(null)
-    const [showFavoritesOnly, setShowFavoritesOnly] = useState(false)
+    const [activeTab, setActiveTab] = useState('playlist') // 'playlist' | 'notes' | 'ai'
+    const [isBulkEditing, setIsBulkEditing] = useState(false)
 
     function toggleModule(moduleId) {
         setExpandedModules(prev => ({
             ...prev,
             [moduleId]: !prev[moduleId]
         }))
-    }
-
-    function expandAll() {
-        setExpandedModules(modules.reduce((acc, m) => ({ ...acc, [m.id]: true }), {}))
-    }
-
-    function collapseAll() {
-        setExpandedModules({})
     }
 
     async function handleToggleComplete(e, video) {
@@ -48,13 +47,31 @@ function PlaylistSidebar({
         }
     }
 
-    async function handleToggleFavorite(e, video) {
-        e.stopPropagation()
+    async function handleBulkSave(updatedModules) {
         try {
-            await toggleVideoFavorite(video.id)
+            // Process updates
+            for (let mIndex = 0; mIndex < updatedModules.length; mIndex++) {
+                const mod = updatedModules[mIndex]
+                await updateModule(mod.id, {
+                    title: mod.title,
+                    order: mIndex
+                })
+
+                for (let vIndex = 0; vIndex < mod.videos.length; vIndex++) {
+                    const vid = mod.videos[vIndex]
+                    await updateVideo(vid.id, {
+                        title: vid.title,
+                        order: vIndex,
+                        moduleId: mod.id
+                    })
+                }
+            }
+
+            setIsBulkEditing(false)
             onRefresh?.()
         } catch (err) {
-            console.error('Failed to toggle favorite:', err)
+            console.error('Bulk save failed:', err)
+            alert('Failed to save changes')
         }
     }
 
@@ -64,21 +81,6 @@ function PlaylistSidebar({
         sum + m.videos.filter(v => v.isCompleted).length, 0
     )
     const totalDuration = modules.reduce((sum, m) => sum + m.totalDuration, 0)
-    const remainingDuration = modules.reduce((sum, m) =>
-        sum + m.videos.filter(v => !v.isCompleted).reduce((vs, v) => vs + (v.duration || 0), 0), 0
-    )
-
-    // Collect all videos
-    const allVideos = modules.flatMap(m => m.videos)
-
-    // Find last watched video
-    const lastWatchedVideo = useMemo(() => {
-        const watchedVideos = allVideos.filter(v => v.lastWatchedAt)
-        if (watchedVideos.length === 0) return null
-        return watchedVideos.sort((a, b) =>
-            new Date(b.lastWatchedAt) - new Date(a.lastWatchedAt)
-        )[0]
-    }, [allVideos])
 
     const sidebarContent = (
         <>
@@ -95,191 +97,179 @@ function PlaylistSidebar({
           z-30
         `}
             >
-                {/* Header */}
-                <div className="p-4 border-b border-light-border dark:border-dark-border">
-                    <div className="flex items-center justify-between mb-3">
-                        <h2 className="font-semibold text-light-text-primary dark:text-dark-text-primary">
-                            Playlist
-                        </h2>
-                        <div className="flex items-center gap-1">
-                            <button
-                                onClick={expandAll}
-                                className="p-1 text-xs text-light-text-secondary dark:text-dark-text-secondary hover:text-primary transition-colors"
-                            >
-                                Expand
-                            </button>
-                            <span className="text-light-border dark:text-dark-border">|</span>
-                            <button
-                                onClick={collapseAll}
-                                className="p-1 text-xs text-light-text-secondary dark:text-dark-text-secondary hover:text-primary transition-colors"
-                            >
-                                Collapse
-                            </button>
-                        </div>
-                    </div>
-
-                    {/* Progress Summary */}
-                    <div className="flex items-center justify-between text-sm mb-3">
-                        <span className="text-light-text-secondary dark:text-dark-text-secondary">
-                            {completedVideos}/{totalVideos} videos
-                        </span>
-                        <div className="flex items-center gap-3 text-light-text-secondary dark:text-dark-text-secondary">
-                            {remainingDuration > 0 && (
-                                <span className="text-primary font-medium">
-                                    {formatDuration(remainingDuration)} left
-                                </span>
-                            )}
-                            <span className="flex items-center gap-1">
-                                <Clock className="w-3 h-3" />
-                                {formatDuration(totalDuration)}
+                {/* Header Section */}
+                <div className="flex flex-col border-b border-light-border dark:border-dark-border bg-white dark:bg-dark-surface z-10">
+                    {/* Top Progress Bar */}
+                    <div className="px-4 pt-4 pb-2">
+                        <div className="flex items-center justify-between text-sm mb-2">
+                            <span className="text-light-text-secondary dark:text-dark-text-secondary">
+                                {completedVideos}/{totalVideos} videos completed
+                            </span>
+                            <span className="font-medium text-primary">
+                                {Math.round(totalVideos > 0 ? (completedVideos / totalVideos) * 100 : 0)}%
                             </span>
                         </div>
+                        <div className="progress-bar h-2 w-full bg-light-bg dark:bg-dark-bg rounded-full overflow-hidden">
+                            <div
+                                className="progress-bar-fill h-full bg-primary rounded-full transition-all duration-300"
+                                style={{ width: `${totalVideos > 0 ? (completedVideos / totalVideos) * 100 : 0}%` }}
+                            />
+                        </div>
                     </div>
 
-                    {/* Progress Bar */}
-                    <div className="progress-bar h-2 mb-3">
-                        <div
-                            className="progress-bar-fill"
-                            style={{ width: `${totalVideos > 0 ? (completedVideos / totalVideos) * 100 : 0}%` }}
-                        />
+                    {/* Tabs */}
+                    <div className="flex items-center px-2 mt-2">
+                        <button
+                            onClick={() => setActiveTab('playlist')}
+                            className={`flex-1 py-2 text-sm font-medium border-b-2 transition-colors ${activeTab === 'playlist'
+                                ? 'border-primary text-primary'
+                                : 'border-transparent text-light-text-secondary dark:text-dark-text-secondary hover:text-light-text-primary dark:hover:text-dark-text-primary'
+                                }`}
+                        >
+                            Playlist
+                        </button>
+                        <button
+                            onClick={() => setActiveTab('notes')}
+                            className={`flex-1 py-2 text-sm font-medium border-b-2 transition-colors ${activeTab === 'notes'
+                                ? 'border-primary text-primary'
+                                : 'border-transparent text-light-text-secondary dark:text-dark-text-secondary hover:text-light-text-primary dark:hover:text-dark-text-primary'
+                                }`}
+                        >
+                            Notes
+                        </button>
+                        <button
+                            onClick={() => setActiveTab('ai')}
+                            className={`flex-1 py-2 text-sm font-medium border-b-2 transition-colors ${activeTab === 'ai'
+                                ? 'border-primary text-primary'
+                                : 'border-transparent text-light-text-secondary dark:text-dark-text-secondary hover:text-light-text-primary dark:hover:text-dark-text-primary'
+                                }`}
+                        >
+                            AI
+                        </button>
                     </div>
 
-                    {/* Favorites Filter */}
-                    <button
-                        onClick={() => setShowFavoritesOnly(!showFavoritesOnly)}
-                        className={`flex items-center gap-2 w-full px-3 py-2 rounded-lg text-sm transition-colors ${showFavoritesOnly
-                            ? 'bg-warning/10 text-warning border border-warning/30'
-                            : 'hover:bg-light-surface dark:hover:bg-dark-bg border border-light-border dark:border-dark-border'
-                            }`}
-                    >
-                        <Star className={`w-4 h-4 ${showFavoritesOnly ? 'fill-current' : ''}`} />
-                        {showFavoritesOnly ? 'Showing Favorites' : 'Show Favorites Only'}
-                    </button>
+                    {/* Tab-Specific Toolbar (Playlist only) */}
+                    {activeTab === 'playlist' && !isBulkEditing && (
+                        <div className="flex items-center justify-between p-3 border-t border-light-border dark:border-dark-border bg-light-surface/50 dark:bg-dark-bg/50">
+                            <h3 className="text-sm font-semibold">Playlist</h3>
+                            <button
+                                onClick={() => setIsBulkEditing(true)}
+                                className="flex items-center gap-1 text-sm text-primary hover:text-primary-dark"
+                            >
+                                <Pencil className="w-3 h-3" />
+                                Bulk Edit
+                            </button>
+                        </div>
+                    )}
                 </div>
 
-                {/* Module List */}
-                <div className="flex-1 overflow-y-auto">
-                    {modules.map((module, moduleIndex) => (
-                        <div key={module.id} className="border-b border-light-border dark:border-dark-border last:border-b-0">
-                            {/* Module Header */}
-                            <div className="flex items-center gap-2 p-3 hover:bg-light-surface dark:hover:bg-dark-bg transition-colors group">
-                                <button
-                                    onClick={() => toggleModule(module.id)}
-                                    className="flex items-center gap-2 flex-1 min-w-0 text-left"
-                                >
-                                    {expandedModules[module.id] ? (
-                                        <ChevronDown className="w-4 h-4 flex-shrink-0" />
-                                    ) : (
-                                        <ChevronRight className="w-4 h-4 flex-shrink-0" />
-                                    )}
-                                    <div className="flex-1 min-w-0">
-                                        <h3 className="text-sm font-medium truncate">
-                                            {module.title}
-                                        </h3>
-                                        <p className="text-xs text-light-text-secondary dark:text-dark-text-secondary">
-                                            {module.videos.filter(v => v.isCompleted).length}/{module.videos.length} • {formatDuration(module.totalDuration)}
-                                        </p>
+                {/* Content Area */}
+                <div className="flex-1 overflow-hidden relative">
+                    {activeTab === 'playlist' && (
+                        isBulkEditing ? (
+                            <BulkEditPlaylist
+                                modules={modules}
+                                onSave={handleBulkSave}
+                                onCancel={() => setIsBulkEditing(false)}
+                            />
+                        ) : (
+                            // Regular Playlist View
+                            <div className="h-full overflow-y-auto">
+                                {modules.map((module) => (
+                                    <div key={module.id} className="border-b border-light-border dark:border-dark-border last:border-b-0">
+                                        {/* Module Header */}
+                                        <div className="flex items-center gap-2 p-3 hover:bg-light-surface dark:hover:bg-dark-bg transition-colors cursor-pointer" onClick={() => toggleModule(module.id)}>
+                                            {expandedModules[module.id] ? (
+                                                <ChevronDown className="w-4 h-4 flex-shrink-0 text-light-text-secondary dark:text-dark-text-secondary" />
+                                            ) : (
+                                                <ChevronRight className="w-4 h-4 flex-shrink-0 text-light-text-secondary dark:text-dark-text-secondary" />
+                                            )}
+                                            <div className="flex-1 min-w-0">
+                                                <h3 className="text-sm font-medium truncate select-none">
+                                                    {module.title}
+                                                </h3>
+                                                <p className="text-xs text-light-text-secondary dark:text-dark-text-secondary select-none">
+                                                    {module.videos.filter(v => v.isCompleted).length}/{module.videos.length} • {formatDuration(module.totalDuration)}
+                                                </p>
+                                            </div>
+                                        </div>
+
+                                        {/* Videos */}
+                                        {expandedModules[module.id] && (
+                                            <div className="pb-1">
+                                                {module.videos.map((video) => {
+                                                    const isActive = currentVideo?.id === video.id
+                                                    const isCompleted = video.isCompleted
+
+                                                    return (
+                                                        <div
+                                                            key={video.id}
+                                                            onClick={() => onVideoSelect(video)}
+                                                            className={`
+                                                                    w-full flex items-start gap-3 px-4 py-2 text-left cursor-pointer
+                                                                    transition-colors group text-sm
+                                                                    ${isActive
+                                                                    ? 'bg-primary/10 border-l-2 border-primary'
+                                                                    : 'hover:bg-light-surface dark:hover:bg-dark-bg border-l-2 border-transparent'
+                                                                }
+                                                                `}
+                                                        >
+                                                            {/* Checkbox */}
+                                                            <button
+                                                                onClick={(e) => handleToggleComplete(e, video)}
+                                                                className={`
+                                                                        w-4 h-4 rounded border flex-shrink-0 mt-0.5
+                                                                        flex items-center justify-center transition-colors
+                                                                        ${isCompleted
+                                                                        ? 'bg-success border-success text-white'
+                                                                        : 'border-gray-400 dark:border-gray-600 hover:border-primary'
+                                                                    }
+                                                                    `}
+                                                            >
+                                                                {isCompleted && <Check className="w-3 h-3" />}
+                                                            </button>
+
+                                                            {/* Title */}
+                                                            <div className="flex-1 min-w-0">
+                                                                <div className={`line-clamp-2 ${isCompleted ? 'text-light-text-secondary dark:text-dark-text-secondary line-through' : ''} ${isActive ? 'text-primary font-medium' : ''}`}>
+                                                                    {video.title}
+                                                                </div>
+                                                                <div className="flex items-center gap-2 mt-0.5 text-xs text-light-text-secondary dark:text-dark-text-secondary">
+                                                                    <span>{formatDuration(video.duration)}</span>
+                                                                </div>
+                                                            </div>
+                                                        </div>
+                                                    )
+                                                })}
+                                            </div>
+                                        )}
                                     </div>
-                                </button>
-                                <button
-                                    onClick={() => setEditingModule(module)}
-                                    className="p-1 opacity-0 group-hover:opacity-100 hover:bg-light-bg dark:hover:bg-dark-surface rounded transition-all"
-                                    title="Edit module"
-                                >
-                                    <Pencil className="w-3 h-3" />
-                                </button>
+                                ))}
                             </div>
+                        )
+                    )}
 
-                            {/* Videos */}
-                            {expandedModules[module.id] && (
-                                <div className="pb-2">
-                                    {module.videos
-                                        .filter(v => !showFavoritesOnly || v.isFavorite)
-                                        .map((video, videoIndex) => {
-                                            const isActive = currentVideo?.id === video.id
-                                            const isCompleted = video.isCompleted
-
-                                            return (
-                                                <div
-                                                    key={video.id}
-                                                    onClick={() => onVideoSelect(video)}
-                                                    role="button"
-                                                    tabIndex={0}
-                                                    onKeyDown={(e) => e.key === 'Enter' && onVideoSelect(video)}
-                                                    className={`
-                          w-full flex items-start gap-2 px-4 py-2 text-left cursor-pointer
-                          transition-colors group
-                          ${isActive
-                                                            ? 'bg-primary/10 border-l-2 border-primary'
-                                                            : 'hover:bg-light-surface dark:hover:bg-dark-bg border-l-2 border-transparent'
-                                                        }
-                        `}
-                                                >
-                                                    {/* Completion Checkbox */}
-                                                    <button
-                                                        onClick={(e) => handleToggleComplete(e, video)}
-                                                        className={`
-                            w-5 h-5 rounded border-2 flex-shrink-0 mt-0.5
-                            flex items-center justify-center
-                            transition-colors
-                            ${isCompleted
-                                                                ? 'bg-success border-success text-white'
-                                                                : 'border-light-border dark:border-dark-border hover:border-primary'
-                                                            }
-                          `}
-                                                    >
-                                                        {isCompleted && <Check className="w-3 h-3" />}
-                                                    </button>
-
-                                                    {/* Favorite Star */}
-                                                    <button
-                                                        onClick={(e) => handleToggleFavorite(e, video)}
-                                                        className={`flex-shrink-0 mt-0.5 transition-colors ${video.isFavorite
-                                                                ? 'text-warning'
-                                                                : 'text-gray-300 dark:text-gray-600 opacity-0 group-hover:opacity-100 hover:text-warning'
-                                                            }`}
-                                                        title={video.isFavorite ? 'Remove from favorites' : 'Add to favorites'}
-                                                    >
-                                                        <Star className={`w-4 h-4 ${video.isFavorite ? 'fill-current' : ''}`} />
-                                                    </button>
-
-                                                    {/* Video Info */}
-                                                    <div className="flex-1 min-w-0">
-                                                        <div className="flex items-start gap-2">
-                                                            {isActive && (
-                                                                <Play className="w-4 h-4 text-primary flex-shrink-0 mt-0.5" fill="currentColor" />
-                                                            )}
-                                                            <span className={`text-sm ${isActive
-                                                                ? 'text-primary font-medium'
-                                                                : isCompleted
-                                                                    ? 'text-light-text-secondary dark:text-dark-text-secondary line-through'
-                                                                    : ''
-                                                                }`}>
-                                                                {video.title}
-                                                            </span>
-                                                        </div>
-                                                        <div className="flex items-center gap-2 mt-1 text-xs text-light-text-secondary dark:text-dark-text-secondary">
-                                                            <span>{formatDuration(video.duration)}</span>
-                                                            {video.watchProgress > 0 && video.watchProgress < 1 && !isCompleted && (
-                                                                <span className="text-primary">
-                                                                    {Math.round(video.watchProgress * 100)}% watched
-                                                                </span>
-                                                            )}
-                                                            {lastWatchedVideo?.id === video.id && (
-                                                                <span className="flex items-center gap-1 text-primary" title={`Last watched ${getRelativeTime(video.lastWatchedAt)}`}>
-                                                                    <History className="w-3 h-3" />
-                                                                    <span className="hidden sm:inline">{getRelativeTime(video.lastWatchedAt)}</span>
-                                                                </span>
-                                                            )}
-                                                        </div>
-                                                    </div>
-                                                </div>
-                                            )
-                                        })}
-                                </div>
-                            )}
+                    {activeTab === 'notes' && (
+                        <div className="h-full overflow-y-auto">
+                            <NotesPanel
+                                video={currentVideo}
+                                courseId={courseId}
+                                currentTime={currentTime}
+                                onSeek={onSeek}
+                                isCollapsed={false}
+                                hideHeader={true}
+                            />
                         </div>
-                    ))}
+                    )}
+
+                    {activeTab === 'ai' && (
+                        <div className="h-full overflow-y-auto">
+                            <AISummaryPanel
+                                video={currentVideo}
+                                courseId={courseId}
+                            />
+                        </div>
+                    )}
                 </div>
             </div>
 

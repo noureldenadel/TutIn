@@ -15,11 +15,16 @@ A modern, offline-first course management application for tracking video course 
 
 ### Video Player
 - ⌨️ **Keyboard Shortcuts** - Full keyboard control (Space, Arrow keys, etc.)
-- �️ **Picture-in-Picture** - Watch while doing other things
+- 🖼️ **Picture-in-Picture** - Watch while doing other things
 - ⏭️ **Auto-play Next** - Automatically play next video
 - 🎚️ **Speed Control** - Adjust playback speed (0.25x - 2x)
 - 📝 **Notes** - Add timestamped notes while watching
-- ⭐ **Favorites** - Mark videos as favorites for quick access
+
+### AI Features
+- 🤖 **AI Transcription** - Transcribe videos using Whisper AI (runs in-browser)
+- ✨ **AI Summary** - Generate structured summaries with Gemini AI
+- 📋 **Key Points** - Auto-extract titles, bullet points, and action items
+- 💾 **Offline Model** - AI model cached locally after first download (~40MB)
 
 ### Organization
 - 🏷️ **Tags** - Organize courses with custom tags
@@ -109,6 +114,7 @@ src/
 │   ├── layout/          # Layout components
 │   │   └── Header.jsx
 │   ├── player/          # Video player components
+│   │   ├── AISummaryPanel.jsx
 │   │   ├── EditModuleModal.jsx
 │   │   ├── NotesPanel.jsx
 │   │   ├── PlaylistSidebar.jsx
@@ -122,6 +128,7 @@ src/
 │   ├── CoursePlayerPage.jsx
 │   └── HomePage.jsx
 ├── utils/               # Utility functions
+│   ├── aiSummarization.js # AI transcription & summarization
 │   ├── db.js            # IndexedDB operations
 │   ├── fileSystem.js    # File System API utilities
 │   ├── timeUtils.js     # Time formatting utilities
@@ -138,6 +145,8 @@ src/
 - **Tailwind CSS** - Styling
 - **IndexedDB** - Local data storage
 - **File System Access API** - Local file access
+- **Transformers.js** - In-browser Whisper AI transcription
+- **OpenRouter API** - Gemini AI summarization
 - **Lucide React** - Icons
 - **Recharts** - Progress visualization
 

@@ -1,8 +1,9 @@
 import { useRef, useState, useEffect, useCallback, forwardRef, useImperativeHandle } from 'react'
 import {
     Play, Pause, Volume2, VolumeX, Maximize, Minimize,
-    SkipForward, Settings, PictureInPicture, FolderOpen, X
+    SkipForward, Settings, PictureInPicture, FolderOpen, X, Repeat
 } from 'lucide-react'
+import ReactPlayer from 'react-player'
 import { getVideoUrl, releaseVideoUrl, verifyPermission, findFileByPath, findFileByFileName, pickFolderFallback, cacheFallbackFiles, isFileSystemAccessSupported, hasRootFolderAccess, findCourseFolderInRoot, getRootFolderHandle } from '../../utils/fileSystem'
 import { updateVideoProgress, markVideoComplete, formatDuration, getCourse } from '../../utils/db'
 import { useSettings } from '../../contexts/SettingsContext'
@@ -54,6 +55,26 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
     async function loadVideo() {
         if (!video) {
             setError('No video selected')
+            return
+        }
+
+        // Handle YouTube videos
+        if (video.youtubeId || video.url?.startsWith('http')) {
+            const url = video.url || `https://www.youtube.com/watch?v=${video.youtubeId}`
+            setVideoUrl(url)
+            setIsLoading(false)
+            setNeedsFolderAccess(false)
+            setDuration(video.duration || 0) // Try to trust duration if saved
+
+            // Restore last watched position
+            if (video.lastWatchedAt && video.watchProgress > 0 && video.watchProgress < 0.95) {
+                const percentage = video.watchProgress
+                // Note: We can't know absolute duration yet for YouTube until it loads
+                // So we'll trust the player's onReady or just let it start from 0 and user seeks?
+                // ReactPlayer has onStart. But let's check if we saved duration.
+                setResumePosition(percentage) // We'll store percentage for now
+                setShowResumePrompt(true)
+            }
             return
         }
 
@@ -199,13 +220,23 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
     }
 
     // Expose seekTo method via ref
+    // Expose seekTo method via ref
     useImperativeHandle(ref, () => ({
         seekTo: (time) => {
             if (videoRef.current) {
-                videoRef.current.currentTime = time
+                if (videoRef.current.seekTo) {
+                    videoRef.current.seekTo(time)
+                } else {
+                    videoRef.current.currentTime = time
+                }
             }
         },
-        getCurrentTime: () => videoRef.current?.currentTime || 0
+        getCurrentTime: () => {
+            if (videoRef.current?.getCurrentTime) {
+                return videoRef.current.getCurrentTime()
+            }
+            return videoRef.current?.currentTime || 0
+        }
     }), [])
 
     function handlePlay() {
@@ -303,10 +334,14 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
     // Controls
     function togglePlay() {
         if (videoRef.current) {
+            const isYt = video?.youtubeId || video?.url?.startsWith('http')
+
             if (isPlaying) {
-                videoRef.current.pause()
+                if (!isYt) videoRef.current.pause()
+                setIsPlaying(false)
             } else {
-                videoRef.current.play()
+                if (!isYt) videoRef.current.play()
+                setIsPlaying(true)
             }
         }
     }
@@ -318,7 +353,13 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
         const percent = (e.clientX - rect.left) / rect.width
         const newTime = percent * duration
 
-        videoRef.current.currentTime = newTime
+        const isYt = video?.youtubeId || video?.url?.startsWith('http')
+
+        if (isYt) {
+            videoRef.current.seekTo(newTime)
+        } else {
+            videoRef.current.currentTime = newTime
+        }
         setCurrentTime(newTime)
     }
 
@@ -326,7 +367,9 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
         const newVolume = parseFloat(e.target.value)
         setVolume(newVolume)
         setIsMuted(newVolume === 0)
-        if (videoRef.current) {
+
+        const isYt = video?.youtubeId || video?.url?.startsWith('http')
+        if (videoRef.current && !isYt) {
             videoRef.current.volume = newVolume
         }
         localStorage.setItem('mearn_volume', newVolume.toString())
@@ -334,11 +377,13 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
 
     function toggleMute() {
         if (videoRef.current) {
+            const isYt = video?.youtubeId || video?.url?.startsWith('http')
+
             if (isMuted) {
-                videoRef.current.volume = volume || 0.75
+                if (!isYt) videoRef.current.volume = volume || 0.75
                 setIsMuted(false)
             } else {
-                videoRef.current.volume = 0
+                if (!isYt) videoRef.current.volume = 0
                 setIsMuted(true)
             }
         }
@@ -358,7 +403,8 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
 
     function changeSpeed(speed) {
         setPlaybackSpeed(speed)
-        if (videoRef.current) {
+        const isYt = video?.youtubeId || video?.url?.startsWith('http')
+        if (videoRef.current && !isYt) {
             videoRef.current.playbackRate = speed
         }
         setShowSpeedMenu(false)
@@ -551,8 +597,37 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
             ref={containerRef}
             className="video-container bg-black relative group"
         >
-            {/* Video Element */}
-            {videoUrl && (
+            {/* Video Element or ReactPlayer */}
+            {video?.youtubeId || video?.url?.startsWith('http') ? (
+                <div className="w-full h-full relative" onClick={togglePlay}>
+                    <ReactPlayer
+                        ref={videoRef}
+                        url={videoUrl}
+                        width="100%"
+                        height="100%"
+                        playing={isPlaying}
+                        volume={volume}
+                        muted={isMuted}
+                        playbackRate={playbackSpeed}
+                        onProgress={(state) => {
+                            setCurrentTime(state.playedSeconds)
+                            setDuration(state.loadedSeconds) // Approx
+                            handleTimeUpdate()
+                            onTimeUpdate?.(state.playedSeconds, state.loadedSeconds)
+                        }}
+                        onDuration={(d) => setDuration(d)}
+                        onEnded={handleEnded}
+                        onReady={() => setIsLoading(false)}
+                        onError={(e) => setError("YouTube playback error: " + e)}
+                        controls={false}
+                        config={{
+                            youtube: {
+                                playerVars: { showinfo: 0, controls: 0 }
+                            }
+                        }}
+                    />
+                </div>
+            ) : (
                 <video
                     ref={videoRef}
                     src={videoUrl}
@@ -677,7 +752,7 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
 
             {/* Controls Overlay */}
             <div
-                className={`absolute inset-0 flex flex-col justify-end transition-opacity duration-200 ${showControls || !isPlaying ? 'opacity-100' : 'opacity-0'
+                className={`absolute inset-0 flex flex-col justify-end transition-opacity duration-200 pointer-events-none ${showControls || !isPlaying ? 'opacity-100' : 'opacity-0'
                     }`}
             >
                 {/* Gradient */}
@@ -686,7 +761,7 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
                 {/* Progress Bar */}
                 <div
                     ref={progressRef}
-                    className="relative h-1 bg-white/30 cursor-pointer mx-4 mb-2 group/progress"
+                    className="relative h-1 bg-white/30 cursor-pointer mx-4 mb-2 group/progress pointer-events-auto"
                     onClick={handleSeek}
                 >
                     <div
@@ -700,7 +775,7 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
                 </div>
 
                 {/* Controls Bar */}
-                <div className="relative flex items-center gap-2 px-4 pb-4 text-white">
+                <div className="relative flex items-center gap-2 px-4 pb-4 text-white pointer-events-auto">
                     {/* Play/Pause */}
                     <button
                         onClick={togglePlay}
@@ -764,7 +839,7 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
                             step="0.05"
                             value={isMuted ? 0 : volume}
                             onChange={handleVolumeChange}
-                            className="w-0 group-hover/volume:w-20 transition-all duration-200 accent-primary"
+                            className="w-0 overflow-hidden group-hover/volume:w-20 transition-all duration-200 accent-primary"
                         />
                     </div>
 
@@ -774,7 +849,7 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
                         className={`p-2 hover:bg-white/20 rounded transition-colors flex items-center gap-1 ${localAutoPlay ? 'text-primary' : 'opacity-60'}`}
                         title={localAutoPlay ? 'Auto-play on' : 'Auto-play off'}
                     >
-                        <SkipForward className="w-5 h-5" />
+                        <Repeat className="w-5 h-5" />
                     </button>
 
                     {/* PiP */}

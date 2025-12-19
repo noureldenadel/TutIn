@@ -197,7 +197,6 @@ function EditCourseModal({ course, isOpen, onClose, onSave }) {
                     {/* Thumbnail */}
                     <div>
                         <label className="block text-sm font-medium mb-2">
-                            <Image className="w-4 h-4 inline mr-1" />
                             Thumbnail
                         </label>
                         <div className="flex items-start gap-4">
@@ -231,7 +230,6 @@ function EditCourseModal({ course, isOpen, onClose, onSave }) {
                     {/* Title */}
                     <div>
                         <label className="block text-sm font-medium mb-2">
-                            <BookOpen className="w-4 h-4 inline mr-1" />
                             Title *
                         </label>
                         <input
@@ -248,7 +246,6 @@ function EditCourseModal({ course, isOpen, onClose, onSave }) {
                     {/* Instructor */}
                     <div>
                         <label className="block text-sm font-medium mb-2">
-                            <User className="w-4 h-4 inline mr-1" />
                             Instructor
                         </label>
                         <input
@@ -264,7 +261,6 @@ function EditCourseModal({ course, isOpen, onClose, onSave }) {
                     {/* Description */}
                     <div>
                         <label className="block text-sm font-medium mb-2">
-                            <FileText className="w-4 h-4 inline mr-1" />
                             Description
                         </label>
                         <textarea
@@ -280,7 +276,6 @@ function EditCourseModal({ course, isOpen, onClose, onSave }) {
                     {/* Tags */}
                     <div>
                         <label className="block text-sm font-medium mb-2">
-                            <Tag className="w-4 h-4 inline mr-1" />
                             Tags
                         </label>
                         <div className="flex gap-2 mb-2">

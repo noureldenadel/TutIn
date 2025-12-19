@@ -13,6 +13,7 @@ function ImportPreviewModal({
     existingCourseNames = []
 }) {
     const [courseName, setCourseName] = useState(courseStructure?.title || '')
+    const [instructor, setInstructor] = useState('')
     const [modules, setModules] = useState(
         courseStructure?.modules?.map(m => ({
             ...m,
@@ -29,6 +30,7 @@ function ImportPreviewModal({
     useEffect(() => {
         if (courseStructure) {
             setCourseName(courseStructure.title || '')
+            setInstructor('')
             setModules(
                 courseStructure.modules?.map(m => ({
                     ...m,
@@ -111,6 +113,7 @@ function ImportPreviewModal({
     function handleConfirm() {
         onConfirm({
             title: courseName,
+            instructor: instructor,
             thumbnailData: thumbnail,
             modules: modules.map(m => ({
                 ...m,
@@ -183,6 +186,21 @@ function ImportPreviewModal({
                                 {courseName.length}/200
                             </span>
                         </div>
+                    </div>
+
+                    {/* Instructor (Optional) */}
+                    <div>
+                        <label className="block text-sm font-medium mb-2">
+                            Instructor <span className="text-light-text-secondary dark:text-dark-text-secondary font-normal">(optional)</span>
+                        </label>
+                        <input
+                            type="text"
+                            value={instructor}
+                            onChange={(e) => setInstructor(e.target.value.slice(0, 100))}
+                            className="w-full px-3 py-2 rounded-lg border border-light-border dark:border-dark-border bg-white dark:bg-dark-bg focus:ring-2 focus:ring-primary focus:border-transparent outline-none"
+                            placeholder="Enter instructor name"
+                            maxLength={100}
+                        />
                     </div>
 
                     {/* Thumbnail */}

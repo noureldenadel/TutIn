@@ -35,7 +35,7 @@ function CourseCard({ course, viewMode = 'grid', onRefresh, onEdit }) {
         e.preventDefault()
         e.stopPropagation()
         setShowMenu(false)
-        onEdit?.()
+        onEdit?.(course)
     }
 
     if (viewMode === 'list') {
