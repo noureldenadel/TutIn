@@ -17,7 +17,7 @@ function Header() {
                         to="/"
                         className="flex items-center gap-2 text-xl font-bold text-primary hover:opacity-80 transition-opacity"
                     >
-                        <span>MEARN</span>
+                        <span>TutIn</span>
                     </Link>
 
                     {/* Spacer for centering actions */}

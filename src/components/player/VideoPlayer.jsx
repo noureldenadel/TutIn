@@ -1,12 +1,13 @@
 import { useRef, useState, useEffect, useCallback, forwardRef, useImperativeHandle } from 'react'
 import {
     Play, Pause, Volume2, VolumeX, Maximize, Minimize,
-    SkipForward, Settings, PictureInPicture, FolderOpen, X, Repeat
+    SkipForward, Settings, PictureInPicture, FolderOpen, X, Repeat, Captions, CaptionsOff
 } from 'lucide-react'
-import ReactPlayer from 'react-player'
+// YouTube videos use native iframe embed
 import { getVideoUrl, releaseVideoUrl, verifyPermission, findFileByPath, findFileByFileName, pickFolderFallback, cacheFallbackFiles, isFileSystemAccessSupported, hasRootFolderAccess, findCourseFolderInRoot, getRootFolderHandle } from '../../utils/fileSystem'
 import { updateVideoProgress, markVideoComplete, formatDuration, getCourse } from '../../utils/db'
 import { useSettings } from '../../contexts/SettingsContext'
+import { chunksToVTT } from '../../utils/aiSummarization'
 
 
 const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext, courseId, onTimeUpdate }, ref) {
@@ -35,6 +36,22 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
     const [localAutoPlay, setLocalAutoPlay] = useState(true)
     const [showResumePrompt, setShowResumePrompt] = useState(false)
     const [resumePosition, setResumePosition] = useState(0)
+    const [captionsEnabled, setCaptionsEnabled] = useState(() => {
+        const saved = localStorage.getItem('tutin_captions_enabled')
+        return saved === 'true'
+    })
+    const [captionTrackUrl, setCaptionTrackUrl] = useState(null)
+    const [currentCaption, setCurrentCaption] = useState('')
+    const [captionPosition, setCaptionPosition] = useState(() => {
+        const saved = localStorage.getItem('tutin_caption_position')
+        return saved ? JSON.parse(saved) : { x: 50, y: 85 } // percentage from top-left
+    })
+    const [isDraggingCaption, setIsDraggingCaption] = useState(false)
+    const [isSpeedBoosting, setIsSpeedBoosting] = useState(false)
+    const [speedBeforeBoost, setSpeedBeforeBoost] = useState(1)
+    const captionRef = useRef(null)
+    const trackRef = useRef(null)
+    const speedBoostTimeoutRef = useRef(null)
 
     const { settings } = useSettings()
     const controlsTimeoutRef = useRef(null)
@@ -63,7 +80,7 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
         if (video.youtubeId || video.url?.startsWith('http')) {
             const url = video.url || `https://www.youtube.com/watch?v=${video.youtubeId}`
             setVideoUrl(url)
-            setIsLoading(false)
+            setIsLoading(true) // Wait for onReady
             setNeedsFolderAccess(false)
             setDuration(video.duration || 0) // Try to trust duration if saved
 
@@ -334,14 +351,21 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
 
     // Controls
     function togglePlay() {
-        if (videoRef.current) {
-            const isYt = video?.youtubeId || video?.url?.startsWith('http')
+        const isYt = video?.youtubeId || video?.url?.startsWith('http')
 
+        // For YouTube/ReactPlayer, just toggle state - ReactPlayer uses `playing` prop
+        if (isYt) {
+            setIsPlaying(prev => !prev)
+            return
+        }
+
+        // For native video element
+        if (videoRef.current) {
             if (isPlaying) {
-                if (!isYt) videoRef.current.pause()
+                videoRef.current.pause()
                 setIsPlaying(false)
             } else {
-                if (!isYt) videoRef.current.play()
+                videoRef.current.play()
                 setIsPlaying(true)
             }
         }
@@ -541,6 +565,10 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
                     e.preventDefault()
                     setLocalAutoPlay(prev => !prev)
                     break
+                case 'c':
+                    e.preventDefault()
+                    setCaptionsEnabled(prev => !prev)
+                    break
                 case 'escape':
                     e.preventDefault()
                     setShowSpeedMenu(false)
@@ -591,40 +619,205 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
         }
     }, [volume, isMuted])
 
+    // Generate VTT blob URL for captions when video has caption chunks
+    useEffect(() => {
+        // Clean up previous blob URL
+        if (captionTrackUrl) {
+            URL.revokeObjectURL(captionTrackUrl)
+            setCaptionTrackUrl(null)
+        }
+
+        if (video?.captionChunks && video.captionChunks.length > 0) {
+            const vttContent = chunksToVTT(video.captionChunks)
+            if (vttContent) {
+                const blob = new Blob([vttContent], { type: 'text/vtt' })
+                const url = URL.createObjectURL(blob)
+                setCaptionTrackUrl(url)
+            }
+        }
+
+        return () => {
+            if (captionTrackUrl) {
+                URL.revokeObjectURL(captionTrackUrl)
+            }
+        }
+    }, [video?.id, video?.captionChunks])
+
+    // Toggle captions and update track mode
+    useEffect(() => {
+        // Hide native track - we use custom display
+        if (trackRef.current) {
+            trackRef.current.track.mode = 'hidden'
+        }
+        localStorage.setItem('tutin_captions_enabled', captionsEnabled.toString())
+    }, [captionsEnabled, captionTrackUrl])
+
+    // Track current caption based on video time
+    useEffect(() => {
+        if (!captionsEnabled || !video?.captionChunks || video.captionChunks.length === 0) {
+            setCurrentCaption('')
+            return
+        }
+
+        // Find current caption segment based on currentTime
+        // Group words into segments like chunksToVTT does
+        const chunks = video.captionChunks
+        const segments = []
+        let currentSegment = { text: '', start: null, end: null }
+        let wordCount = 0
+
+        for (const chunk of chunks) {
+            if (!chunk.timestamp || chunk.timestamp.length < 2) continue
+            const [start, end] = chunk.timestamp
+            if (start === null || end === null) continue
+
+            if (currentSegment.start === null) {
+                currentSegment.start = start
+            }
+            currentSegment.text += (currentSegment.text ? ' ' : '') + chunk.text.trim()
+            currentSegment.end = end
+            wordCount++
+
+            const isPunctuation = /[.!?]$/.test(chunk.text.trim())
+            if (wordCount >= 6 || (wordCount >= 4 && isPunctuation)) {
+                segments.push({ ...currentSegment })
+                currentSegment = { text: '', start: null, end: null }
+                wordCount = 0
+            }
+        }
+        if (currentSegment.text && currentSegment.start !== null) {
+            segments.push(currentSegment)
+        }
+
+        // Find active segment
+        const activeSegment = segments.find(
+            seg => currentTime >= seg.start && currentTime <= seg.end
+        )
+        setCurrentCaption(activeSegment?.text || '')
+    }, [currentTime, captionsEnabled, video?.captionChunks])
+
+    // Caption drag handlers
+    function handleCaptionDragStart(e) {
+        e.preventDefault()
+        setIsDraggingCaption(true)
+    }
+
+    function handleCaptionDrag(e) {
+        if (!isDraggingCaption || !containerRef.current) return
+
+        const rect = containerRef.current.getBoundingClientRect()
+        const clientX = e.touches ? e.touches[0].clientX : e.clientX
+        const clientY = e.touches ? e.touches[0].clientY : e.clientY
+
+        const x = ((clientX - rect.left) / rect.width) * 100
+        const y = ((clientY - rect.top) / rect.height) * 100
+
+        // Clamp to bounds (10-90%)
+        const clampedX = Math.max(10, Math.min(90, x))
+        const clampedY = Math.max(10, Math.min(90, y))
+
+        setCaptionPosition({ x: clampedX, y: clampedY })
+    }
+
+    function handleCaptionDragEnd() {
+        if (isDraggingCaption) {
+            setIsDraggingCaption(false)
+            localStorage.setItem('tutin_caption_position', JSON.stringify(captionPosition))
+        }
+    }
+
+    // Add global mouse/touch listeners for dragging
+    useEffect(() => {
+        if (isDraggingCaption) {
+            window.addEventListener('mousemove', handleCaptionDrag)
+            window.addEventListener('mouseup', handleCaptionDragEnd)
+            window.addEventListener('touchmove', handleCaptionDrag)
+            window.addEventListener('touchend', handleCaptionDragEnd)
+        }
+        return () => {
+            window.removeEventListener('mousemove', handleCaptionDrag)
+            window.removeEventListener('mouseup', handleCaptionDragEnd)
+            window.removeEventListener('touchmove', handleCaptionDrag)
+            window.removeEventListener('touchend', handleCaptionDragEnd)
+        }
+    }, [isDraggingCaption, captionPosition])
+
+    function toggleCaptions() {
+        setCaptionsEnabled(prev => !prev)
+    }
+
+    // Calculate caption Y position - move up when controls show
+    const captionY = (showControls || !isPlaying) ? Math.min(captionPosition.y, 75) : captionPosition.y
+
+    // Speed boost handlers (hold to 2x speed)
+    function handleSpeedBoostStart(e) {
+        // Don't trigger on controls area or if clicking on interactive elements
+        if (e.target.closest('button') || e.target.closest('input') || e.target.closest('[data-no-speed-boost]')) {
+            return
+        }
+
+        // Start timer for long press
+        speedBoostTimeoutRef.current = setTimeout(() => {
+            if (isPlaying) {
+                setSpeedBeforeBoost(playbackSpeed)
+                setPlaybackSpeed(2)
+                setIsSpeedBoosting(true)
+                if (videoRef.current && !(video?.youtubeId || video?.url?.startsWith('http'))) {
+                    videoRef.current.playbackRate = 2
+                }
+            }
+        }, 500) // 500ms hold to activate
+    }
+
+    function handleSpeedBoostEnd() {
+        // Clear the timeout if released before activation
+        if (speedBoostTimeoutRef.current) {
+            clearTimeout(speedBoostTimeoutRef.current)
+            speedBoostTimeoutRef.current = null
+        }
+
+        // Restore original speed if we were boosting
+        if (isSpeedBoosting) {
+            setPlaybackSpeed(speedBeforeBoost)
+            setIsSpeedBoosting(false)
+            if (videoRef.current && !(video?.youtubeId || video?.url?.startsWith('http'))) {
+                videoRef.current.playbackRate = speedBeforeBoost
+            }
+        }
+    }
+
     const speedOptions = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2]
 
     return (
         <div
             ref={containerRef}
             className="video-container bg-black relative group"
+            onMouseDown={handleSpeedBoostStart}
+            onMouseUp={handleSpeedBoostEnd}
+            onMouseLeave={handleSpeedBoostEnd}
+            onTouchStart={handleSpeedBoostStart}
+            onTouchEnd={handleSpeedBoostEnd}
         >
-            {/* Video Element or ReactPlayer */}
+            {/* Video Element or YouTube iframe */}
             {video?.youtubeId || video?.url?.startsWith('http') ? (
-                <div className="w-full h-full relative" onClick={togglePlay}>
-                    <ReactPlayer
+                <div className="w-full h-full">
+                    {/* YouTube Embed using native iframe with YouTube's built-in controls */}
+                    <iframe
                         ref={videoRef}
-                        url={videoUrl}
-                        width="100%"
-                        height="100%"
-                        playing={isPlaying}
-                        volume={volume}
-                        muted={isMuted}
-                        playbackRate={playbackSpeed}
-                        onProgress={(state) => {
-                            setCurrentTime(state.playedSeconds)
-                            setDuration(state.loadedSeconds) // Approx
-                            handleTimeUpdate()
-                            onTimeUpdate?.(state.playedSeconds, state.loadedSeconds)
+                        src={`https://www.youtube.com/embed/${video.youtubeId || videoUrl?.match(/[?&]v=([^&]+)/)?.[1] || videoUrl?.match(/youtu\.be\/([^?]+)/)?.[1]}?enablejsapi=1&modestbranding=1&rel=0&origin=${window.location.origin}`}
+                        className="w-full h-full"
+                        frameBorder="0"
+                        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                        allowFullScreen
+                        onLoad={() => {
+                            console.log('YouTube iframe loaded')
+                            setIsLoading(false)
+                            setError(null)
                         }}
-                        onDuration={(d) => setDuration(d)}
-                        onEnded={handleEnded}
-                        onReady={() => setIsLoading(false)}
-                        onError={(e) => setError("YouTube playback error: " + e)}
-                        controls={false}
-                        config={{
-                            youtube: {
-                                playerVars: { showinfo: 0, controls: 0 }
-                            }
+                        onError={(e) => {
+                            console.error('YouTube iframe error:', e)
+                            setError("Failed to load YouTube video.")
+                            setIsLoading(false)
                         }}
                     />
                 </div>
@@ -665,7 +858,29 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
                         setError(errorMessage)
                         setIsLoading(false)
                     }}
-                />
+                >
+                    {/* Caption Track */}
+                    {captionTrackUrl && (
+                        <track
+                            ref={trackRef}
+                            kind="captions"
+                            src={captionTrackUrl}
+                            srcLang="en"
+                            label="English"
+                            default={captionsEnabled}
+                        />
+                    )}
+                </video>
+            )}
+
+            {/* Speed Boost Indicator */}
+            {isSpeedBoosting && (
+                <div className="absolute top-4 left-1/2 -translate-x-1/2 z-50 px-4 py-2 bg-primary text-white rounded-full font-bold text-lg animate-pulse flex items-center gap-2">
+                    <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+                        <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z" clipRule="evenodd" />
+                    </svg>
+                    2x Speed
+                </div>
             )}
 
             {/* Loading Overlay */}
@@ -751,128 +966,163 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
                 </div>
             )}
 
-            {/* Controls Overlay */}
-            <div
-                className={`absolute inset-0 flex flex-col justify-end transition-opacity duration-200 pointer-events-none ${showControls || !isPlaying ? 'opacity-100' : 'opacity-0'
-                    }`}
-            >
-                {/* Gradient */}
-                <div className="absolute inset-x-0 bottom-0 h-32 bg-gradient-to-t from-black/80 to-transparent pointer-events-none" />
-
-                {/* Progress Bar */}
+            {/* Custom Caption Overlay */}
+            {captionsEnabled && currentCaption && (
                 <div
-                    ref={progressRef}
-                    className="relative h-1 bg-white/30 cursor-pointer mx-4 mb-2 group/progress pointer-events-auto"
-                    onClick={handleSeek}
+                    ref={captionRef}
+                    className={`absolute z-30 px-4 py-2 bg-black/80 text-white text-center rounded-lg max-w-[80%] cursor-move select-none transition-all duration-200 ${isDraggingCaption ? 'scale-105' : ''}`}
+                    style={{
+                        left: `${captionPosition.x}%`,
+                        top: `${captionY}%`,
+                        transform: 'translate(-50%, -50%)',
+                        fontSize: 'clamp(14px, 2.5vw, 22px)',
+                        textShadow: '2px 2px 4px rgba(0,0,0,0.8)',
+                        lineHeight: 1.4
+                    }}
+                    onMouseDown={handleCaptionDragStart}
+                    onTouchStart={handleCaptionDragStart}
+                    title="Drag to reposition captions"
                 >
-                    <div
-                        className="absolute inset-y-0 left-0 bg-primary"
-                        style={{ width: `${(currentTime / duration) * 100}%` }}
-                    />
-                    <div
-                        className="absolute top-1/2 -translate-y-1/2 w-3 h-3 bg-primary rounded-full opacity-0 group-hover/progress:opacity-100 transition-opacity"
-                        style={{ left: `${(currentTime / duration) * 100}%`, marginLeft: '-6px' }}
-                    />
+                    {currentCaption}
                 </div>
+            )}
 
-                {/* Controls Bar */}
-                <div className="relative flex items-center gap-2 px-4 pb-4 text-white pointer-events-auto">
-                    {/* Play/Pause */}
-                    <button
-                        onClick={togglePlay}
-                        className="p-2 hover:bg-white/20 rounded transition-colors"
+            {/* Controls Overlay - Hidden for YouTube videos (they use native controls) */}
+            {!(video?.youtubeId || video?.url?.startsWith('http')) && (
+                <div
+                    className={`absolute inset-0 flex flex-col justify-end transition-opacity duration-200 pointer-events-none ${showControls || !isPlaying ? 'opacity-100' : 'opacity-0'
+                        }`}
+                >
+                    {/* Gradient */}
+                    <div className="absolute inset-x-0 bottom-0 h-32 bg-gradient-to-t from-black/80 to-transparent pointer-events-none" />
+
+                    {/* Progress Bar */}
+                    <div
+                        ref={progressRef}
+                        className="relative h-1 bg-white/30 cursor-pointer mx-4 mb-2 group/progress pointer-events-auto"
+                        onClick={handleSeek}
                     >
-                        {isPlaying ? <Pause className="w-6 h-6" /> : <Play className="w-6 h-6" />}
-                    </button>
-
-                    {/* Next */}
-                    <button
-                        onClick={onNext}
-                        className="p-2 hover:bg-white/20 rounded transition-colors"
-                    >
-                        <SkipForward className="w-5 h-5" />
-                    </button>
-
-                    {/* Time */}
-                    <span className="text-sm tabular-nums">
-                        {formatDuration(currentTime)} / {formatDuration(duration)}
-                    </span>
-
-                    <div className="flex-1" />
-
-                    {/* Speed */}
-                    <div className="relative">
-                        <button
-                            onClick={() => setShowSpeedMenu(!showSpeedMenu)}
-                            className="px-2 py-1 hover:bg-white/20 rounded transition-colors text-sm"
-                        >
-                            {playbackSpeed}x
-                        </button>
-
-                        {showSpeedMenu && (
-                            <div className="absolute bottom-full right-0 mb-2 bg-gray-900 rounded-lg py-1 min-w-[80px]">
-                                {speedOptions.map(speed => (
-                                    <button
-                                        key={speed}
-                                        onClick={() => changeSpeed(speed)}
-                                        className={`w-full px-3 py-1 text-sm text-left hover:bg-white/10 ${playbackSpeed === speed ? 'text-primary' : ''
-                                            }`}
-                                    >
-                                        {speed}x
-                                    </button>
-                                ))}
-                            </div>
-                        )}
-                    </div>
-
-                    {/* Volume */}
-                    <div className="flex items-center gap-1 group/volume">
-                        <button
-                            onClick={toggleMute}
-                            className="p-2 hover:bg-white/20 rounded transition-colors"
-                        >
-                            {isMuted || volume === 0 ? <VolumeX className="w-5 h-5" /> : <Volume2 className="w-5 h-5" />}
-                        </button>
-                        <input
-                            type="range"
-                            min="0"
-                            max="1"
-                            step="0.05"
-                            value={isMuted ? 0 : volume}
-                            onChange={handleVolumeChange}
-                            className="w-0 overflow-hidden group-hover/volume:w-20 transition-all duration-200 accent-primary"
+                        <div
+                            className="absolute inset-y-0 left-0 bg-primary"
+                            style={{ width: `${(currentTime / duration) * 100}%` }}
+                        />
+                        <div
+                            className="absolute top-1/2 -translate-y-1/2 w-3 h-3 bg-primary rounded-full opacity-0 group-hover/progress:opacity-100 transition-opacity"
+                            style={{ left: `${(currentTime / duration) * 100}%`, marginLeft: '-6px' }}
                         />
                     </div>
 
-                    {/* Auto-play Toggle */}
-                    <button
-                        onClick={() => setLocalAutoPlay(!localAutoPlay)}
-                        className={`p-2 hover:bg-white/20 rounded transition-colors flex items-center gap-1 ${localAutoPlay ? 'text-primary' : 'opacity-60'}`}
-                        title={localAutoPlay ? 'Auto-play on' : 'Auto-play off'}
-                    >
-                        <Repeat className="w-5 h-5" />
-                    </button>
+                    {/* Controls Bar */}
+                    <div className="relative flex items-center gap-2 px-4 pb-4 text-white pointer-events-auto">
+                        {/* Play/Pause */}
+                        <button
+                            onClick={togglePlay}
+                            className="p-2 hover:bg-white/20 rounded transition-colors"
+                        >
+                            {isPlaying ? <Pause className="w-6 h-6" /> : <Play className="w-6 h-6" />}
+                        </button>
 
-                    {/* PiP */}
-                    <button
-                        onClick={togglePiP}
-                        className={`p-2 hover:bg-white/20 rounded transition-colors ${isPiP ? 'text-primary' : ''}`}
-                        title="Picture-in-Picture (P)"
-                    >
-                        <PictureInPicture className="w-5 h-5" />
-                    </button>
+                        {/* Next */}
+                        <button
+                            onClick={onNext}
+                            className="p-2 hover:bg-white/20 rounded transition-colors"
+                        >
+                            <SkipForward className="w-5 h-5" />
+                        </button>
 
-                    {/* Fullscreen */}
-                    <button
-                        onClick={toggleFullscreen}
-                        className="p-2 hover:bg-white/20 rounded transition-colors"
-                        title="Fullscreen (F)"
-                    >
-                        {isFullscreen ? <Minimize className="w-5 h-5" /> : <Maximize className="w-5 h-5" />}
-                    </button>
+                        {/* Volume */}
+                        <div className="flex items-center gap-1 group/volume">
+                            <button
+                                onClick={toggleMute}
+                                className="p-2 hover:bg-white/20 rounded transition-colors"
+                            >
+                                {isMuted || volume === 0 ? <VolumeX className="w-5 h-5" /> : <Volume2 className="w-5 h-5" />}
+                            </button>
+                            <input
+                                type="range"
+                                min="0"
+                                max="1"
+                                step="0.05"
+                                value={isMuted ? 0 : volume}
+                                onChange={handleVolumeChange}
+                                className="w-0 overflow-hidden group-hover/volume:w-20 transition-all duration-200 accent-primary"
+                            />
+                        </div>
+
+                        {/* Time */}
+                        <span className="text-sm tabular-nums">
+                            {formatDuration(currentTime)} / {formatDuration(duration)}
+                        </span>
+
+                        <div className="flex-1" />
+
+                        {/* Speed */}
+                        <div className="relative">
+                            <button
+                                onClick={() => setShowSpeedMenu(!showSpeedMenu)}
+                                className="px-2 py-1 hover:bg-white/20 rounded transition-colors text-sm"
+                            >
+                                {playbackSpeed}x
+                            </button>
+
+                            {showSpeedMenu && (
+                                <div className="absolute bottom-full right-0 mb-2 bg-gray-900 rounded-lg py-1 min-w-[80px]">
+                                    {speedOptions.map(speed => (
+                                        <button
+                                            key={speed}
+                                            onClick={() => changeSpeed(speed)}
+                                            className={`w-full px-3 py-1 text-sm text-left hover:bg-white/10 ${playbackSpeed === speed ? 'text-primary' : ''
+                                                }`}
+                                        >
+                                            {speed}x
+                                        </button>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+
+
+
+                        {/* CC/Captions Toggle */}
+                        {captionTrackUrl && (
+                            <button
+                                onClick={toggleCaptions}
+                                className={`p-2 hover:bg-white/20 rounded transition-colors ${captionsEnabled ? 'text-primary' : 'opacity-60'}`}
+                                title={captionsEnabled ? 'Captions on (C)' : 'Captions off (C)'}
+                            >
+                                {captionsEnabled ? <Captions className="w-5 h-5" /> : <CaptionsOff className="w-5 h-5" />}
+                            </button>
+                        )}
+
+                        {/* Auto-play Toggle */}
+                        <button
+                            onClick={() => setLocalAutoPlay(!localAutoPlay)}
+                            className={`p-2 hover:bg-white/20 rounded transition-colors flex items-center gap-1 ${localAutoPlay ? 'text-primary' : 'opacity-60'}`}
+                            title={localAutoPlay ? 'Auto-play on' : 'Auto-play off'}
+                        >
+                            <Repeat className="w-5 h-5" />
+                        </button>
+
+                        {/* PiP */}
+                        <button
+                            onClick={togglePiP}
+                            className={`p-2 hover:bg-white/20 rounded transition-colors ${isPiP ? 'text-primary' : ''}`}
+                            title="Picture-in-Picture (P)"
+                        >
+                            <PictureInPicture className="w-5 h-5" />
+                        </button>
+
+                        {/* Fullscreen */}
+                        <button
+                            onClick={toggleFullscreen}
+                            className="p-2 hover:bg-white/20 rounded transition-colors"
+                            title="Fullscreen (F)"
+                        >
+                            {isFullscreen ? <Minimize className="w-5 h-5" /> : <Maximize className="w-5 h-5" />}
+                        </button>
+                    </div>
                 </div>
-            </div>
-
+            )}
             {/* Auto-play Countdown Overlay */}
             {showAutoPlayCountdown && (
                 <div className="absolute inset-0 bg-black/80 flex items-center justify-center z-40">

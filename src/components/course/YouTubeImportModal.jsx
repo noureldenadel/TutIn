@@ -84,6 +84,22 @@ function YouTubeImportModal({ isOpen, onClose, onImport }) {
                 if (!playlistData.items?.length) throw new Error('Playlist not found')
 
                 const playlistInfo = playlistData.items[0].snippet
+                const channelId = playlistInfo.channelId
+
+                // Fetch Channel Info (for avatar)
+                let channelAvatar = null
+                if (channelId) {
+                    try {
+                        const channelRes = await fetch(`https://www.googleapis.com/youtube/v3/channels?part=snippet&id=${channelId}&key=${apiKey}`)
+                        const channelData = await channelRes.json()
+                        if (channelData.items?.length) {
+                            channelAvatar = channelData.items[0].snippet?.thumbnails?.default?.url ||
+                                channelData.items[0].snippet?.thumbnails?.medium?.url
+                        }
+                    } catch (e) {
+                        console.warn('Failed to fetch channel avatar:', e)
+                    }
+                }
 
                 // Fetch Playlist Items
                 let videos = []
@@ -109,6 +125,7 @@ function YouTubeImportModal({ isOpen, onClose, onImport }) {
                     title: playlistInfo.title,
                     author: playlistInfo.channelTitle,
                     thumbnail: playlistInfo.thumbnails?.high?.url,
+                    channelAvatar: channelAvatar,
                     videos: videos
                 })
             }
@@ -126,6 +143,7 @@ function YouTubeImportModal({ isOpen, onClose, onImport }) {
         onImport({
             title: previewData.title,
             instructor: previewData.author,
+            instructorAvatar: previewData.channelAvatar,
             thumbnailData: previewData.thumbnail,
             description: `Imported from YouTube (${importType})`,
             modules: [{

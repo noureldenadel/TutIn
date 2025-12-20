@@ -113,24 +113,98 @@ async function extractAndProcessAudio(fileOrHandle, onProgress) {
 }
 
 /**
- * Transcribe audio using Whisper via Transformers.js
+ * Transcribe audio using Whisper via Web Worker (prevents UI freezing)
+ * Returns both plain text and timestamped chunks for CC support
  */
+let whisperWorker = null
+
 export async function transcribeAudio(audioData, onProgress) {
+    // Try Web Worker first for non-blocking transcription
+    if (typeof Worker !== 'undefined') {
+        try {
+            return await transcribeWithWorker(audioData, onProgress)
+        } catch (err) {
+            console.warn('Worker transcription failed, falling back to main thread:', err)
+            // Fall through to main thread fallback
+        }
+    }
+
+    // Fallback: Run on main thread (may freeze UI)
+    return await transcribeOnMainThread(audioData, onProgress)
+}
+
+/**
+ * Transcribe using Web Worker (non-blocking)
+ */
+async function transcribeWithWorker(audioData, onProgress) {
+    return new Promise((resolve, reject) => {
+        // Create worker if not exists
+        if (!whisperWorker) {
+            whisperWorker = new Worker(
+                new URL('./whisperWorker.js', import.meta.url),
+                { type: 'module' }
+            )
+        }
+
+        const requestId = Date.now().toString()
+
+        function handleMessage(e) {
+            const { type, id, stage, progress, message, text, chunks, error } = e.data
+
+            // Progress updates (may not have id)
+            if (type === 'progress') {
+                onProgress?.({ stage, progress, message })
+                return
+            }
+
+            // Only process messages for our request
+            if (id !== requestId) return
+
+            if (type === 'result') {
+                whisperWorker.removeEventListener('message', handleMessage)
+                resolve({ text, chunks })
+            } else if (type === 'error') {
+                whisperWorker.removeEventListener('message', handleMessage)
+                reject(new Error(error))
+            }
+        }
+
+        whisperWorker.addEventListener('message', handleMessage)
+
+        // Convert Float32Array to regular array for transfer
+        const audioArray = Array.from(audioData)
+
+        whisperWorker.postMessage({
+            type: 'transcribe',
+            audioData: audioArray,
+            id: requestId
+        })
+    })
+}
+
+/**
+ * Fallback: Transcribe on main thread (may freeze UI)
+ */
+async function transcribeOnMainThread(audioData, onProgress) {
     const pipeline = await loadTranscriptionPipeline(onProgress)
 
     onProgress?.({ stage: 'transcribing', progress: 0, message: 'Transcribing audio...' })
 
     try {
-        // Run transcription
+        // Run transcription with word-level timestamps for CC support
         const result = await pipeline(audioData, {
             chunk_length_s: 30,
             stride_length_s: 5,
-            return_timestamps: false,
+            return_timestamps: 'word',
         })
 
         onProgress?.({ stage: 'transcribing', progress: 1, message: 'Transcription complete!' })
 
-        return result.text.trim()
+        // Return both text and chunks for CC captions
+        return {
+            text: result.text.trim(),
+            chunks: result.chunks || []
+        }
     } catch (err) {
         console.error('Transcription failed:', err)
         throw new Error('Transcription failed: ' + err.message)
@@ -208,7 +282,7 @@ ${truncatedTranscript}`
                         'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
                         'Content-Type': 'application/json',
                         'HTTP-Referer': window.location.origin,
-                        'X-Title': 'MEARN Course Player'
+                        'X-Title': 'TutIn Course Player'
                     },
                     body: JSON.stringify({
                         model: 'google/gemini-2.0-flash-exp:free',
@@ -293,6 +367,64 @@ ${summary}
 }
 
 /**
+ * Convert timestamp chunks to WebVTT format for CC display
+ */
+export function chunksToVTT(chunks) {
+    if (!chunks || chunks.length === 0) return null
+
+    const formatTime = (seconds) => {
+        const h = Math.floor(seconds / 3600)
+        const m = Math.floor((seconds % 3600) / 60)
+        const s = Math.floor(seconds % 60)
+        const ms = Math.floor((seconds % 1) * 1000)
+        return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}.${ms.toString().padStart(3, '0')}`
+    }
+
+    // Group words into caption segments (~5-8 words per segment for readability)
+    const segments = []
+    let currentSegment = { text: '', start: null, end: null }
+    let wordCount = 0
+
+    for (const chunk of chunks) {
+        if (!chunk.timestamp || chunk.timestamp.length < 2) continue
+
+        const [start, end] = chunk.timestamp
+        if (start === null || end === null) continue
+
+        if (currentSegment.start === null) {
+            currentSegment.start = start
+        }
+
+        currentSegment.text += (currentSegment.text ? ' ' : '') + chunk.text.trim()
+        currentSegment.end = end
+        wordCount++
+
+        // Create a new segment every 6-8 words or at sentence boundaries
+        const isPunctuation = /[.!?]$/.test(chunk.text.trim())
+        if (wordCount >= 6 || (wordCount >= 4 && isPunctuation)) {
+            segments.push({ ...currentSegment })
+            currentSegment = { text: '', start: null, end: null }
+            wordCount = 0
+        }
+    }
+
+    // Add remaining segment
+    if (currentSegment.text && currentSegment.start !== null) {
+        segments.push(currentSegment)
+    }
+
+    // Build VTT content
+    let vtt = 'WEBVTT\n\n'
+    segments.forEach((segment, index) => {
+        vtt += `${index + 1}\n`
+        vtt += `${formatTime(segment.start)} --> ${formatTime(segment.end)}\n`
+        vtt += `${segment.text}\n\n`
+    })
+
+    return vtt
+}
+
+/**
  * Process a video for transcription and summarization
  */
 export async function processVideoForSummary(videoId, fileSource, onProgress) {
@@ -300,12 +432,15 @@ export async function processVideoForSummary(videoId, fileSource, onProgress) {
         // Step 1: Extract audio
         const audioData = await extractAndProcessAudio(fileSource, onProgress)
 
-        // Step 2: Transcribe using Whisper
-        const transcript = await transcribeAudio(audioData, onProgress)
+        // Step 2: Transcribe using Whisper (now returns { text, chunks })
+        const transcription = await transcribeAudio(audioData, onProgress)
+        const transcript = transcription.text
+        const captionChunks = transcription.chunks
 
-        // Save transcript to DB
+        // Save transcript and caption chunks to DB
         await updateVideo(videoId, {
             transcript: transcript,
+            captionChunks: captionChunks,
             transcriptGeneratedAt: new Date().toISOString()
         })
 
@@ -320,9 +455,10 @@ export async function processVideoForSummary(videoId, fileSource, onProgress) {
 
         onProgress?.({ stage: 'complete', progress: 1, message: 'Done!' })
 
-        return { transcript, summary }
+        return { transcript, summary, captionChunks }
     } catch (err) {
         console.error('AI processing failed:', err)
         throw err
     }
 }
+

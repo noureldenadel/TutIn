@@ -181,7 +181,7 @@ function CoursePlayerPage() {
                             </div>
 
                             {/* Video Info Section */}
-                            <div className="p-6 max-w-4xl mx-auto w-full space-y-6">
+                            <div className="p-6 space-y-6">
                                 <div>
                                     <h2 className="text-2xl font-bold mb-2">{currentVideo.title}</h2>
                                     <h3 className="text-lg text-light-text-secondary dark:text-dark-text-secondary">

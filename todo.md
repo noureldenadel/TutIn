@@ -1,4 +1,4 @@
-# MEARN - Development Tasks & Progress
+# TutIn - Development Tasks & Progress
 
 ## ✅ Completed Features
 
@@ -76,6 +76,12 @@
 - [x] Manual file picker for browsers without File System Access API
 - [x] Retry logic for API rate limiting
 - [x] Fallback to extractive summary if API fails
+- [x] Closed Captions (CC) support with timestamps
+- [x] YouTube-style dynamic caption positioning
+- [x] Draggable caption repositioning
+- [x] Missing captions detection for old transcripts
+- [x] Web Worker for non-blocking AI transcription
+- [x] Hold-to-speed-up (2x) like YouTube
 
 ---
 
@@ -101,7 +107,7 @@
 - [ ] Course categories/folders
 - [ ] Video thumbnails preview
 - [ ] Playback history log
-- [ ] Subtitle/caption support
+- [x] Subtitle/caption support
 - [ ] Chapter markers (if available in video)
 
 ### Low Priority / Nice-to-Have
@@ -118,6 +124,7 @@
 - [ ] File System Access API not supported in Firefox/Safari
 - [ ] Need to re-grant folder access each browser session
 - [ ] Large courses may take time to import
+- [x] YouTube videos not playing (fixed: togglePlay + proper config)
 
 ---
 
@@ -177,3 +184,7 @@ The File System Access API only works in Chromium browsers. For Firefox/Safari s
 - [ ] Multiple AI model options (different Whisper sizes)
 - [ ] Custom summarization prompts
 - [ ] Export transcripts as SRT/VTT subtitles
+
+
+add side bar for user 
+info it will has statistics and we will add road map, it will has all the instructors also

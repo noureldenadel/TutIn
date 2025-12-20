@@ -87,7 +87,7 @@ function PlaylistSidebar({
             {/* Sidebar */}
             <div
                 className={`
-          fixed right-0 top-[112px] bottom-0 
+          fixed right-0 top-[64px] bottom-0 
           w-[360px] max-w-full
           bg-white dark:bg-dark-surface 
           border-l border-light-border dark:border-dark-border

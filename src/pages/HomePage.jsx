@@ -31,6 +31,7 @@ function HomePage() {
     const [showSortMenu, setShowSortMenu] = useState(false)
     const [showYouTubeModal, setShowYouTubeModal] = useState(false)
     const [showAddMenu, setShowAddMenu] = useState(false)
+    const [activeFilter, setActiveFilter] = useState('all') // 'all', 'completed', 'not-started', or tag name
 
     // Load courses on mount
     useEffect(() => {
@@ -104,6 +105,33 @@ function HomePage() {
 
         return result
     }, [courses, debouncedSearch, sortBy])
+
+    // Get all unique tags from courses
+    const allTags = useMemo(() => {
+        const tagSet = new Set()
+        courses.forEach(course => {
+            course.tags?.forEach(tag => tagSet.add(tag))
+        })
+        return Array.from(tagSet).sort()
+    }, [courses])
+
+    // Apply filter tabs
+    const displayedCourses = useMemo(() => {
+        let result = [...filteredCourses]
+
+        if (activeFilter === 'completed') {
+            result = result.filter(c => c.completionPercentage === 100)
+        } else if (activeFilter === 'in-progress') {
+            result = result.filter(c => c.completionPercentage > 0 && c.completionPercentage < 100)
+        } else if (activeFilter === 'not-started') {
+            result = result.filter(c => !c.completionPercentage || c.completionPercentage === 0)
+        } else if (activeFilter !== 'all') {
+            // It's a tag filter
+            result = result.filter(c => c.tags?.includes(activeFilter))
+        }
+
+        return result
+    }, [filteredCourses, activeFilter])
 
     // Continue watching courses (in-progress with recent activity)
     const continueWatching = useMemo(() => {
@@ -458,16 +486,83 @@ function HomePage() {
                             {viewMode === 'grid' ? <List className="w-5 h-5" /> : <Grid className="w-5 h-5" />}
                         </button>
                     </div>
+
+                    {/* YouTube-style Filter Tabs */}
+                    {courses.length > 0 && (
+                        <div className="relative">
+                            <div className="overflow-x-auto scrollbar-hide">
+                                <div className="flex gap-2 pb-2">
+                                    {/* All Tab */}
+                                    <button
+                                        onClick={() => setActiveFilter('all')}
+                                        className={`flex-shrink-0 px-4 py-1.5 rounded-full text-sm font-medium transition-colors ${activeFilter === 'all'
+                                            ? 'bg-light-text-primary dark:bg-dark-text-primary text-white'
+                                            : 'bg-light-surface dark:bg-dark-bg hover:bg-light-border dark:hover:bg-dark-border'
+                                            }`}
+                                    >
+                                        All
+                                    </button>
+
+                                    {/* Completed Tab */}
+                                    <button
+                                        onClick={() => setActiveFilter('completed')}
+                                        className={`flex-shrink-0 px-4 py-1.5 rounded-full text-sm font-medium transition-colors ${activeFilter === 'completed'
+                                                ? 'bg-light-text-primary dark:bg-dark-text-primary text-white'
+                                                : 'bg-light-surface dark:bg-dark-bg hover:bg-light-border dark:hover:bg-dark-border'
+                                            }`}
+                                    >
+                                        Completed
+                                    </button>
+
+                                    {/* In Progress Tab */}
+                                    <button
+                                        onClick={() => setActiveFilter('in-progress')}
+                                        className={`flex-shrink-0 px-4 py-1.5 rounded-full text-sm font-medium transition-colors ${activeFilter === 'in-progress'
+                                                ? 'bg-light-text-primary dark:bg-dark-text-primary text-white'
+                                                : 'bg-light-surface dark:bg-dark-bg hover:bg-light-border dark:hover:bg-dark-border'
+                                            }`}
+                                    >
+                                        In Progress
+                                    </button>
+
+                                    {/* Not Started Tab */}
+                                    <button
+                                        onClick={() => setActiveFilter('not-started')}
+                                        className={`flex-shrink-0 px-4 py-1.5 rounded-full text-sm font-medium transition-colors ${activeFilter === 'not-started'
+                                                ? 'bg-light-text-primary dark:bg-dark-text-primary text-white'
+                                                : 'bg-light-surface dark:bg-dark-bg hover:bg-light-border dark:hover:bg-dark-border'
+                                            }`}
+                                    >
+                                        Not Started
+                                    </button>
+
+                                    {/* Tag Tabs */}
+                                    {allTags.map(tag => (
+                                        <button
+                                            key={tag}
+                                            onClick={() => setActiveFilter(tag)}
+                                            className={`flex-shrink-0 px-4 py-1.5 rounded-full text-sm font-medium transition-colors ${activeFilter === tag
+                                                ? 'bg-light-text-primary dark:bg-dark-text-primary text-white'
+                                                : 'bg-light-surface dark:bg-dark-bg hover:bg-light-border dark:hover:bg-dark-border'
+                                                }`}
+                                        >
+                                            {tag}
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+                        </div>
+                    )}
                 </div>
             )}
 
             {/* Course Grid/List */}
-            {filteredCourses.length > 0 ? (
+            {displayedCourses.length > 0 ? (
                 <div className={viewMode === 'grid'
                     ? 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6'
                     : 'space-y-4'
                 }>
-                    {filteredCourses.map(course => (
+                    {displayedCourses.map(course => (
                         <CourseCard
                             key={course.id}
                             course={course}
@@ -509,40 +604,43 @@ function HomePage() {
                         Clear search and filters
                     </button>
                 </div>
-            )}
+            )
+            }
 
             {/* Recently Watched Section */}
-            {recentlyWatched.length > 0 && (
-                <div className="mt-12">
-                    <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
-                        <Clock className="w-5 h-5 text-primary" />
-                        Recently Watched
-                    </h2>
-                    <div className="bg-white dark:bg-dark-surface rounded-lg border border-light-border dark:border-dark-border overflow-hidden">
-                        {recentlyWatched.slice(0, 5).map((item, index) => (
-                            <Link
-                                key={item.video.id}
-                                to={`/course/${item.course.id}`}
-                                className={`flex items-center gap-4 p-4 hover:bg-light-surface dark:hover:bg-dark-bg transition-colors ${index > 0 ? 'border-t border-light-border dark:border-dark-border' : ''
-                                    }`}
-                            >
-                                <div className="w-10 h-10 rounded bg-primary/10 flex items-center justify-center flex-shrink-0">
-                                    <Play className="w-5 h-5 text-primary" />
-                                </div>
-                                <div className="flex-1 min-w-0">
-                                    <h4 className="font-medium truncate">{item.video.title}</h4>
-                                    <p className="text-sm text-light-text-secondary dark:text-dark-text-secondary truncate">
-                                        {item.course.title}
-                                    </p>
-                                </div>
-                                <div className="text-sm text-light-text-secondary dark:text-dark-text-secondary flex-shrink-0">
-                                    {Math.round((item.video.watchProgress || 0) * 100)}%
-                                </div>
-                            </Link>
-                        ))}
+            {
+                recentlyWatched.length > 0 && (
+                    <div className="mt-12">
+                        <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
+                            <Clock className="w-5 h-5 text-primary" />
+                            Recently Watched
+                        </h2>
+                        <div className="bg-white dark:bg-dark-surface rounded-lg border border-light-border dark:border-dark-border overflow-hidden">
+                            {recentlyWatched.slice(0, 5).map((item, index) => (
+                                <Link
+                                    key={item.video.id}
+                                    to={`/course/${item.course.id}`}
+                                    className={`flex items-center gap-4 p-4 hover:bg-light-surface dark:hover:bg-dark-bg transition-colors ${index > 0 ? 'border-t border-light-border dark:border-dark-border' : ''
+                                        }`}
+                                >
+                                    <div className="w-10 h-10 rounded bg-primary/10 flex items-center justify-center flex-shrink-0">
+                                        <Play className="w-5 h-5 text-primary" />
+                                    </div>
+                                    <div className="flex-1 min-w-0">
+                                        <h4 className="font-medium truncate">{item.video.title}</h4>
+                                        <p className="text-sm text-light-text-secondary dark:text-dark-text-secondary truncate">
+                                            {item.course.title}
+                                        </p>
+                                    </div>
+                                    <div className="text-sm text-light-text-secondary dark:text-dark-text-secondary flex-shrink-0">
+                                        {Math.round((item.video.watchProgress || 0) * 100)}%
+                                    </div>
+                                </Link>
+                            ))}
+                        </div>
                     </div>
-                </div>
-            )}
+                )
+            }
 
             {/* Import Preview Modal */}
             <ImportPreviewModal
@@ -566,7 +664,7 @@ function HomePage() {
                 onClose={() => setShowYouTubeModal(false)}
                 onImport={handleYouTubeImport}
             />
-        </div>
+        </div >
     )
 }
 

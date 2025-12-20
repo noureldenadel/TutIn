@@ -1,5 +1,5 @@
 /**
- * MEARN Database - IndexedDB wrapper for course management
+ * TutIn Database - IndexedDB wrapper for course management
  * 
  * Stores:
  * - courses: Course metadata and settings
@@ -112,6 +112,7 @@ export async function addCourse(courseData) {
         originalTitle: courseData.originalTitle || courseData.title,
         description: courseData.description || '',
         instructor: courseData.instructor || '',
+        instructorAvatar: courseData.instructorAvatar || null,
         category: courseData.category || 'Uncategorized',
         difficulty: courseData.difficulty || 'intermediate',
         tags: courseData.tags || [],

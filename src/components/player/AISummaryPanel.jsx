@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import {
     FileText, Sparkles, Loader2, AlertCircle,
-    Download, Copy, RefreshCw, Upload, FolderOpen
+    Download, Copy, RefreshCw, Upload, FolderOpen, Captions
 } from 'lucide-react'
 import { getVideo, updateVideo } from '../../utils/db'
 import { processVideoForSummary, isAIAvailable } from '../../utils/aiSummarization'
@@ -15,6 +15,7 @@ function AISummaryPanel({ video, courseId }) {
     const [error, setError] = useState(null)
     const [activeTab, setActiveTab] = useState('summary')
     const [manualFile, setManualFile] = useState(null)
+    const [missingCaptions, setMissingCaptions] = useState(false)
 
     // Load existing data when video changes
     useEffect(() => {
@@ -23,6 +24,7 @@ function AISummaryPanel({ video, courseId }) {
         } else {
             setTranscript(null)
             setSummary(null)
+            setMissingCaptions(false)
         }
     }, [video?.id])
 
@@ -31,6 +33,9 @@ function AISummaryPanel({ video, courseId }) {
             const videoData = await getVideo(video.id)
             setTranscript(videoData?.transcript || null)
             setSummary(videoData?.summary || null)
+            // Check if transcript exists but no caption chunks (old transcript without CC support)
+            const hasCaptions = videoData?.captionChunks && videoData.captionChunks.length > 0
+            setMissingCaptions(!!videoData?.transcript && !hasCaptions)
         } catch (err) {
             console.error('Failed to load AI data:', err)
         }
@@ -87,6 +92,7 @@ function AISummaryPanel({ video, courseId }) {
             setTranscript(result.transcript)
             setSummary(result.summary)
             setManualFile(null) // Clear manual file after success
+            setMissingCaptions(false) // Captions now available
         } catch (err) {
             console.error('AI processing failed:', err)
             setError(err.message)
@@ -174,8 +180,8 @@ function AISummaryPanel({ video, courseId }) {
                             onClick={() => handleGenerateSummary()}
                             disabled={!canGenerate}
                             className={`px-4 py-2 rounded-lg flex items-center gap-2 mx-auto transition-colors ${canGenerate
-                                    ? 'bg-primary text-white hover:bg-primary/90'
-                                    : 'bg-gray-300 dark:bg-gray-700 text-gray-500 cursor-not-allowed'
+                                ? 'bg-primary text-white hover:bg-primary/90'
+                                : 'bg-gray-300 dark:bg-gray-700 text-gray-500 cursor-not-allowed'
                                 }`}
                         >
                             <Sparkles className="w-4 h-4" />
@@ -220,6 +226,54 @@ function AISummaryPanel({ video, courseId }) {
                                     Try Again
                                 </button>
                             )}
+                        </div>
+                    </div>
+                )}
+
+                {/* Missing Captions Warning */}
+                {missingCaptions && !isProcessing && (transcript || summary) && (
+                    <div className="p-3 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg flex items-start gap-3">
+                        <Captions className="w-5 h-5 text-amber-600 dark:text-amber-400 flex-shrink-0 mt-0.5" />
+                        <div className="flex-1">
+                            <p className="text-sm text-amber-700 dark:text-amber-400 font-medium">
+                                Captions not available
+                            </p>
+                            <p className="text-xs text-amber-600 dark:text-amber-500 mt-1">
+                                This transcript was generated before CC support. Regenerate to enable closed captions.
+                            </p>
+                            <div className="mt-2 flex flex-wrap gap-2 items-center">
+                                {hasFileAccess ? (
+                                    <button
+                                        onClick={() => handleGenerateSummary()}
+                                        className="text-xs bg-amber-600 hover:bg-amber-700 text-white px-3 py-1.5 rounded flex items-center gap-1.5 transition-colors"
+                                    >
+                                        <RefreshCw className="w-3 h-3" />
+                                        Regenerate with Captions
+                                    </button>
+                                ) : (
+                                    <>
+                                        <label className="text-xs bg-amber-600 hover:bg-amber-700 text-white px-3 py-1.5 rounded flex items-center gap-1.5 transition-colors cursor-pointer">
+                                            <Upload className="w-3 h-3" />
+                                            {manualFile ? 'File Selected' : 'Select Video File'}
+                                            <input
+                                                type="file"
+                                                accept="video/*,audio/*"
+                                                onChange={handleManualFilePick}
+                                                className="hidden"
+                                            />
+                                        </label>
+                                        {manualFile && (
+                                            <button
+                                                onClick={() => handleGenerateSummary()}
+                                                className="text-xs bg-green-600 hover:bg-green-700 text-white px-3 py-1.5 rounded flex items-center gap-1.5 transition-colors"
+                                            >
+                                                <RefreshCw className="w-3 h-3" />
+                                                Regenerate
+                                            </button>
+                                        )}
+                                    </>
+                                )}
+                            </div>
                         </div>
                     </div>
                 )}
