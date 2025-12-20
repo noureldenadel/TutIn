@@ -700,6 +700,7 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
     // Caption drag handlers
     function handleCaptionDragStart(e) {
         e.preventDefault()
+        e.stopPropagation() // Prevent speed boost from triggering
         setIsDraggingCaption(true)
     }
 
@@ -982,6 +983,7 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
             {captionsEnabled && currentCaption && (
                 <div
                     ref={captionRef}
+                    data-no-speed-boost
                     className={`absolute z-30 px-4 py-2 bg-black/80 text-white text-center rounded-lg max-w-[80%] cursor-move select-none transition-all duration-200 ${isDraggingCaption ? 'scale-105' : ''}`}
                     style={{
                         left: `${captionPosition.x}%`,

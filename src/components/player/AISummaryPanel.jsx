@@ -5,7 +5,7 @@ import {
 } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import { getVideo, updateVideo } from '../../utils/db'
-import { processVideoForSummary, isAIAvailable } from '../../utils/aiSummarization'
+import { processVideoForSummary, isAIAvailable, regenerateSummaryOnly } from '../../utils/aiSummarization'
 import { verifyPermission } from '../../utils/fileSystem'
 
 // Format seconds to MM:SS or HH:MM:SS
@@ -20,7 +20,7 @@ function formatTime(seconds) {
     return `${m}:${s.toString().padStart(2, '0')}`
 }
 
-function AISummaryPanel({ video, courseId, onSeek }) {
+function AISummaryPanel({ video, courseId, onSeek, onVideoDataChange, currentTime = 0 }) {
     const [transcript, setTranscript] = useState(null)
     const [summary, setSummary] = useState(null)
     const [captionChunks, setCaptionChunks] = useState([])
@@ -110,6 +110,9 @@ function AISummaryPanel({ video, courseId, onSeek }) {
             setCaptionChunks(result.captionChunks || [])
             setManualFile(null) // Clear manual file after success
             setMissingCaptions(false) // Captions now available
+
+            // Notify parent that video data has changed (for CC icon update)
+            onVideoDataChange?.()
         } catch (err) {
             console.error('AI processing failed:', err)
             setError(err.message)
@@ -131,6 +134,28 @@ function AISummaryPanel({ video, courseId, onSeek }) {
         a.download = `${video.title.replace(/[^a-z0-9]/gi, '_')}_ai_summary.md`
         a.click()
         URL.revokeObjectURL(url)
+    }
+
+    // Regenerate just the summary (no file needed, uses existing transcript)
+    async function handleRegenerateSummary() {
+        if (!transcript) {
+            setError('No transcript available. Generate one first.')
+            return
+        }
+
+        try {
+            setIsProcessing(true)
+            setError(null)
+            setProgress({ stage: 'summarizing', progress: 0, message: 'Regenerating summary...' })
+
+            const newSummary = await regenerateSummaryOnly(video.id, transcript, setProgress)
+            setSummary(newSummary)
+        } catch (err) {
+            console.error('Summary regeneration failed:', err)
+            setError(err.message)
+        } finally {
+            setIsProcessing(false)
+        }
     }
 
     if (!video) return null
@@ -333,13 +358,24 @@ function AISummaryPanel({ video, courseId, onSeek }) {
                                         {activeTab === 'summary' ? 'AI Summary' : 'Full Transcript'}
                                     </span>
                                 </div>
-                                <button
-                                    onClick={() => copyToClipboard(activeTab === 'summary' ? summary : transcript)}
-                                    className="p-1.5 hover:bg-gray-100 dark:hover:bg-dark-surface rounded"
-                                    title="Copy"
-                                >
-                                    <Copy className="w-4 h-4" />
-                                </button>
+                                <div className="flex items-center gap-1">
+                                    {transcript && activeTab === 'summary' && (
+                                        <button
+                                            onClick={handleRegenerateSummary}
+                                            className="p-1.5 hover:bg-gray-100 dark:hover:bg-dark-surface rounded"
+                                            title="Regenerate Summary"
+                                        >
+                                            <RefreshCw className="w-4 h-4" />
+                                        </button>
+                                    )}
+                                    <button
+                                        onClick={() => copyToClipboard(activeTab === 'summary' ? summary : transcript)}
+                                        className="p-1.5 hover:bg-gray-100 dark:hover:bg-dark-surface rounded"
+                                        title="Copy"
+                                    >
+                                        <Copy className="w-4 h-4" />
+                                    </button>
+                                </div>
                             </div>
 
                             <div className="max-h-[60vh] overflow-y-auto">
@@ -352,22 +388,77 @@ function AISummaryPanel({ video, courseId, onSeek }) {
                                         <span className="italic opacity-60">No summary generated yet.</span>
                                     )
                                 ) : (
-                                    captionChunks.length > 0 ? (
-                                        <div className="space-y-1">
-                                            {captionChunks.map((chunk, i) => (
-                                                <div key={i} className="flex gap-3 group hover:bg-light-surface dark:hover:bg-dark-surface rounded px-2 py-1 -mx-2">
-                                                    <button
-                                                        onClick={() => onSeek?.(chunk.timestamp?.[0] || 0)}
-                                                        className="text-xs text-primary hover:underline shrink-0 w-12 text-left font-mono opacity-70 group-hover:opacity-100"
-                                                        title="Click to seek"
-                                                    >
-                                                        {formatTime(chunk.timestamp?.[0])}
-                                                    </button>
-                                                    <span className="text-sm">{chunk.text}</span>
-                                                </div>
-                                            ))}
-                                        </div>
-                                    ) : transcript ? (
+                                    captionChunks.length > 0 ? (() => {
+                                        // Group chunks into sentences (combine words within 5 second windows)
+                                        const groupedChunks = []
+                                        let currentGroup = { text: '', timestamp: null, endTime: 0 }
+
+                                        for (const chunk of captionChunks) {
+                                            const chunkStart = chunk.timestamp?.[0] || 0
+                                            const chunkEnd = chunk.timestamp?.[1] || chunkStart + 1
+                                            const currentStart = currentGroup.timestamp?.[0]
+
+                                            // Start new group if this chunk is >5s from current group start
+                                            // or if we've accumulated enough text (~100 chars)
+                                            if (currentStart === null ||
+                                                currentStart === undefined ||
+                                                chunkStart - currentStart > 5 ||
+                                                currentGroup.text.length > 100) {
+                                                if (currentGroup.text.trim()) {
+                                                    groupedChunks.push(currentGroup)
+                                                }
+                                                currentGroup = {
+                                                    text: chunk.text,
+                                                    timestamp: chunk.timestamp,
+                                                    endTime: chunkEnd
+                                                }
+                                            } else {
+                                                // Add to current group
+                                                currentGroup.text += ' ' + chunk.text
+                                                currentGroup.endTime = Math.max(currentGroup.endTime, chunkEnd)
+                                            }
+                                        }
+                                        // Don't forget the last group
+                                        if (currentGroup.text.trim()) {
+                                            groupedChunks.push(currentGroup)
+                                        }
+
+                                        // Find which group is currently active
+                                        const currentGroupIndex = groupedChunks.findIndex((group, i) => {
+                                            const start = group.timestamp?.[0] || 0
+                                            const nextStart = groupedChunks[i + 1]?.timestamp?.[0] || Infinity
+                                            return currentTime >= start && currentTime < nextStart
+                                        })
+
+                                        return (
+                                            <div className="space-y-2">
+                                                {groupedChunks.map((group, i) => {
+                                                    const isActive = i === currentGroupIndex
+                                                    return (
+                                                        <div
+                                                            key={i}
+                                                            className={`flex gap-3 group rounded px-2 py-1.5 -mx-2 transition-colors duration-200 ${isActive
+                                                                ? 'bg-primary/20 border-l-2 border-primary'
+                                                                : 'hover:bg-light-surface dark:hover:bg-dark-surface'
+                                                                }`}
+                                                        >
+                                                            <button
+                                                                onClick={() => onSeek?.(group.timestamp?.[0] || 0)}
+                                                                className={`text-xs hover:underline shrink-0 w-12 text-left font-mono group-hover:opacity-100 ${isActive ? 'text-primary font-medium opacity-100' : 'text-primary opacity-70'
+                                                                    }`}
+                                                                title="Click to seek"
+                                                            >
+                                                                {formatTime(group.timestamp?.[0])}
+                                                            </button>
+                                                            <span className={`text-sm leading-relaxed ${isActive ? 'font-medium' : ''}`}>
+                                                                {group.text.trim()}
+                                                            </span>
+                                                        </div>
+                                                    )
+                                                })}
+                                            </div>
+                                        )
+                                    })() : transcript ? (
                                         <p className="text-sm whitespace-pre-wrap">{transcript}</p>
                                     ) : (
                                         <span className="italic opacity-60">No transcript generated yet.</span>

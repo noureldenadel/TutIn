@@ -109,9 +109,12 @@ export function pickFolderFallback() {
 // Store files in memory for current session (fallback mode)
 let fallbackFilesCache = new Map()
 
-// Root courses folder handle (session-scoped)
+// Root courses folder handle (session-scoped, restored from IndexedDB)
 let rootFolderHandle = null
 let rootFolderName = null
+
+// Import IndexedDB handle storage functions
+import { storeHandle, getStoredHandle, deleteStoredHandle } from './db'
 
 /**
  * Store files in memory cache for current session
@@ -135,13 +138,24 @@ export function clearFallbackCache() {
 }
 
 /**
- * Set the root courses folder handle
- * This is called once per session when user grants access
+ * Set the root courses folder handle and persist to IndexedDB
+ * This is called when user grants access
  */
-export function setRootFolderHandle(handle, name) {
+export async function setRootFolderHandle(handle, name) {
     rootFolderHandle = handle
     rootFolderName = name
-    // Store the folder name in localStorage so we can prompt user on next session
+
+    // Persist to IndexedDB for cross-session access
+    if (handle) {
+        try {
+            await storeHandle('root_folder', handle, name)
+            console.log('[FileSystem] Root folder handle persisted to IndexedDB')
+        } catch (err) {
+            console.error('[FileSystem] Failed to persist root folder handle:', err)
+        }
+    }
+
+    // Also store the folder name in localStorage for quick display
     if (name) {
         localStorage.setItem('mearn_root_folder_name', name)
     }
@@ -162,19 +176,99 @@ export function getRootFolderName() {
 }
 
 /**
- * Check if root folder access is configured
+ * Check if root folder access is configured (may need re-verification)
  */
 export function hasRootFolderAccess() {
     return rootFolderHandle !== null
 }
 
 /**
- * Clear root folder handle
+ * Check if there's a stored root folder (may need re-verification)
  */
-export function clearRootFolderHandle() {
+export function hasStoredRootFolder() {
+    return !!localStorage.getItem('mearn_root_folder_name')
+}
+
+/**
+ * Clear root folder handle and remove from storage
+ */
+export async function clearRootFolderHandle() {
     rootFolderHandle = null
     rootFolderName = null
     localStorage.removeItem('mearn_root_folder_name')
+
+    // Remove from IndexedDB
+    try {
+        await deleteStoredHandle('root_folder')
+        console.log('[FileSystem] Root folder handle cleared from IndexedDB')
+    } catch (err) {
+        console.error('[FileSystem] Failed to delete root folder handle:', err)
+    }
+}
+
+/**
+ * Load persisted root folder handle from IndexedDB and verify permission
+ * Call this on app startup to restore folder access
+ * @returns {Promise<boolean>} True if access was restored successfully
+ */
+export async function loadPersistedRootFolder() {
+    try {
+        const stored = await getStoredHandle('root_folder')
+        if (!stored) {
+            console.log('[FileSystem] No persisted root folder found')
+            return false
+        }
+
+        const { handle, name } = stored
+
+        // Check if we still have permission
+        const permission = await handle.queryPermission({ mode: 'read' })
+
+        if (permission === 'granted') {
+            // Permission still valid
+            rootFolderHandle = handle
+            rootFolderName = name
+            console.log('[FileSystem] Root folder access restored:', name)
+            return true
+        } else {
+            // Permission expired, need user gesture to re-request
+            rootFolderName = name
+            localStorage.setItem('mearn_root_folder_name', name)
+            console.log('[FileSystem] Root folder stored but needs permission re-grant:', name)
+            return false
+        }
+    } catch (err) {
+        console.error('[FileSystem] Failed to load persisted root folder:', err)
+        return false
+    }
+}
+
+/**
+ * Request permission for stored root folder (requires user gesture)
+ * @returns {Promise<boolean>} True if permission granted
+ */
+export async function requestRootFolderPermission() {
+    try {
+        const stored = await getStoredHandle('root_folder')
+        if (!stored) return false
+
+        const { handle, name } = stored
+
+        // Request permission (requires user gesture)
+        const permission = await handle.requestPermission({ mode: 'read' })
+
+        if (permission === 'granted') {
+            rootFolderHandle = handle
+            rootFolderName = name
+            console.log('[FileSystem] Root folder permission granted:', name)
+            return true
+        }
+
+        return false
+    } catch (err) {
+        console.error('[FileSystem] Failed to request root folder permission:', err)
+        return false
+    }
 }
 
 /**
@@ -208,7 +302,7 @@ export async function findCourseFolderInRoot(folderName) {
 export async function pickRootFolder() {
     const handle = await pickFolder()
     if (handle) {
-        setRootFolderHandle(handle, handle.name)
+        await setRootFolderHandle(handle, handle.name)
         return { handle, name: handle.name }
     }
     return null

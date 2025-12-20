@@ -17,6 +17,7 @@ function PlaylistSidebar({
     isCollapsed,
     onToggle,
     onRefresh,
+    onVideoDataChange,
     // Props for NotesPanel
     courseId,
     currentTime,
@@ -130,6 +131,9 @@ function PlaylistSidebar({
     )
     const totalDuration = modules.reduce((sum, m) => sum + m.totalDuration, 0)
 
+    // Use course's stored completion percentage (respects progress calculation mode setting)
+    const progressPercentage = course?.completionPercentage ?? 0
+
     // Calculate remaining time (sum of incomplete video durations)
     const remainingDuration = modules.reduce((sum, m) =>
         sum + m.videos.filter(v => !v.isCompleted).reduce((vSum, v) => vSum + (v.duration || 0), 0), 0
@@ -167,7 +171,7 @@ function PlaylistSidebar({
                                 {completedVideos}/{totalVideos} videos completed
                             </span>
                             <span className="font-medium text-primary">
-                                {Math.round(totalVideos > 0 ? (completedVideos / totalVideos) * 100 : 0)}%
+                                {Math.round(progressPercentage)}%
                             </span>
                         </div>
                         {remainingDuration > 0 && (
@@ -178,7 +182,7 @@ function PlaylistSidebar({
                         <div className="progress-bar h-2 w-full bg-light-bg dark:bg-dark-bg rounded-full overflow-hidden">
                             <div
                                 className="progress-bar-fill h-full bg-primary rounded-full transition-all duration-300"
-                                style={{ width: `${totalVideos > 0 ? (completedVideos / totalVideos) * 100 : 0}%` }}
+                                style={{ width: `${progressPercentage}%` }}
                             />
                         </div>
                     </div>
@@ -334,6 +338,8 @@ function PlaylistSidebar({
                                 video={currentVideo}
                                 courseId={courseId}
                                 onSeek={onSeek}
+                                onVideoDataChange={onVideoDataChange}
+                                currentTime={currentTime}
                             />
                         </div>
                     )}

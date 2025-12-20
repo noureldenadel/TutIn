@@ -11,7 +11,7 @@
  */
 
 const DB_NAME = 'mearn_db'
-const DB_VERSION = 3  // Upgraded to add course order index
+const DB_VERSION = 4  // Upgraded to add handles store for persistent folder access
 
 // Database instance singleton
 let dbInstance = null
@@ -87,6 +87,12 @@ export async function initDatabase() {
             if (!db.objectStoreNames.contains('instructors')) {
                 const instructorsStore = db.createObjectStore('instructors', { keyPath: 'id' })
                 instructorsStore.createIndex('name', 'name', { unique: true })
+            }
+
+            // Handles store (for persisting FileSystemDirectoryHandle across sessions)
+            // Version 4 upgrade
+            if (!db.objectStoreNames.contains('handles')) {
+                db.createObjectStore('handles', { keyPath: 'id' })
             }
         }
     })
@@ -1124,5 +1130,90 @@ export async function updateCoursesOrder(updates) {
                 }
             }
         })
+    })
+}
+
+// ============= FILE HANDLE PERSISTENCE =============
+
+/**
+ * Store a FileSystemDirectoryHandle in IndexedDB
+ * @param {string} id - Unique identifier for the handle (e.g., 'root_folder', courseId)
+ * @param {FileSystemDirectoryHandle} handle - The directory handle to store
+ * @param {string} name - Display name for the handle
+ */
+export async function storeHandle(id, handle, name) {
+    const db = await initDatabase()
+
+    return new Promise((resolve, reject) => {
+        const transaction = db.transaction(['handles'], 'readwrite')
+        const store = transaction.objectStore('handles')
+        const request = store.put({
+            id,
+            handle,
+            name,
+            storedAt: new Date().toISOString()
+        })
+
+        request.onsuccess = () => resolve(true)
+        request.onerror = () => reject(new Error('Failed to store handle: ' + request.error))
+    })
+}
+
+/**
+ * Get a stored FileSystemDirectoryHandle from IndexedDB
+ * @param {string} id - The handle identifier
+ * @returns {Promise<{handle: FileSystemDirectoryHandle, name: string} | null>}
+ */
+export async function getStoredHandle(id) {
+    const db = await initDatabase()
+
+    return new Promise((resolve, reject) => {
+        const transaction = db.transaction(['handles'], 'readonly')
+        const store = transaction.objectStore('handles')
+        const request = store.get(id)
+
+        request.onsuccess = () => {
+            const result = request.result
+            if (result) {
+                resolve({ handle: result.handle, name: result.name })
+            } else {
+                resolve(null)
+            }
+        }
+        request.onerror = () => reject(new Error('Failed to get handle: ' + request.error))
+    })
+}
+
+/**
+ * Delete a stored handle
+ * @param {string} id - The handle identifier
+ */
+export async function deleteStoredHandle(id) {
+    const db = await initDatabase()
+
+    return new Promise((resolve, reject) => {
+        const transaction = db.transaction(['handles'], 'readwrite')
+        const store = transaction.objectStore('handles')
+        const request = store.delete(id)
+
+        request.onsuccess = () => resolve(true)
+        request.onerror = () => reject(new Error('Failed to delete handle: ' + request.error))
+    })
+}
+
+/**
+ * Get all stored handles
+ * @returns {Promise<Array<{id: string, handle: FileSystemDirectoryHandle, name: string}>>}
+ */
+export async function getAllStoredHandles() {
+    const db = await initDatabase()
+
+    return new Promise((resolve, reject) => {
+        const transaction = db.transaction(['handles'], 'readonly')
+        const store = transaction.objectStore('handles')
+        const request = store.getAll()
+
+        request.onsuccess = () => resolve(request.result || [])
+        request.onerror = () => reject(new Error('Failed to get handles: ' + request.error))
     })
 }

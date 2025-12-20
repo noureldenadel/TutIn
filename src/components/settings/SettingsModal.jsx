@@ -6,7 +6,7 @@ import {
 import { useSettings } from '../../contexts/SettingsContext'
 import { useTheme } from '../../contexts/ThemeContext'
 import { exportAllData, clearAllData, importData, recalculateAllCoursesProgress } from '../../utils/db'
-import { pickRootFolder, getRootFolderName, hasRootFolderAccess, clearRootFolderHandle, isFileSystemAccessSupported } from '../../utils/fileSystem'
+import { pickRootFolder, getRootFolderName, hasRootFolderAccess, clearRootFolderHandle, isFileSystemAccessSupported, requestRootFolderPermission, hasStoredRootFolder } from '../../utils/fileSystem'
 
 const accentColors = [
     { name: 'Blue', value: '#3B82F6' },
@@ -493,7 +493,29 @@ function SettingsModal({ isOpen, onClose }) {
                                                 </div>
                                             </div>
 
-                                            <div className="flex gap-2">
+                                            <div className="flex gap-2 flex-wrap">
+                                                {/* Restore Access button - shows when folder is stored but access expired */}
+                                                {!hasRootFolderAccess() && hasStoredRootFolder() && (
+                                                    <button
+                                                        onClick={async () => {
+                                                            try {
+                                                                const success = await requestRootFolderPermission()
+                                                                if (success) {
+                                                                    // Force re-render
+                                                                    setActiveTab('data')
+                                                                } else {
+                                                                    alert('Permission denied. Please try selecting the folder again.')
+                                                                }
+                                                            } catch (err) {
+                                                                alert('Failed to restore access: ' + err.message)
+                                                            }
+                                                        }}
+                                                        className="flex items-center gap-2 px-4 py-2 bg-success text-white rounded-lg hover:bg-success/90 transition-colors"
+                                                    >
+                                                        <Check className="w-4 h-4" />
+                                                        Restore Access
+                                                    </button>
+                                                )}
                                                 <button
                                                     onClick={async () => {
                                                         try {
@@ -509,12 +531,12 @@ function SettingsModal({ isOpen, onClose }) {
                                                     className="flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-lg hover:bg-primary/90 transition-colors"
                                                 >
                                                     <FolderOpen className="w-4 h-4" />
-                                                    {hasRootFolderAccess() ? 'Change Folder' : 'Select Folder'}
+                                                    {hasRootFolderAccess() ? 'Change Folder' : hasStoredRootFolder() ? 'Pick Different Folder' : 'Select Folder'}
                                                 </button>
                                                 {getRootFolderName() && (
                                                     <button
-                                                        onClick={() => {
-                                                            clearRootFolderHandle()
+                                                        onClick={async () => {
+                                                            await clearRootFolderHandle()
                                                             setActiveTab('data')
                                                         }}
                                                         className="px-4 py-2 border border-light-border dark:border-dark-border rounded-lg hover:bg-light-surface dark:hover:bg-dark-bg transition-colors"

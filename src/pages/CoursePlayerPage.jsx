@@ -24,10 +24,37 @@ function CoursePlayerPage() {
 
     const sidebarOnLeft = settings.sidebarPosition === 'left'
 
-    // Load course data
+    // Load course data (reload when progress calculation mode changes)
     useEffect(() => {
         loadCourseData()
     }, [courseId])
+
+    // Refresh only course progress when calculation mode changes (don't interrupt video)
+    const prevProgressModeRef = useRef(settings.progressCalculationMode)
+    useEffect(() => {
+        // Skip on initial mount, only respond to actual changes
+        if (prevProgressModeRef.current !== settings.progressCalculationMode) {
+            prevProgressModeRef.current = settings.progressCalculationMode
+            // Wait for recalculation to complete in Settings, then refresh
+            // Small delay ensures IndexedDB has been updated by recalculateAllCoursesProgress
+            const timer = setTimeout(() => {
+                refreshCourseProgressOnly()
+            }, 500)
+            return () => clearTimeout(timer)
+        }
+    }, [settings.progressCalculationMode])
+
+    // Lightweight refresh - only updates course progress without affecting video
+    async function refreshCourseProgressOnly() {
+        try {
+            const courseData = await getCourse(courseId)
+            if (courseData) {
+                setCourse(courseData)
+            }
+        } catch (err) {
+            console.error('Failed to refresh course progress:', err)
+        }
+    }
 
     // Load instructor avatar
     useEffect(() => {
@@ -124,6 +151,20 @@ function CoursePlayerPage() {
             }
         } catch (err) {
             console.error('Failed to refresh modules:', err)
+        }
+    }
+
+    // Refresh only the current video's data (used after AI transcription)
+    async function refreshCurrentVideoOnly() {
+        if (!currentVideo) return
+        try {
+            const { getVideo } = await import('../utils/db')
+            const updatedVideo = await getVideo(currentVideo.id)
+            if (updatedVideo) {
+                setCurrentVideo(prev => ({ ...prev, ...updatedVideo }))
+            }
+        } catch (err) {
+            console.error('Failed to refresh video data:', err)
         }
     }
 
@@ -263,6 +304,7 @@ function CoursePlayerPage() {
                     isCollapsed={sidebarCollapsed}
                     onToggle={() => setSidebarCollapsed(!sidebarCollapsed)}
                     onRefresh={refreshModulesOnly}
+                    onVideoDataChange={refreshCurrentVideoOnly}
                     courseId={courseId}
                     currentTime={currentTime}
                     onSeek={(time) => videoRef.current?.seekTo?.(time)}

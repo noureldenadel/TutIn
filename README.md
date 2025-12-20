@@ -11,6 +11,7 @@ A modern, offline-first course management application for tracking video course 
 - 🎬 **YouTube Import** - Import videos and playlists from YouTube
 - 📊 **Progress Tracking** - Track watch progress for each video
 - ✅ **Completion Marking** - Mark videos as complete manually or automatically
+- 📏 **Progress Calculation** - Choose between video count or time-based progress
 - 🔄 **Resume Playback** - Resume videos from where you left off
 - 🌙 **Dark/Light Mode** - Toggle between themes
 - 🏷️ **Filter Tabs** - Filter courses by All, Completed, In Progress, Not Started, or custom tags
@@ -36,7 +37,7 @@ A modern, offline-first course management application for tracking video course 
 
 ### Data Management
 - 💾 **Export/Import** - Backup and restore all data
-- 📂 **Root Folder** - Set a parent folder for all courses (one-time access per session)
+- 📂 **Persistent Folder Access** - Set a root folder once, auto-restore access on next session
 - ♻️ **Reset App** - Start fresh with clean data
 
 ## Getting Started
@@ -82,7 +83,8 @@ npm run preview
 ### Setting Up Root Folder (Recommended)
 1. Go to **Settings → Data → Courses Folder**
 2. Select your parent folder containing all courses
-3. Grant access once per browser session
+3. The folder handle is saved and persists across sessions
+4. On next visit, click **"Restore Access"** to re-grant permission (no need to re-pick folder)
 
 ### Keyboard Shortcuts
 

@@ -257,41 +257,81 @@ async function generateAISummary(transcript, onProgress) {
         ? transcript.slice(0, maxChars) + '... [truncated]'
         : transcript
 
-    const prompt = `You are an expert at summarizing educational video content. Analyze the following video transcript and create a well-structured summary.
+    const prompt = `You are an expert note-taker who creates comprehensive study notes from video lectures. Your goal is to extract ALL important information and present it in a well-organized, visually clear format that's perfect for studying and quick reference.
 
-**Instructions:**
-1. Create a clear, descriptive title for this video content
-2. Write a brief overview (2-3 sentences)
-3. List the main topics/key points as bullet points
-4. Include any important notes, tips, or takeaways
-5. If there are any actionable steps mentioned, list them
+**Your Task:**
+Create detailed study notes from the transcript below. Write as if you're taking notes for someone who couldn't watch the video but needs to understand everything important.
 
-**Format your response exactly like this:**
+**Format Requirements:**
+- Use markdown formatting extensively (headers, bullet points, bold, code blocks)
+- Use horizontal dividers (---) between major sections
+- Use bullet points (•) for lists
+- Use **bold** for key terms, definitions, and important concepts
+- Use \`code blocks\` for technical terms, commands, or code snippets
+- Include numbered lists for step-by-step processes
+- Keep the notes scannable and easy to read
 
-## [Video Title]
+**Structure your notes like this:**
 
-### Overview
-[Brief overview of what the video covers]
+## 📝 [Descriptive Title Based on Content]
 
-### Key Points
-- [Point 1]
-- [Point 2]
-- [Point 3]
-...
-
-### Important Notes
-- [Note 1]
-- [Note 2]
-...
-
-### Action Items (if applicable)
-1. [Step 1]
-2. [Step 2]
-...
+### 🎯 Quick Summary
+> [2-3 sentence summary of the main topic/lesson]
 
 ---
 
-**Transcript to summarize:**
+### 📌 Key Concepts
+
+**[Concept 1]:** [Clear explanation]
+
+**[Concept 2]:** [Clear explanation]
+
+---
+
+### 📋 Main Points
+
+• **[Point 1]** — [Detailed explanation]
+
+• **[Point 2]** — [Detailed explanation]
+
+• **[Point 3]** — [Detailed explanation]
+
+---
+
+### 💡 Tips & Best Practices
+• [Tip 1]
+• [Tip 2]
+
+---
+
+### ⚠️ Important Notes / Warnings
+• [Warning or important note]
+
+---
+
+### ✅ Action Items / Steps
+1. [Step 1]
+2. [Step 2]
+3. [Step 3]
+
+---
+
+### 🔑 Key Takeaways
+• [Most important thing to remember]
+• [Second most important]
+
+---
+
+**Notes:**
+- Only include sections that are relevant to the content
+- Skip empty sections
+- Be thorough - capture all important details
+- Use emojis sparingly for section headers only
+- Make it easy to copy/paste into personal notes
+
+---
+
+**Transcript:**
 
 ${truncatedTranscript}`
 
@@ -490,3 +530,31 @@ export async function processVideoForSummary(videoId, fileSource, onProgress) {
     }
 }
 
+/**
+ * Regenerate just the summary from existing transcript (no file needed)
+ */
+export async function regenerateSummaryOnly(videoId, existingTranscript, onProgress) {
+    if (!existingTranscript || existingTranscript.length < 50) {
+        throw new Error('No transcript available to summarize')
+    }
+
+    try {
+        onProgress?.({ stage: 'summarizing', progress: 0.1, message: 'Regenerating summary...' })
+
+        // Generate new summary using Gemini AI
+        const summary = await generateAISummary(existingTranscript, onProgress)
+
+        // Save updated summary to DB
+        await updateVideo(videoId, {
+            summary: summary,
+            summaryGeneratedAt: new Date().toISOString()
+        })
+
+        onProgress?.({ stage: 'complete', progress: 1, message: 'Summary updated!' })
+
+        return summary
+    } catch (err) {
+        console.error('Summary regeneration failed:', err)
+        throw err
+    }
+}

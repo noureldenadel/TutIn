@@ -60,6 +60,8 @@
 - [x] Import data from backup
 - [x] Reset app (delete all data)
 - [x] Root courses folder setting
+- [x] Progress calculation mode (by videos or by duration watched)
+- [x] Persistent folder handles in IndexedDB (restore access without re-picking folder)
 
 ### Phase 7: UI/UX Polish
 - [x] Dark/Light mode with smooth transitions
@@ -85,6 +87,7 @@
 - [x] Markdown rendering for AI summaries (nice typography)
 - [x] Clickable timestamps in transcript (seek to position)
 - [x] Resizable sidebar panel (280-600px, persists in localStorage)
+- [x] CDN-based Transformers.js loading (fixes ONNX bundling issues)
 
 ### Phase 9: YouTube Integration
 - [x] YouTube video/playlist import
@@ -132,7 +135,7 @@
 ## 🐛 Known Issues
 
 - [ ] File System Access API not supported in Firefox/Safari
-- [ ] Need to re-grant folder access each browser session
+- [x] Need to re-grant folder access each browser session (fixed: persistent handles in IndexedDB)
 - [ ] Large courses may take time to import
 - [x] YouTube videos not playing (fixed: native iframe embed)
 
@@ -198,3 +201,7 @@ The File System Access API only works in Chromium browsers. For Firefox/Safari s
 
 add side bar for user 
 info it will has statistics and we will add road map, it will has all the instructors also
+
+File System Access API is not supported in this browser. Please use Chrome, Edge, or Opera for this feature.
+
+SAME COURSES ACROSSS ALL BROWSERS
