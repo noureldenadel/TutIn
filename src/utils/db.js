@@ -460,8 +460,20 @@ export async function markVideoComplete(videoId, isCompleted = true) {
 
     const video = await updateVideo(videoId, updates)
 
+    // Get progress calculation mode from settings
+    let progressMode = 'videos'
+    try {
+        const savedSettings = localStorage.getItem('mearn_settings')
+        if (savedSettings) {
+            const settings = JSON.parse(savedSettings)
+            progressMode = settings.progressCalculationMode || 'videos'
+        }
+    } catch (e) {
+        // Ignore parsing errors, use default
+    }
+
     // Update course and module completion counts
-    await recalculateCourseProgress(video.courseId)
+    await recalculateCourseProgress(video.courseId, progressMode)
 
     return video
 }
@@ -512,15 +524,35 @@ export async function deleteVideo(videoId) {
 
 /**
  * Recalculate course progress based on video completion
+ * @param {string} courseId - Course ID to recalculate
+ * @param {string} progressMode - 'videos' for completed count, 'duration' for time-based
  */
-export async function recalculateCourseProgress(courseId) {
+export async function recalculateCourseProgress(courseId, progressMode = 'videos') {
     const videos = await getVideosByCourse(courseId)
     const modules = await getModulesByCourse(courseId)
 
     const totalVideos = videos.length
     const completedVideos = videos.filter(v => v.isCompleted).length
-    const completionPercentage = totalVideos > 0 ? (completedVideos / totalVideos) * 100 : 0
     const totalDuration = videos.reduce((sum, v) => sum + (v.duration || 0), 0)
+
+    // Calculate completion percentage based on mode
+    let completionPercentage = 0
+    if (progressMode === 'duration') {
+        // Duration mode: calculate by actual time watched
+        // For completed videos, count full duration even if watchProgress wasn't set
+        const totalWatched = videos.reduce((sum, v) => {
+            const videoDuration = v.duration || 0
+            // If video is completed, count full duration; otherwise use watchProgress
+            const watchedTime = v.isCompleted
+                ? videoDuration
+                : videoDuration * (v.watchProgress || 0)
+            return sum + watchedTime
+        }, 0)
+        completionPercentage = totalDuration > 0 ? (totalWatched / totalDuration) * 100 : 0
+    } else {
+        // Videos mode (default): count completed videos
+        completionPercentage = totalVideos > 0 ? (completedVideos / totalVideos) * 100 : 0
+    }
 
     // Update course
     await updateCourse(courseId, {
@@ -537,12 +569,44 @@ export async function recalculateCourseProgress(courseId) {
         const moduleCompletedVideos = moduleVideos.filter(v => v.isCompleted).length
         const moduleTotalDuration = moduleVideos.reduce((sum, v) => sum + (v.duration || 0), 0)
 
+        // Calculate module completion percentage based on mode
+        let moduleCompletionPercentage = 0
+        if (progressMode === 'duration') {
+            const moduleWatched = moduleVideos.reduce((sum, v) => {
+                const videoDuration = v.duration || 0
+                // If video is completed, count full duration; otherwise use watchProgress
+                const watchedTime = v.isCompleted
+                    ? videoDuration
+                    : videoDuration * (v.watchProgress || 0)
+                return sum + watchedTime
+            }, 0)
+            moduleCompletionPercentage = moduleTotalDuration > 0 ? (moduleWatched / moduleTotalDuration) * 100 : 0
+        } else {
+            moduleCompletionPercentage = moduleTotalVideos > 0 ? (moduleCompletedVideos / moduleTotalVideos) * 100 : 0
+        }
+
         await updateModule(module.id, {
             totalVideos: moduleTotalVideos,
             completedVideos: moduleCompletedVideos,
-            totalDuration: moduleTotalDuration
+            totalDuration: moduleTotalDuration,
+            completionPercentage: moduleCompletionPercentage
         })
     }
+}
+
+/**
+ * Recalculate progress for ALL courses
+ * Used when the progress calculation mode setting changes
+ * @param {string} progressMode - 'videos' for completed count, 'duration' for time-based
+ */
+export async function recalculateAllCoursesProgress(progressMode = 'videos') {
+    const courses = await getAllCourses()
+
+    for (const course of courses) {
+        await recalculateCourseProgress(course.id, progressMode)
+    }
+
+    return courses.length
 }
 
 // ============= RECENTLY WATCHED =============

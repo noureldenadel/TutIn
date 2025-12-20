@@ -1,17 +1,19 @@
-# MEARN - Course Learning Tracker
+# TutIn - Course Learning Tracker
 
 A modern, offline-first course management application for tracking video course progress. Built with React, Vite, and Tailwind CSS.
 
-![MEARN Screenshot](./docs/screenshot.png)
+![TutIn Screenshot](./docs/screenshot.png)
 
 ## Features
 
 ### Core Features
 - 📁 **Local Course Import** - Import video courses from local folders
+- 🎬 **YouTube Import** - Import videos and playlists from YouTube
 - 📊 **Progress Tracking** - Track watch progress for each video
 - ✅ **Completion Marking** - Mark videos as complete manually or automatically
 - 🔄 **Resume Playback** - Resume videos from where you left off
 - 🌙 **Dark/Light Mode** - Toggle between themes
+- 🏷️ **Filter Tabs** - Filter courses by All, Completed, In Progress, Not Started, or custom tags
 
 ### Video Player
 - ⌨️ **Keyboard Shortcuts** - Full keyboard control (Space, Arrow keys, etc.)
@@ -48,10 +50,10 @@ A modern, offline-first course management application for tracking video course 
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/mearn.git
+git clone https://github.com/yourusername/tutin.git
 
 # Navigate to project folder
-cd mearn
+cd tutin
 
 # Install dependencies
 npm install

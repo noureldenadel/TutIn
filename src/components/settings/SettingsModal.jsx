@@ -5,7 +5,7 @@ import {
 } from 'lucide-react'
 import { useSettings } from '../../contexts/SettingsContext'
 import { useTheme } from '../../contexts/ThemeContext'
-import { exportAllData, clearAllData, importData } from '../../utils/db'
+import { exportAllData, clearAllData, importData, recalculateAllCoursesProgress } from '../../utils/db'
 import { pickRootFolder, getRootFolderName, hasRootFolderAccess, clearRootFolderHandle, isFileSystemAccessSupported } from '../../utils/fileSystem'
 
 const accentColors = [
@@ -297,6 +297,45 @@ function SettingsModal({ isOpen, onClose }) {
                         `}
                                             >
                                                 <span className="text-sm font-medium">{option.label}</span>
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+
+                                {/* Progress Calculation Mode */}
+                                <div>
+                                    <label className="block text-sm font-medium mb-3">
+                                        Progress Calculation
+                                    </label>
+                                    <div className="space-y-2">
+                                        {[
+                                            { value: 'videos', label: 'By Videos Completed', description: 'Count of completed videos ÷ total videos' },
+                                            { value: 'duration', label: 'By Time Watched', description: 'Total time watched ÷ total course duration' }
+                                        ].map(option => (
+                                            <button
+                                                key={option.value}
+                                                onClick={async () => {
+                                                    updateSettings({ progressCalculationMode: option.value })
+                                                    // Recalculate all courses with the new mode
+                                                    await recalculateAllCoursesProgress(option.value)
+                                                }}
+                                                className={`
+                          w-full flex items-center justify-between p-3 rounded-lg border-2 transition-all text-left
+                          ${settings.progressCalculationMode === option.value
+                                                        ? 'border-primary bg-primary/5'
+                                                        : 'border-light-border dark:border-dark-border hover:border-primary/50'
+                                                    }
+                        `}
+                                            >
+                                                <div>
+                                                    <div className="font-medium text-sm">{option.label}</div>
+                                                    <div className="text-xs text-light-text-secondary dark:text-dark-text-secondary">
+                                                        {option.description}
+                                                    </div>
+                                                </div>
+                                                {settings.progressCalculationMode === option.value && (
+                                                    <Check className="w-5 h-5 text-primary" />
+                                                )}
                                             </button>
                                         ))}
                                     </div>

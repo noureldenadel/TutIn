@@ -82,6 +82,16 @@
 - [x] Missing captions detection for old transcripts
 - [x] Web Worker for non-blocking AI transcription
 - [x] Hold-to-speed-up (2x) like YouTube
+- [x] Markdown rendering for AI summaries (nice typography)
+- [x] Clickable timestamps in transcript (seek to position)
+- [x] Resizable sidebar panel (280-600px, persists in localStorage)
+
+### Phase 9: YouTube Integration
+- [x] YouTube video/playlist import
+- [x] Native YouTube iframe embed (replaces ReactPlayer)
+- [x] Channel avatar fetching for playlists
+- [x] YouTube-style horizontal filter tabs (All, Completed, In Progress, Not Started, Tags)
+- [x] Custom controls hidden for YouTube (use native YouTube controls)
 
 ---
 
@@ -124,7 +134,7 @@
 - [ ] File System Access API not supported in Firefox/Safari
 - [ ] Need to re-grant folder access each browser session
 - [ ] Large courses may take time to import
-- [x] YouTube videos not playing (fixed: togglePlay + proper config)
+- [x] YouTube videos not playing (fixed: native iframe embed)
 
 ---
 

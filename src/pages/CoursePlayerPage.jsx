@@ -61,8 +61,9 @@ function CoursePlayerPage() {
             )
             setModules(modulesWithVideos)
 
-            // Set first video as current if none selected
-            if (modulesWithVideos.length > 0 && modulesWithVideos[0].videos.length > 0) {
+            // Only set first video if no video is currently selected
+            // This prevents auto-advancing when marking a video as complete
+            if (!currentVideo && modulesWithVideos.length > 0 && modulesWithVideos[0].videos.length > 0) {
                 // Find first unwatched video or last watched video
                 let videoToPlay = null
                 for (const module of modulesWithVideos) {
@@ -92,9 +93,43 @@ function CoursePlayerPage() {
         setCurrentVideo(video)
     }
 
+    // Lightweight refresh - only updates modules/videos data without reloading video player
+    async function refreshModulesOnly() {
+        try {
+            // Get updated modules with videos
+            const modulesData = await getModulesByCourse(courseId)
+            const modulesWithVideos = await Promise.all(
+                modulesData.map(async (module) => {
+                    const videos = await getVideosByModule(module.id)
+                    return { ...module, videos }
+                })
+            )
+            setModules(modulesWithVideos)
+
+            // Update course data (for progress stats) without affecting loading state
+            const courseData = await getCourse(courseId)
+            if (courseData) {
+                setCourse(courseData)
+            }
+
+            // Update currentVideo with fresh data if it exists
+            if (currentVideo) {
+                for (const module of modulesWithVideos) {
+                    const updatedVideo = module.videos.find(v => v.id === currentVideo.id)
+                    if (updatedVideo) {
+                        setCurrentVideo(updatedVideo)
+                        break
+                    }
+                }
+            }
+        } catch (err) {
+            console.error('Failed to refresh modules:', err)
+        }
+    }
+
     function handleVideoComplete(videoId) {
-        // Refresh modules to update completion status
-        loadCourseData()
+        // Lightweight refresh - only updates sidebar, doesn't reload video player
+        refreshModulesOnly()
     }
 
     function handleNextVideo() {
@@ -227,7 +262,7 @@ function CoursePlayerPage() {
                     onVideoSelect={handleVideoSelect}
                     isCollapsed={sidebarCollapsed}
                     onToggle={() => setSidebarCollapsed(!sidebarCollapsed)}
-                    onRefresh={loadCourseData}
+                    onRefresh={refreshModulesOnly}
                     courseId={courseId}
                     currentTime={currentTime}
                     onSeek={(time) => videoRef.current?.seekTo?.(time)}

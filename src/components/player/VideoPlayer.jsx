@@ -52,6 +52,7 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
     const captionRef = useRef(null)
     const trackRef = useRef(null)
     const speedBoostTimeoutRef = useRef(null)
+    const wasSpeedBoostingRef = useRef(false)
 
     const { settings } = useSettings()
     const controlsTimeoutRef = useRef(null)
@@ -780,10 +781,21 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
         if (isSpeedBoosting) {
             setPlaybackSpeed(speedBeforeBoost)
             setIsSpeedBoosting(false)
+            // Set flag to prevent click from pausing video
+            wasSpeedBoostingRef.current = true
             if (videoRef.current && !(video?.youtubeId || video?.url?.startsWith('http'))) {
                 videoRef.current.playbackRate = speedBeforeBoost
             }
         }
+    }
+
+    // Handle video click - don't toggle play if we just finished speed boosting
+    function handleVideoClick() {
+        if (wasSpeedBoostingRef.current) {
+            wasSpeedBoostingRef.current = false
+            return // Don't toggle play/pause after speed boost
+        }
+        togglePlay()
     }
 
     const speedOptions = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2]
@@ -831,7 +843,7 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
                     onPlay={handlePlay}
                     onPause={handlePause}
                     onEnded={handleEnded}
-                    onClick={togglePlay}
+                    onClick={handleVideoClick}
                     onError={(e) => {
                         const videoError = e.target.error
                         let errorMessage = 'Failed to load video.'

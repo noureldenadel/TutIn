@@ -38,8 +38,11 @@ async function loadTranscriptionPipeline(onProgress) {
     try {
         onProgress?.({ stage: 'loading_model', progress: 0, message: 'Loading Whisper model...' })
 
-        // Dynamic import to avoid issues if not used
-        const transformers = await import('@xenova/transformers')
+        // Use CDN import to avoid Vite bundling issues with ONNX runtime
+        const transformers = await import(
+            /* @vite-ignore */
+            'https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.2/dist/transformers.min.js'
+        )
         const { pipeline, env } = transformers
 
         // CRITICAL: Disable local model check BEFORE any model loading
@@ -47,8 +50,6 @@ async function loadTranscriptionPipeline(onProgress) {
         env.allowLocalModels = false
         env.useBrowserCache = true
 
-        // Additional settings to ensure models are fetched from HuggingFace
-        env.backends.onnx.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.2/dist/'
 
         // Use whisper-tiny for faster loading and processing
         // Model will be cached in browser after first download (~40MB)
@@ -138,12 +139,24 @@ export async function transcribeAudio(audioData, onProgress) {
  */
 async function transcribeWithWorker(audioData, onProgress) {
     return new Promise((resolve, reject) => {
+        console.log('[AI] Starting transcribeWithWorker, samples:', audioData.length)
+
         // Create worker if not exists
         if (!whisperWorker) {
-            whisperWorker = new Worker(
-                new URL('./whisperWorker.js', import.meta.url),
-                { type: 'module' }
-            )
+            console.log('[AI] Creating new Whisper worker...')
+
+            // Use Vite's worker import syntax - creates a proper ES module worker
+            const workerUrl = new URL('./whisperWorker.js', import.meta.url)
+            whisperWorker = new Worker(workerUrl, {
+                type: 'module',
+                name: 'whisper-worker'
+            })
+
+            // Handle worker-level errors
+            whisperWorker.onerror = (err) => {
+                console.error('[AI] Worker error:', err)
+                reject(new Error('Worker failed to load: ' + (err.message || 'Unknown error')))
+            }
         }
 
         const requestId = Date.now().toString()
@@ -171,13 +184,28 @@ async function transcribeWithWorker(audioData, onProgress) {
 
         whisperWorker.addEventListener('message', handleMessage)
 
-        // Convert Float32Array to regular array for transfer
-        const audioArray = Array.from(audioData)
+        // Show progress while preparing data
+        onProgress?.({ stage: 'preparing', progress: 0, message: 'Preparing audio data...' })
 
-        whisperWorker.postMessage({
-            type: 'transcribe',
-            audioData: audioArray,
-            id: requestId
+        // Use requestAnimationFrame to let UI update, then send data
+        requestAnimationFrame(() => {
+            console.log('[AI] Copying audio to transferable buffer...')
+
+            // Create a copy of the audio data buffer for transfer
+            // This is necessary because audioData.buffer might be shared with AudioContext
+            const audioBuffer = new ArrayBuffer(audioData.length * 4)
+            const view = new Float32Array(audioBuffer)
+            view.set(audioData)
+
+            console.log('[AI] Posting to worker, buffer size:', audioBuffer.byteLength)
+
+            whisperWorker.postMessage({
+                type: 'transcribe',
+                audioBuffer: audioBuffer,
+                id: requestId
+            }, [audioBuffer])  // Transfer ownership - no copy over to worker!
+
+            console.log('[AI] Message posted to worker successfully')
         })
     })
 }

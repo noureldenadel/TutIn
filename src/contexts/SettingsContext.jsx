@@ -13,6 +13,7 @@ const defaultSettings = {
     autoPlayNext: true,
     resumePlayback: true,
     autoMarkCompleteAt: 95, // percentage
+    progressCalculationMode: 'videos', // 'videos' = count completed videos, 'duration' = total time watched
     skipIntro: 0, // seconds
     skipOutro: 0, // seconds
     keyboardShortcuts: true,

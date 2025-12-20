@@ -3,13 +3,27 @@ import {
     FileText, Sparkles, Loader2, AlertCircle,
     Download, Copy, RefreshCw, Upload, FolderOpen, Captions
 } from 'lucide-react'
+import ReactMarkdown from 'react-markdown'
 import { getVideo, updateVideo } from '../../utils/db'
 import { processVideoForSummary, isAIAvailable } from '../../utils/aiSummarization'
 import { verifyPermission } from '../../utils/fileSystem'
 
-function AISummaryPanel({ video, courseId }) {
+// Format seconds to MM:SS or HH:MM:SS
+function formatTime(seconds) {
+    if (seconds == null || isNaN(seconds)) return '0:00'
+    const h = Math.floor(seconds / 3600)
+    const m = Math.floor((seconds % 3600) / 60)
+    const s = Math.floor(seconds % 60)
+    if (h > 0) {
+        return `${h}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`
+    }
+    return `${m}:${s.toString().padStart(2, '0')}`
+}
+
+function AISummaryPanel({ video, courseId, onSeek }) {
     const [transcript, setTranscript] = useState(null)
     const [summary, setSummary] = useState(null)
+    const [captionChunks, setCaptionChunks] = useState([])
     const [isProcessing, setIsProcessing] = useState(false)
     const [progress, setProgress] = useState({ stage: '', progress: 0, message: '' })
     const [error, setError] = useState(null)
@@ -24,6 +38,7 @@ function AISummaryPanel({ video, courseId }) {
         } else {
             setTranscript(null)
             setSummary(null)
+            setCaptionChunks([])
             setMissingCaptions(false)
         }
     }, [video?.id])
@@ -33,6 +48,7 @@ function AISummaryPanel({ video, courseId }) {
             const videoData = await getVideo(video.id)
             setTranscript(videoData?.transcript || null)
             setSummary(videoData?.summary || null)
+            setCaptionChunks(videoData?.captionChunks || [])
             // Check if transcript exists but no caption chunks (old transcript without CC support)
             const hasCaptions = videoData?.captionChunks && videoData.captionChunks.length > 0
             setMissingCaptions(!!videoData?.transcript && !hasCaptions)
@@ -91,6 +107,7 @@ function AISummaryPanel({ video, courseId }) {
 
             setTranscript(result.transcript)
             setSummary(result.summary)
+            setCaptionChunks(result.captionChunks || [])
             setManualFile(null) // Clear manual file after success
             setMissingCaptions(false) // Captions now available
         } catch (err) {
@@ -325,11 +342,36 @@ function AISummaryPanel({ video, courseId }) {
                                 </button>
                             </div>
 
-                            <div className="text-sm whitespace-pre-wrap max-h-96 overflow-y-auto prose prose-sm dark:prose-invert">
+                            <div className="max-h-[60vh] overflow-y-auto">
                                 {activeTab === 'summary' ? (
-                                    summary || <span className="italic opacity-60">No summary generated yet.</span>
+                                    summary ? (
+                                        <div className="prose prose-sm dark:prose-invert max-w-none prose-headings:text-primary prose-headings:font-semibold prose-h2:text-lg prose-h3:text-base prose-ul:my-2 prose-li:my-0.5">
+                                            <ReactMarkdown>{summary}</ReactMarkdown>
+                                        </div>
+                                    ) : (
+                                        <span className="italic opacity-60">No summary generated yet.</span>
+                                    )
                                 ) : (
-                                    transcript || <span className="italic opacity-60">No transcript generated yet.</span>
+                                    captionChunks.length > 0 ? (
+                                        <div className="space-y-1">
+                                            {captionChunks.map((chunk, i) => (
+                                                <div key={i} className="flex gap-3 group hover:bg-light-surface dark:hover:bg-dark-surface rounded px-2 py-1 -mx-2">
+                                                    <button
+                                                        onClick={() => onSeek?.(chunk.timestamp?.[0] || 0)}
+                                                        className="text-xs text-primary hover:underline shrink-0 w-12 text-left font-mono opacity-70 group-hover:opacity-100"
+                                                        title="Click to seek"
+                                                    >
+                                                        {formatTime(chunk.timestamp?.[0])}
+                                                    </button>
+                                                    <span className="text-sm">{chunk.text}</span>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    ) : transcript ? (
+                                        <p className="text-sm whitespace-pre-wrap">{transcript}</p>
+                                    ) : (
+                                        <span className="italic opacity-60">No transcript generated yet.</span>
+                                    )
                                 )}
                             </div>
                         </div>

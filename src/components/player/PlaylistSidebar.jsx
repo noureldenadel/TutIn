@@ -1,7 +1,7 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useRef, useEffect, useCallback } from 'react'
 import {
     ChevronDown, ChevronRight, ChevronLeft, Check,
-    Pencil
+    Pencil, GripVertical
 } from 'lucide-react'
 import { formatDuration, markVideoComplete, updateModule, updateVideo } from '../../utils/db'
 import EditModuleModal from './EditModuleModal'
@@ -29,6 +29,54 @@ function PlaylistSidebar({
     const [editingModule, setEditingModule] = useState(null)
     const [activeTab, setActiveTab] = useState('playlist') // 'playlist' | 'notes' | 'ai'
     const [isBulkEditing, setIsBulkEditing] = useState(false)
+
+    // Resizable panel state
+    const [panelWidth, setPanelWidth] = useState(() => {
+        const saved = localStorage.getItem('sidebarPanelWidth')
+        return saved ? Math.max(280, Math.min(600, parseInt(saved, 10))) : 360
+    })
+    const isResizing = useRef(false)
+    const resizeStartX = useRef(0)
+    const resizeStartWidth = useRef(0)
+
+    // Save panel width to localStorage
+    useEffect(() => {
+        localStorage.setItem('sidebarPanelWidth', panelWidth.toString())
+    }, [panelWidth])
+
+    // Resize handlers
+    const handleResizeStart = useCallback((e) => {
+        e.preventDefault()
+        isResizing.current = true
+        resizeStartX.current = e.clientX
+        resizeStartWidth.current = panelWidth
+        document.body.style.cursor = 'ew-resize'
+        document.body.style.userSelect = 'none'
+    }, [panelWidth])
+
+    useEffect(() => {
+        const handleResizeMove = (e) => {
+            if (!isResizing.current) return
+            const delta = resizeStartX.current - e.clientX
+            const newWidth = Math.max(280, Math.min(600, resizeStartWidth.current + delta))
+            setPanelWidth(newWidth)
+        }
+
+        const handleResizeEnd = () => {
+            if (isResizing.current) {
+                isResizing.current = false
+                document.body.style.cursor = ''
+                document.body.style.userSelect = ''
+            }
+        }
+
+        document.addEventListener('mousemove', handleResizeMove)
+        document.addEventListener('mouseup', handleResizeEnd)
+        return () => {
+            document.removeEventListener('mousemove', handleResizeMove)
+            document.removeEventListener('mouseup', handleResizeEnd)
+        }
+    }, [])
 
     function toggleModule(moduleId) {
         setExpandedModules(prev => ({
@@ -82,13 +130,17 @@ function PlaylistSidebar({
     )
     const totalDuration = modules.reduce((sum, m) => sum + m.totalDuration, 0)
 
+    // Calculate remaining time (sum of incomplete video durations)
+    const remainingDuration = modules.reduce((sum, m) =>
+        sum + m.videos.filter(v => !v.isCompleted).reduce((vSum, v) => vSum + (v.duration || 0), 0), 0
+    )
+
     const sidebarContent = (
         <>
             {/* Sidebar */}
             <div
                 className={`
           fixed right-0 top-[64px] bottom-0 
-          w-[360px] max-w-full
           bg-white dark:bg-dark-surface 
           border-l border-light-border dark:border-dark-border
           flex flex-col
@@ -96,12 +148,21 @@ function PlaylistSidebar({
           ${isCollapsed ? 'translate-x-full' : 'translate-x-0'}
           z-30
         `}
+                style={{ width: `${panelWidth}px`, maxWidth: '100%' }}
             >
+                {/* Resize Handle */}
+                <div
+                    onMouseDown={handleResizeStart}
+                    className="absolute left-0 top-0 bottom-0 w-1.5 cursor-ew-resize hover:bg-primary/30 active:bg-primary/50 transition-colors z-10 group"
+                    title="Drag to resize"
+                >
+                    <div className="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-8 bg-light-border dark:bg-dark-border rounded group-hover:bg-primary/50 transition-colors" />
+                </div>
                 {/* Header Section */}
                 <div className="flex flex-col border-b border-light-border dark:border-dark-border bg-white dark:bg-dark-surface z-10">
                     {/* Top Progress Bar */}
                     <div className="px-4 pt-4 pb-2">
-                        <div className="flex items-center justify-between text-sm mb-2">
+                        <div className="flex items-center justify-between text-sm mb-1">
                             <span className="text-light-text-secondary dark:text-dark-text-secondary">
                                 {completedVideos}/{totalVideos} videos completed
                             </span>
@@ -109,6 +170,11 @@ function PlaylistSidebar({
                                 {Math.round(totalVideos > 0 ? (completedVideos / totalVideos) * 100 : 0)}%
                             </span>
                         </div>
+                        {remainingDuration > 0 && (
+                            <div className="text-xs text-light-text-secondary dark:text-dark-text-secondary mb-2">
+                                {formatDuration(remainingDuration)} remaining
+                            </div>
+                        )}
                         <div className="progress-bar h-2 w-full bg-light-bg dark:bg-dark-bg rounded-full overflow-hidden">
                             <div
                                 className="progress-bar-fill h-full bg-primary rounded-full transition-all duration-300"
@@ -267,6 +333,7 @@ function PlaylistSidebar({
                             <AISummaryPanel
                                 video={currentVideo}
                                 courseId={courseId}
+                                onSeek={onSeek}
                             />
                         </div>
                     )}
@@ -286,8 +353,9 @@ function PlaylistSidebar({
           hover:bg-light-bg dark:hover:bg-dark-bg
           transition-all
           z-40
-          ${isCollapsed ? 'right-0' : 'right-[360px]'}
+          ${isCollapsed ? 'right-0' : ''}
         `}
+                style={isCollapsed ? {} : { right: `${panelWidth}px` }}
             >
                 {isCollapsed ? (
                     <ChevronLeft className="w-4 h-4" />
