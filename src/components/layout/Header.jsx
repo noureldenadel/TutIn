@@ -17,7 +17,6 @@ function Header() {
                         to="/"
                         className="flex items-center gap-2 text-xl font-bold text-primary hover:opacity-80 transition-opacity"
                     >
-                        <GraduationCap className="w-8 h-8" />
                         <span>MEARN</span>
                     </Link>
 

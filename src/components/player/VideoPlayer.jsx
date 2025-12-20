@@ -8,6 +8,7 @@ import { getVideoUrl, releaseVideoUrl, verifyPermission, findFileByPath, findFil
 import { updateVideoProgress, markVideoComplete, formatDuration, getCourse } from '../../utils/db'
 import { useSettings } from '../../contexts/SettingsContext'
 
+
 const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext, courseId, onTimeUpdate }, ref) {
     const videoRef = useRef(null)
     const containerRef = useRef(null)

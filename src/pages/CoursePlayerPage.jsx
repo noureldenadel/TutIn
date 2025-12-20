@@ -1,13 +1,16 @@
 import { useState, useEffect, useRef } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { ChevronLeft, Menu } from 'lucide-react'
-import { getCourse, getModulesByCourse, getVideosByModule, updateCourse } from '../utils/db'
+import { getCourse, getModulesByCourse, getVideosByModule, updateCourse, getInstructorAvatar } from '../utils/db'
+import { useSettings } from '../contexts/SettingsContext'
 import LoadingSpinner from '../components/common/LoadingSpinner'
 import VideoPlayer from '../components/player/VideoPlayer'
 import PlaylistSidebar from '../components/player/PlaylistSidebar'
+import InstructorProfileModal from '../components/course/InstructorProfileModal'
 
 function CoursePlayerPage() {
     const { courseId } = useParams()
+    const { settings } = useSettings()
     const [course, setCourse] = useState(null)
     const [modules, setModules] = useState([])
     const [currentVideo, setCurrentVideo] = useState(null)
@@ -15,12 +18,23 @@ function CoursePlayerPage() {
     const [error, setError] = useState(null)
     const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
     const [currentTime, setCurrentTime] = useState(0)
+    const [showInstructorModal, setShowInstructorModal] = useState(false)
+    const [instructorAvatar, setInstructorAvatar] = useState(null)
     const videoRef = useRef(null)
+
+    const sidebarOnLeft = settings.sidebarPosition === 'left'
 
     // Load course data
     useEffect(() => {
         loadCourseData()
     }, [courseId])
+
+    // Load instructor avatar
+    useEffect(() => {
+        if (course?.instructor) {
+            setInstructorAvatar(getInstructorAvatar(course.instructor))
+        }
+    }, [course?.instructor])
 
     async function loadCourseData() {
         try {
@@ -150,9 +164,9 @@ function CoursePlayerPage() {
             </div>
 
             {/* Main Content */}
-            <div className="flex h-[calc(100vh-64px-48px)]">
+            <div className={`flex h-[calc(100vh-64px-48px)] ${sidebarOnLeft ? 'flex-row-reverse' : ''}`}>
                 {/* Video Player Area */}
-                <div className={`flex-1 flex flex-col overflow-y-auto ${sidebarCollapsed ? '' : 'lg:mr-[360px]'}`}>
+                <div className={`flex-1 flex flex-col overflow-y-auto ${sidebarCollapsed ? '' : sidebarOnLeft ? 'lg:ml-[360px]' : 'lg:mr-[360px]'}`}>
                     {currentVideo ? (
                         <>
                             <div className="aspect-video bg-black sticky top-0 z-20">
@@ -175,15 +189,22 @@ function CoursePlayerPage() {
                                     </h3>
                                 </div>
 
-                                <div className="flex items-center gap-4 pt-6 border-t border-light-border dark:border-dark-border">
+                                <div
+                                    className="flex items-center gap-4 pt-6 border-t border-light-border dark:border-dark-border cursor-pointer hover:opacity-80 transition-opacity"
+                                    onClick={() => course?.instructor && setShowInstructorModal(true)}
+                                    title={course?.instructor ? `View ${course.instructor}'s profile` : ''}
+                                >
                                     <div className="w-12 h-12 rounded-full bg-light-surface dark:bg-dark-surface border border-light-border dark:border-dark-border flex items-center justify-center overflow-hidden">
-                                        {/* Placeholder Avatar or Initials currently as we don't have direct avatar URL in course model usually */}
-                                        <span className="text-lg font-bold text-primary">
-                                            {course?.instructor ? course.instructor.charAt(0).toUpperCase() : 'I'}
-                                        </span>
+                                        {instructorAvatar ? (
+                                            <img src={instructorAvatar} alt="" className="w-full h-full object-cover" />
+                                        ) : (
+                                            <span className="text-lg font-bold text-primary">
+                                                {course?.instructor ? course.instructor.charAt(0).toUpperCase() : 'I'}
+                                            </span>
+                                        )}
                                     </div>
                                     <div>
-                                        <p className="font-semibold">{course?.instructor || 'Instructor'}</p>
+                                        <p className="font-semibold hover:text-primary transition-colors">{course?.instructor || 'Instructor'}</p>
                                         <p className="text-sm text-light-text-secondary dark:text-dark-text-secondary">
                                             Course Instructor
                                         </p>
@@ -212,6 +233,15 @@ function CoursePlayerPage() {
                     onSeek={(time) => videoRef.current?.seekTo?.(time)}
                 />
             </div>
+
+            {/* Instructor Profile Modal */}
+            {showInstructorModal && course?.instructor && (
+                <InstructorProfileModal
+                    instructor={course.instructor}
+                    onClose={() => setShowInstructorModal(false)}
+                    onAvatarChange={() => setInstructorAvatar(getInstructorAvatar(course.instructor))}
+                />
+            )}
         </div>
     )
 }

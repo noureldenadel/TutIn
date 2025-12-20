@@ -11,7 +11,7 @@
  */
 
 const DB_NAME = 'mearn_db'
-const DB_VERSION = 1
+const DB_VERSION = 3  // Upgraded to add course order index
 
 // Database instance singleton
 let dbInstance = null
@@ -43,6 +43,14 @@ export async function initDatabase() {
                 coursesStore.createIndex('title', 'title', { unique: false })
                 coursesStore.createIndex('lastAccessed', 'lastAccessed', { unique: false })
                 coursesStore.createIndex('dateAdded', 'dateAdded', { unique: false })
+                coursesStore.createIndex('order', 'order', { unique: false })
+            } else {
+                // Version 3 upgrade: Add order index to existing store
+                const txn = event.target.transaction
+                const coursesStore = txn.objectStore('courses')
+                if (!coursesStore.indexNames.contains('order')) {
+                    coursesStore.createIndex('order', 'order', { unique: false })
+                }
             }
 
             // Modules store
@@ -73,6 +81,12 @@ export async function initDatabase() {
             if (!db.objectStoreNames.contains('analytics')) {
                 const analyticsStore = db.createObjectStore('analytics', { keyPath: 'id' })
                 analyticsStore.createIndex('date', 'date', { unique: true })
+            }
+
+            // Instructors store (for avatar storage)
+            if (!db.objectStoreNames.contains('instructors')) {
+                const instructorsStore = db.createObjectStore('instructors', { keyPath: 'id' })
+                instructorsStore.createIndex('name', 'name', { unique: true })
             }
         }
     })
@@ -884,5 +898,166 @@ export async function toggleVideoFavorite(videoId) {
             putRequest.onerror = () => reject(new Error('Failed to toggle favorite: ' + putRequest.error))
         }
         getRequest.onerror = () => reject(new Error('Failed to find video: ' + getRequest.error))
+    })
+}
+
+// ============================================
+// INSTRUCTOR OPERATIONS
+// ============================================
+
+/**
+ * Normalize instructor name for storage key
+ */
+function normalizeInstructorName(name) {
+    if (!name) return ''
+    return name.toLowerCase().trim().replace(/\s+/g, '_')
+}
+
+/**
+ * Get instructor avatar from IndexedDB
+ */
+export async function getInstructorAvatarAsync(instructorName) {
+    if (!instructorName) return null
+    const db = await initDatabase()
+    const normalizedName = normalizeInstructorName(instructorName)
+
+    return new Promise((resolve) => {
+        const transaction = db.transaction(['instructors'], 'readonly')
+        const store = transaction.objectStore('instructors')
+        const index = store.index('name')
+        const request = index.get(normalizedName)
+
+        request.onsuccess = () => {
+            resolve(request.result?.avatarData || null)
+        }
+        request.onerror = () => {
+            console.error('Failed to get instructor avatar:', request.error)
+            resolve(null)
+        }
+    })
+}
+
+/**
+ * Synchronous wrapper - returns cached value or null (for initial render)
+ * Use getInstructorAvatarAsync for reliable async access
+ */
+const avatarCache = new Map()
+
+export function getInstructorAvatar(instructorName) {
+    if (!instructorName) return null
+    const normalizedName = normalizeInstructorName(instructorName)
+
+    // Return cached value if available
+    if (avatarCache.has(normalizedName)) {
+        return avatarCache.get(normalizedName)
+    }
+
+    // Trigger async load for next render
+    getInstructorAvatarAsync(instructorName).then(avatar => {
+        if (avatar) {
+            avatarCache.set(normalizedName, avatar)
+        }
+    })
+
+    return null
+}
+
+/**
+ * Set instructor avatar in IndexedDB
+ * @param {string} instructorName - Instructor name
+ * @param {string} avatarData - Base64 encoded image data
+ */
+export async function setInstructorAvatar(instructorName, avatarData) {
+    if (!instructorName) return false
+    const db = await initDatabase()
+    const normalizedName = normalizeInstructorName(instructorName)
+
+    return new Promise((resolve) => {
+        const transaction = db.transaction(['instructors'], 'readwrite')
+        const store = transaction.objectStore('instructors')
+
+        const instructor = {
+            id: `instructor_${normalizedName}`,
+            name: normalizedName,
+            displayName: instructorName,
+            avatarData: avatarData,
+            updatedAt: new Date().toISOString()
+        }
+
+        const request = store.put(instructor)
+        request.onsuccess = () => {
+            // Update cache
+            avatarCache.set(normalizedName, avatarData)
+            resolve(true)
+        }
+        request.onerror = () => {
+            console.error('Failed to save instructor avatar:', request.error)
+            resolve(false)
+        }
+    })
+}
+
+/**
+ * Remove instructor avatar from IndexedDB
+ */
+export async function removeInstructorAvatar(instructorName) {
+    if (!instructorName) return
+    const db = await initDatabase()
+    const normalizedName = normalizeInstructorName(instructorName)
+
+    return new Promise((resolve) => {
+        const transaction = db.transaction(['instructors'], 'readwrite')
+        const store = transaction.objectStore('instructors')
+        const request = store.delete(`instructor_${normalizedName}`)
+
+        request.onsuccess = () => {
+            // Clear cache
+            avatarCache.delete(normalizedName)
+            resolve(true)
+        }
+        request.onerror = () => {
+            console.error('Failed to remove instructor avatar:', request.error)
+            resolve(false)
+        }
+    })
+}
+
+/**
+ * Get all courses by a specific instructor
+ */
+export async function getCoursesByInstructor(instructorName) {
+    if (!instructorName) return []
+    const courses = await getAllCourses()
+    const normalizedName = instructorName.toLowerCase().trim()
+    return courses.filter(course =>
+        course.instructor?.toLowerCase().trim() === normalizedName
+    )
+}
+
+
+/**
+ * Batch update course orders
+ * @param {Array<{id: string, order: number}>} updates 
+ */
+export async function updateCoursesOrder(updates) {
+    const db = await initDatabase()
+
+    return new Promise((resolve, reject) => {
+        const transaction = db.transaction(['courses'], 'readwrite')
+        const store = transaction.objectStore('courses')
+
+        transaction.oncomplete = () => resolve(true)
+        transaction.onerror = () => reject(transaction.error)
+
+        updates.forEach(({ id, order }) => {
+            const getRequest = store.get(id)
+            getRequest.onsuccess = () => {
+                const course = getRequest.result
+                if (course) {
+                    course.order = order
+                    store.put(course)
+                }
+            }
+        })
     })
 }

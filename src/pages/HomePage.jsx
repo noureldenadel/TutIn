@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import { Link } from 'react-router-dom'
 import {
-    FolderOpen, Grid, List, Search, X, Filter,
+    FolderOpen, Grid, List, Search, X,
     SortAsc, ChevronDown, Clock, BookOpen, Play, Youtube
 } from 'lucide-react'
 import { getAllCourses, getRecentlyWatchedVideos, addCourse, addModule, addVideo } from '../utils/db'
@@ -22,14 +22,9 @@ function HomePage() {
     const { settings, updateSettings } = useSettings()
     const viewMode = settings.viewMode || 'grid'
 
-    // Search, Filter, and Sort state
+    // Search and Sort state
     const [searchQuery, setSearchQuery] = useState('')
     const [debouncedSearch, setDebouncedSearch] = useState('')
-    const [showFilters, setShowFilters] = useState(false)
-    const [filters, setFilters] = useState({
-        status: [], // 'not-started', 'in-progress', 'completed'
-        tags: []
-    })
     const [sortBy, setSortBy] = useState(() => {
         return localStorage.getItem('mearn_sort') || 'lastAccessed'
     })
@@ -77,7 +72,7 @@ function HomePage() {
         }
     }
 
-    // Filter and sort courses
+    // Search and sort courses
     const filteredCourses = useMemo(() => {
         let result = [...courses]
 
@@ -91,23 +86,6 @@ function HomePage() {
             )
         }
 
-        // Status filter
-        if (filters.status.length > 0) {
-            result = result.filter(course => {
-                const progress = course.completionPercentage || 0
-                if (filters.status.includes('not-started') && progress === 0) return true
-                if (filters.status.includes('in-progress') && progress > 0 && progress < 100) return true
-                if (filters.status.includes('completed') && progress === 100) return true
-                return false
-            })
-        }
-
-        // Tags filter
-        if (filters.tags.length > 0) {
-            result = result.filter(course =>
-                course.tags?.some(tag => filters.tags.includes(tag))
-            )
-        }
 
         // Sort
         result.sort((a, b) => {
@@ -125,16 +103,7 @@ function HomePage() {
         })
 
         return result
-    }, [courses, debouncedSearch, filters, sortBy])
-
-    // Get all unique tags from courses
-    const allTags = useMemo(() => {
-        const tags = new Set()
-        courses.forEach(course => {
-            course.tags?.forEach(tag => tags.add(tag))
-        })
-        return Array.from(tags).sort()
-    }, [courses])
+    }, [courses, debouncedSearch, sortBy])
 
     // Continue watching courses (in-progress with recent activity)
     const continueWatching = useMemo(() => {
@@ -316,21 +285,6 @@ function HomePage() {
         }
     }
 
-    function toggleFilter(type, value) {
-        setFilters(prev => ({
-            ...prev,
-            [type]: prev[type].includes(value)
-                ? prev[type].filter(v => v !== value)
-                : [...prev[type], value]
-        }))
-    }
-
-    function clearFilters() {
-        setFilters({ status: [], tags: [] })
-    }
-
-    const activeFilterCount = filters.status.length + filters.tags.length
-
     const sortOptions = [
         { value: 'lastAccessed', label: 'Recently Accessed' },
         { value: 'title', label: 'Title (A-Z)' },
@@ -463,24 +417,6 @@ function HomePage() {
                             )}
                         </div>
 
-                        {/* Filter Button */}
-                        <button
-                            onClick={() => setShowFilters(!showFilters)}
-                            title="Filter courses"
-                            className={`flex items-center gap-2 px-4 py-2.5 rounded-lg border transition-colors ${showFilters || activeFilterCount > 0
-                                ? 'border-primary bg-primary/10 text-primary'
-                                : 'border-light-border dark:border-dark-border hover:bg-light-surface dark:hover:bg-dark-bg'
-                                }`}
-                        >
-                            <Filter className="w-5 h-5" />
-                            Filter
-                            {activeFilterCount > 0 && (
-                                <span className="bg-primary text-white text-xs rounded-full w-5 h-5 flex items-center justify-center">
-                                    {activeFilterCount}
-                                </span>
-                            )}
-                        </button>
-
                         {/* Sort Dropdown */}
                         <div className="relative">
                             <button
@@ -522,67 +458,6 @@ function HomePage() {
                             {viewMode === 'grid' ? <List className="w-5 h-5" /> : <Grid className="w-5 h-5" />}
                         </button>
                     </div>
-
-                    {/* Filter Panel */}
-                    {showFilters && (
-                        <div className="p-4 bg-light-surface dark:bg-dark-bg rounded-lg border border-light-border dark:border-dark-border">
-                            <div className="flex items-center justify-between mb-3">
-                                <h3 className="font-medium">Filters</h3>
-                                {activeFilterCount > 0 && (
-                                    <button
-                                        onClick={clearFilters}
-                                        className="text-sm text-primary hover:underline"
-                                    >
-                                        Clear all
-                                    </button>
-                                )}
-                            </div>
-
-                            {/* Status Filter */}
-                            <div className="mb-4">
-                                <label className="block text-sm font-medium mb-2">Status</label>
-                                <div className="flex flex-wrap gap-2">
-                                    {[
-                                        { value: 'not-started', label: 'Not Started' },
-                                        { value: 'in-progress', label: 'In Progress' },
-                                        { value: 'completed', label: 'Completed' }
-                                    ].map(status => (
-                                        <button
-                                            key={status.value}
-                                            onClick={() => toggleFilter('status', status.value)}
-                                            className={`px-3 py-1.5 rounded-full text-sm transition-colors ${filters.status.includes(status.value)
-                                                ? 'bg-primary text-white'
-                                                : 'bg-white dark:bg-dark-surface border border-light-border dark:border-dark-border hover:border-primary'
-                                                }`}
-                                        >
-                                            {status.label}
-                                        </button>
-                                    ))}
-                                </div>
-                            </div>
-
-                            {/* Tags Filter */}
-                            {allTags.length > 0 && (
-                                <div>
-                                    <label className="block text-sm font-medium mb-2">Tags</label>
-                                    <div className="flex flex-wrap gap-2">
-                                        {allTags.map(tag => (
-                                            <button
-                                                key={tag}
-                                                onClick={() => toggleFilter('tags', tag)}
-                                                className={`px-3 py-1.5 rounded-full text-sm transition-colors ${filters.tags.includes(tag)
-                                                    ? 'bg-primary text-white'
-                                                    : 'bg-white dark:bg-dark-surface border border-light-border dark:border-dark-border hover:border-primary'
-                                                    }`}
-                                            >
-                                                {tag}
-                                            </button>
-                                        ))}
-                                    </div>
-                                </div>
-                            )}
-                        </div>
-                    )}
                 </div>
             )}
 
