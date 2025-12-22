@@ -199,9 +199,11 @@ The File System Access API only works in Chromium browsers. For Firefox/Safari s
 - [ ] Export transcripts as SRT/VTT subtitles
 
 
-add side bar for user 
-info it will has statistics and we will add road map, it will has all the instructors also
-
 File System Access API is not supported in this browser. Please use Chrome, Edge, or Opera for this feature.
 
 SAME COURSES ACROSSS ALL BROWSERS
+
+
+buy buy time watched
+
+concenterd area for all data

@@ -143,7 +143,7 @@ function YouTubeImportModal({ isOpen, onClose, onImport }) {
         onImport({
             title: previewData.title,
             instructor: previewData.author,
-            instructorAvatar: previewData.channelAvatar,
+            channelAvatar: previewData.channelAvatar, // Passed separately for instructors store
             thumbnailData: previewData.thumbnail,
             description: `Imported from YouTube (${importType})`,
             modules: [{

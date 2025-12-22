@@ -4,7 +4,7 @@ import {
     FolderOpen, Grid, List, Search, X,
     SortAsc, ChevronDown, Clock, BookOpen, Play, Youtube
 } from 'lucide-react'
-import { getAllCourses, getRecentlyWatchedVideos, addCourse, addModule, addVideo } from '../utils/db'
+import { getAllCourses, addCourse, addModule, addVideo, setInstructorAvatar } from '../utils/db'
 import { useSettings } from '../contexts/SettingsContext'
 import CourseCard from '../components/course/CourseCard'
 import LoadingSpinner from '../components/common/LoadingSpinner'
@@ -15,7 +15,6 @@ import { scanCourseFolder, scanFolderFromFiles, isFileSystemAccessSupported } fr
 
 function HomePage() {
     const [courses, setCourses] = useState([])
-    const [recentlyWatched, setRecentlyWatched] = useState([])
     const [isLoading, setIsLoading] = useState(true)
     const [importData, setImportData] = useState(null)
     const [editingCourse, setEditingCourse] = useState(null)
@@ -36,7 +35,6 @@ function HomePage() {
     // Load courses on mount
     useEffect(() => {
         loadCourses()
-        loadRecentlyWatched()
     }, [])
 
     // Debounce search
@@ -64,14 +62,7 @@ function HomePage() {
         }
     }
 
-    async function loadRecentlyWatched() {
-        try {
-            const recent = await getRecentlyWatchedVideos(10)
-            setRecentlyWatched(recent)
-        } catch (err) {
-            console.error('Failed to load recently watched:', err)
-        }
-    }
+
 
     // Search and sort courses
     const filteredCourses = useMemo(() => {
@@ -276,6 +267,12 @@ function HomePage() {
             }
 
             console.log('Saving YouTube course:', courseData)
+
+            // Store instructor avatar in instructors store (not on the course)
+            if (courseData.instructor && courseData.channelAvatar) {
+                await setInstructorAvatar(courseData.instructor, courseData.channelAvatar)
+            }
+
             const savedCourse = await addCourse(courseData)
 
             // Add module and videos
@@ -496,7 +493,7 @@ function HomePage() {
                                     <button
                                         onClick={() => setActiveFilter('all')}
                                         className={`flex-shrink-0 px-4 py-1.5 rounded-full text-sm font-medium transition-colors ${activeFilter === 'all'
-                                            ? 'bg-light-text-primary dark:bg-dark-text-primary text-white'
+                                            ? 'bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-gray-100'
                                             : 'bg-light-surface dark:bg-dark-bg hover:bg-light-border dark:hover:bg-dark-border'
                                             }`}
                                     >
@@ -507,8 +504,8 @@ function HomePage() {
                                     <button
                                         onClick={() => setActiveFilter('completed')}
                                         className={`flex-shrink-0 px-4 py-1.5 rounded-full text-sm font-medium transition-colors ${activeFilter === 'completed'
-                                                ? 'bg-light-text-primary dark:bg-dark-text-primary text-white'
-                                                : 'bg-light-surface dark:bg-dark-bg hover:bg-light-border dark:hover:bg-dark-border'
+                                            ? 'bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-gray-100'
+                                            : 'bg-light-surface dark:bg-dark-bg hover:bg-light-border dark:hover:bg-dark-border'
                                             }`}
                                     >
                                         Completed
@@ -518,8 +515,8 @@ function HomePage() {
                                     <button
                                         onClick={() => setActiveFilter('in-progress')}
                                         className={`flex-shrink-0 px-4 py-1.5 rounded-full text-sm font-medium transition-colors ${activeFilter === 'in-progress'
-                                                ? 'bg-light-text-primary dark:bg-dark-text-primary text-white'
-                                                : 'bg-light-surface dark:bg-dark-bg hover:bg-light-border dark:hover:bg-dark-border'
+                                            ? 'bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-gray-100'
+                                            : 'bg-light-surface dark:bg-dark-bg hover:bg-light-border dark:hover:bg-dark-border'
                                             }`}
                                     >
                                         In Progress
@@ -529,8 +526,8 @@ function HomePage() {
                                     <button
                                         onClick={() => setActiveFilter('not-started')}
                                         className={`flex-shrink-0 px-4 py-1.5 rounded-full text-sm font-medium transition-colors ${activeFilter === 'not-started'
-                                                ? 'bg-light-text-primary dark:bg-dark-text-primary text-white'
-                                                : 'bg-light-surface dark:bg-dark-bg hover:bg-light-border dark:hover:bg-dark-border'
+                                            ? 'bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-gray-100'
+                                            : 'bg-light-surface dark:bg-dark-bg hover:bg-light-border dark:hover:bg-dark-border'
                                             }`}
                                     >
                                         Not Started
@@ -542,7 +539,7 @@ function HomePage() {
                                             key={tag}
                                             onClick={() => setActiveFilter(tag)}
                                             className={`flex-shrink-0 px-4 py-1.5 rounded-full text-sm font-medium transition-colors ${activeFilter === tag
-                                                ? 'bg-light-text-primary dark:bg-dark-text-primary text-white'
+                                                ? 'bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-gray-100'
                                                 : 'bg-light-surface dark:bg-dark-bg hover:bg-light-border dark:hover:bg-dark-border'
                                                 }`}
                                         >
@@ -607,40 +604,7 @@ function HomePage() {
             )
             }
 
-            {/* Recently Watched Section */}
-            {
-                recentlyWatched.length > 0 && (
-                    <div className="mt-12">
-                        <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
-                            <Clock className="w-5 h-5 text-primary" />
-                            Recently Watched
-                        </h2>
-                        <div className="bg-white dark:bg-dark-surface rounded-lg border border-light-border dark:border-dark-border overflow-hidden">
-                            {recentlyWatched.slice(0, 5).map((item, index) => (
-                                <Link
-                                    key={item.video.id}
-                                    to={`/course/${item.course.id}`}
-                                    className={`flex items-center gap-4 p-4 hover:bg-light-surface dark:hover:bg-dark-bg transition-colors ${index > 0 ? 'border-t border-light-border dark:border-dark-border' : ''
-                                        }`}
-                                >
-                                    <div className="w-10 h-10 rounded bg-primary/10 flex items-center justify-center flex-shrink-0">
-                                        <Play className="w-5 h-5 text-primary" />
-                                    </div>
-                                    <div className="flex-1 min-w-0">
-                                        <h4 className="font-medium truncate">{item.video.title}</h4>
-                                        <p className="text-sm text-light-text-secondary dark:text-dark-text-secondary truncate">
-                                            {item.course.title}
-                                        </p>
-                                    </div>
-                                    <div className="text-sm text-light-text-secondary dark:text-dark-text-secondary flex-shrink-0">
-                                        {Math.round((item.video.watchProgress || 0) * 100)}%
-                                    </div>
-                                </Link>
-                            ))}
-                        </div>
-                    </div>
-                )
-            }
+
 
             {/* Import Preview Modal */}
             <ImportPreviewModal
