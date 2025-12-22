@@ -5,6 +5,7 @@ import Sidebar from './components/layout/Sidebar'
 import LoadingSpinner from './components/common/LoadingSpinner'
 import ErrorBoundary from './components/common/ErrorBoundary'
 import { loadPersistedRootFolder } from './utils/fileSystem'
+import { migrateInstructorAvatars } from './utils/db'
 import { SidebarProvider, useSidebar } from './contexts/SidebarContext'
 
 // Lazy load pages for better performance
@@ -19,8 +20,11 @@ const ProfilePage = lazy(() => import('./pages/ProfilePage'))
 function AppContent() {
     const { isExpanded } = useSidebar()
 
-    // On startup, try to restore persisted folder access
+    // On startup, try to restore persisted folder access and run migrations
     useEffect(() => {
+        // Migrate legacy instructor avatars from courses to instructors store
+        migrateInstructorAvatars()
+
         loadPersistedRootFolder().then(success => {
             if (success) {
                 console.log('[App] Folder access restored automatically')
@@ -31,7 +35,7 @@ function AppContent() {
     }, [])
 
     return (
-        <div className="min-h-screen bg-light-bg dark:bg-dark-bg text-light-text-primary dark:text-dark-text-primary">
+        <div className="min-h-screen bg-light-bg dark:bg-dark-bg text-light-text-primary dark:text-dark-text-primary transition-colors duration-300">
             <Header />
             <Sidebar />
             <main

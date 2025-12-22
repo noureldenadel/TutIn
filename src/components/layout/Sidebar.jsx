@@ -78,8 +78,8 @@ function Sidebar() {
             <aside
                 className={`
                     fixed top-16 left-0 h-[calc(100vh-4rem)] z-50
-                    bg-white dark:bg-dark-surface
-                    border-r border-light-border dark:border-dark-border
+                    bg-black/60 backdrop-blur-2xl
+                    border-r border-white/5
                     transition-all duration-300 ease-in-out
                     flex flex-col
                     ${isMobileOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}
@@ -87,7 +87,7 @@ function Sidebar() {
                 `}
             >
                 {/* Navigation Items */}
-                <nav className="flex-1 py-4 overflow-y-auto">
+                <nav className="flex-1 py-4 overflow-y-auto scrollbar-hide">
                     <ul className="space-y-1 px-3">
                         {navItems.map(({ path, icon: Icon, label }) => (
                             <li key={path}>
@@ -95,19 +95,19 @@ function Sidebar() {
                                     to={path}
                                     onClick={handleNavClick}
                                     className={`
-                                        flex items-center gap-4 px-3 py-3 rounded-lg
-                                        transition-colors duration-200
+                                        flex items-center gap-4 px-3 py-3 rounded-full
+                                        transition-all duration-300 group
                                         ${isActive(path)
-                                            ? 'bg-primary/10 text-primary'
-                                            : 'text-light-text-secondary dark:text-dark-text-secondary hover:bg-light-surface dark:hover:bg-dark-bg'
+                                            ? 'bg-white/10 text-white shadow-[0_0_15px_rgba(255,255,255,0.05)]'
+                                            : 'text-neutral-400 hover:text-white hover:bg-white/5'
                                         }
                                         ${!isExpanded ? 'justify-center' : ''}
                                     `}
                                     title={!isExpanded ? label : undefined}
                                 >
-                                    <Icon className="w-5 h-5 flex-shrink-0" />
+                                    <Icon className={`w-5 h-5 flex-shrink-0 transition-transform duration-300 ${isActive(path) ? 'scale-110' : 'group-hover:scale-110'}`} />
                                     {isExpanded && (
-                                        <span className="font-medium truncate">{label}</span>
+                                        <span className="font-medium truncate tracking-wide">{label}</span>
                                     )}
                                 </NavLink>
                             </li>
@@ -116,8 +116,8 @@ function Sidebar() {
 
                     {/* Instructors Section (when expanded) */}
                     {isExpanded && instructors.length > 0 && (
-                        <div className="mt-6 px-3">
-                            <h3 className="px-3 mb-2 text-xs font-semibold text-light-text-secondary dark:text-dark-text-secondary uppercase tracking-wider">
+                        <div className="mt-8 px-3">
+                            <h3 className="px-3 mb-3 text-[10px] font-bold text-neutral-500 uppercase tracking-[0.2em]">
                                 Instructors
                             </h3>
                             <ul className="space-y-1">
@@ -126,20 +126,20 @@ function Sidebar() {
                                         <NavLink
                                             to={`/instructors?filter=${encodeURIComponent(instructor.name)}`}
                                             onClick={handleNavClick}
-                                            className="flex items-center gap-3 px-3 py-2 rounded-lg text-sm
-                                                text-light-text-secondary dark:text-dark-text-secondary
-                                                hover:bg-light-surface dark:hover:bg-dark-bg
-                                                transition-colors duration-200"
+                                            className="flex items-center gap-3 px-3 py-2.5 rounded-full text-sm
+                                                text-neutral-400 hover:text-white
+                                                hover:bg-white/5
+                                                transition-all duration-200"
                                         >
                                             {instructor.avatar ? (
                                                 <img
                                                     src={instructor.avatar}
                                                     alt={instructor.name}
-                                                    className="w-6 h-6 rounded-full object-cover"
+                                                    className="w-6 h-6 rounded-full object-cover ring-2 ring-white/10"
                                                 />
                                             ) : (
-                                                <div className="w-6 h-6 rounded-full bg-primary/20 flex items-center justify-center">
-                                                    <span className="text-xs font-medium text-primary">
+                                                <div className="w-6 h-6 rounded-full bg-white/10 flex items-center justify-center ring-2 ring-white/10">
+                                                    <span className="text-[10px] font-bold text-white">
                                                         {instructor.name.charAt(0).toUpperCase()}
                                                     </span>
                                                 </div>
@@ -154,10 +154,10 @@ function Sidebar() {
                                             to="/instructors"
                                             onClick={handleNavClick}
                                             className="flex items-center gap-3 px-3 py-2 rounded-lg text-sm
-                                                text-primary hover:bg-primary/10
-                                                transition-colors duration-200"
+                                                text-white/70 hover:text-white
+                                                transition-colors duration-200 mt-2"
                                         >
-                                            <span>View all instructors</span>
+                                            <span className="text-xs">View all instructors →</span>
                                         </NavLink>
                                     </li>
                                 )}
@@ -167,34 +167,34 @@ function Sidebar() {
                 </nav>
 
                 {/* Bottom Section - Profile & Collapse Toggle */}
-                <div className="border-t border-light-border dark:border-dark-border p-3">
+                <div className="border-t border-white/5 p-3 bg-black/20">
                     {/* Profile Link */}
                     <NavLink
                         to="/profile"
                         onClick={handleNavClick}
                         className={`
-                            flex items-center gap-4 px-3 py-3 rounded-lg mb-2
-                            transition-colors duration-200
+                            flex items-center gap-4 px-3 py-3 rounded-full mb-2
+                            transition-all duration-300
                             ${isActive('/profile')
-                                ? 'bg-primary/10 text-primary'
-                                : 'text-light-text-secondary dark:text-dark-text-secondary hover:bg-light-surface dark:hover:bg-dark-bg'
+                                ? 'bg-white/10 text-white'
+                                : 'text-neutral-400 hover:text-white hover:bg-white/5'
                             }
                             ${!isExpanded ? 'justify-center' : ''}
                         `}
                         title={!isExpanded ? 'Profile' : undefined}
                     >
                         <User className="w-5 h-5 flex-shrink-0" />
-                        {isExpanded && <span className="font-medium">Profile</span>}
+                        {isExpanded && <span className="font-medium tracking-wide">Profile</span>}
                     </NavLink>
 
                     {/* Collapse Toggle (desktop only) */}
                     <button
                         onClick={() => setIsExpanded(prev => !prev)}
                         className={`
-                            hidden md:flex items-center gap-4 px-3 py-3 rounded-lg w-full
-                            text-light-text-secondary dark:text-dark-text-secondary
-                            hover:bg-light-surface dark:hover:bg-dark-bg
-                            transition-colors duration-200
+                            hidden md:flex items-center gap-4 px-3 py-3 rounded-full w-full
+                            text-neutral-500 hover:text-white
+                            hover:bg-white/5
+                            transition-all duration-200
                             ${!isExpanded ? 'justify-center' : ''}
                         `}
                         title={isExpanded ? 'Collapse sidebar' : 'Expand sidebar'}
@@ -202,7 +202,7 @@ function Sidebar() {
                         {isExpanded ? (
                             <>
                                 <ChevronLeft className="w-5 h-5" />
-                                <span className="font-medium">Collapse</span>
+                                <span className="font-medium text-sm">Collapse</span>
                             </>
                         ) : (
                             <ChevronRight className="w-5 h-5" />

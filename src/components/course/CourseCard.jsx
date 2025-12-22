@@ -68,45 +68,45 @@ function CourseCard({ course, viewMode = 'grid', onRefresh, onEdit }) {
         return (
             <Link
                 to={`/course/${course.id}`}
-                className="flex items-center gap-4 p-4 bg-white dark:bg-dark-surface rounded-lg border border-light-border dark:border-dark-border hover:shadow-md transition-all group"
+                className="flex items-center gap-4 p-4 glass rounded-2xl hover:bg-white/50 dark:hover:bg-white/5 transition-all group"
             >
                 {/* Thumbnail */}
-                <div className="w-40 h-24 bg-gray-200 dark:bg-gray-700 rounded-lg overflow-hidden flex-shrink-0 relative">
+                <div className="w-40 h-24 bg-gray-200 dark:bg-neutral-900 rounded-lg overflow-hidden flex-shrink-0 relative group-hover:ring-1 group-hover:ring-primary/20 dark:group-hover:ring-white/20 transition-all">
                     {course.thumbnailData ? (
                         <img
                             src={course.thumbnailData}
                             alt={course.title}
-                            className="w-full h-full object-cover"
+                            className="w-full h-full object-cover opacity-90 group-hover:opacity-100 transition-opacity"
                         />
                     ) : (
                         <div className="w-full h-full flex items-center justify-center">
-                            <Video className="w-10 h-10 text-gray-400" />
+                            <Video className="w-10 h-10 text-gray-400 dark:text-neutral-600" />
                         </div>
                     )}
                     <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                        <Play className="w-10 h-10 text-white" fill="white" />
+                        <Play className="w-8 h-8 text-white" fill="white" />
                     </div>
                 </div>
 
                 {/* Info */}
                 <div className="flex-1 min-w-0">
-                    <h3 className="font-semibold text-light-text-primary dark:text-dark-text-primary truncate">
+                    <h3 className="font-semibold text-gray-900 dark:text-white truncate text-lg tracking-tight">
                         {course.title}
                     </h3>
-                    <div className="flex items-center gap-4 text-sm text-light-text-secondary dark:text-dark-text-secondary mt-1">
-                        <span className="flex items-center gap-1">
+                    <div className="flex items-center gap-4 text-sm text-gray-600 dark:text-neutral-400 mt-1">
+                        <span className="flex items-center gap-1.5">
                             <Video className="w-4 h-4" />
-                            {course.completedVideos}/{course.totalVideos} videos
+                            {course.completedVideos}/{course.totalVideos}
                         </span>
-                        <span className="flex items-center gap-1">
+                        <span className="flex items-center gap-1.5">
                             <Clock className="w-4 h-4" />
                             {formattedDuration}
                         </span>
                     </div>
                     {/* Progress Bar */}
-                    <div className="mt-2 progress-bar h-2">
+                    <div className="mt-3 progress-bar h-1.5 bg-gray-200 dark:bg-white/10 rounded-full overflow-hidden">
                         <div
-                            className="progress-bar-fill"
+                            className="h-full bg-primary dark:bg-white rounded-full shadow-sm dark:shadow-[0_0_10px_rgba(255,255,255,0.5)] transition-all duration-300"
                             style={{ width: `${completionPercentage}%` }}
                         />
                     </div>
@@ -114,21 +114,18 @@ function CourseCard({ course, viewMode = 'grid', onRefresh, onEdit }) {
 
                 {/* Completion */}
                 <div className="text-right flex-shrink-0">
-                    <span className="text-2xl font-bold text-primary">
+                    <span className="text-xl font-bold text-primary dark:text-white">
                         {Math.round(completionPercentage)}%
                     </span>
-                    <p className="text-xs text-light-text-secondary dark:text-dark-text-secondary">
-                        Complete
-                    </p>
                 </div>
 
                 {/* Edit Button for List View */}
                 <button
                     onClick={handleEdit}
-                    className="p-2 hover:bg-light-surface dark:hover:bg-dark-bg rounded-lg transition-colors"
+                    className="p-2 hover:bg-gray-100 dark:hover:bg-white/10 rounded-full transition-colors text-gray-500 dark:text-neutral-400 hover:text-gray-900 dark:hover:text-white"
                     title="Edit course"
                 >
-                    <Pencil className="w-4 h-4 text-light-text-secondary dark:text-dark-text-secondary" />
+                    <Pencil className="w-4 h-4" />
                 </button>
             </Link>
         )
@@ -139,31 +136,34 @@ function CourseCard({ course, viewMode = 'grid', onRefresh, onEdit }) {
         <>
             <Link
                 to={`/course/${course.id}`}
-                className="group bg-white dark:bg-dark-surface rounded-lg border border-light-border dark:border-dark-border overflow-hidden hover:shadow-lg transition-all hover:-translate-y-1"
+                className="group glass rounded-2xl overflow-hidden hover:shadow-xl dark:hover:shadow-[0_0_30px_rgba(255,255,255,0.05)] transition-all duration-500 hover:-translate-y-1 relative"
             >
                 {/* Thumbnail */}
-                <div className="aspect-video bg-gray-200 dark:bg-gray-700 relative overflow-hidden">
+                <div className="aspect-video bg-gray-200 dark:bg-neutral-900 relative overflow-hidden">
                     {course.thumbnailData ? (
                         <img
                             src={course.thumbnailData}
                             alt={course.title}
-                            className="w-full h-full object-cover"
+                            className="w-full h-full object-cover opacity-90 group-hover:opacity-100 group-hover:scale-105 transition-all duration-700"
                         />
                     ) : (
                         <div className="w-full h-full flex items-center justify-center">
-                            <Video className="w-16 h-16 text-gray-400" />
+                            <Video className="w-16 h-16 text-gray-400 dark:text-neutral-700" />
                         </div>
                     )}
 
+                    {/* Gradient Overlay for Text Readability (Dark mode only or subtle in light) */}
+                    <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent opacity-0 dark:opacity-60 group-hover:opacity-40 dark:group-hover:opacity-80 transition-opacity" />
+
                     {/* Play overlay */}
-                    <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                        <div className="w-16 h-16 bg-white/90 rounded-full flex items-center justify-center">
-                            <Play className="w-8 h-8 text-primary ml-1" fill="currentColor" />
+                    <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all duration-300 scale-90 group-hover:scale-100">
+                        <div className="w-14 h-14 bg-white/90 dark:bg-white/10 backdrop-blur-md rounded-full flex items-center justify-center border border-white/20 shadow-2xl">
+                            <Play className="w-6 h-6 text-primary dark:text-white ml-1" fill="currentColor" />
                         </div>
                     </div>
 
                     {/* Duration badge */}
-                    <div className="absolute bottom-2 right-2 px-2 py-1 bg-black/80 text-white text-xs rounded">
+                    <div className="absolute bottom-3 right-3 px-2 py-1 bg-black/70 backdrop-blur-md text-white text-[10px] font-medium rounded-md border border-white/10">
                         {formattedDuration}
                     </div>
 
@@ -176,29 +176,29 @@ function CourseCard({ course, viewMode = 'grid', onRefresh, onEdit }) {
                                     e.stopPropagation()
                                     setShowMenu(!showMenu)
                                 }}
-                                className="p-2 bg-black/60 hover:bg-black/80 rounded-full text-white transition-colors"
+                                className="p-2 bg-white/90 dark:bg-black/40 backdrop-blur-md hover:bg-white dark:hover:bg-black/60 rounded-full text-gray-800 dark:text-white transition-colors border border-gray-200 dark:border-white/10 shadow-sm"
                             >
                                 <MoreVertical className="w-4 h-4" />
                             </button>
 
                             {showMenu && (
                                 <div
-                                    className="absolute right-0 top-full mt-1 w-40 bg-white dark:bg-dark-surface rounded-lg shadow-lg border border-light-border dark:border-dark-border py-1 z-10"
+                                    className="absolute right-0 top-full mt-1 w-40 glass rounded-lg shadow-2xl border border-gray-100 dark:border-white/10 py-1 z-20"
                                     onClick={(e) => e.stopPropagation()}
                                 >
                                     <button
-                                        className="w-full px-3 py-2 text-left text-sm hover:bg-light-surface dark:hover:bg-dark-bg flex items-center gap-2"
+                                        className="w-full px-3 py-2 text-left text-sm text-gray-700 dark:text-neutral-300 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-white/10 flex items-center gap-2"
                                         onClick={handleEdit}
                                     >
-                                        <Pencil className="w-4 h-4" />
+                                        <Pencil className="w-3 h-3" />
                                         Edit
                                     </button>
                                     <button
-                                        className="w-full px-3 py-2 text-left text-sm hover:bg-light-surface dark:hover:bg-dark-bg flex items-center gap-2 text-error"
+                                        className="w-full px-3 py-2 text-left text-sm text-red-500 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-500/10 flex items-center gap-2"
                                         onClick={handleDelete}
                                         disabled={isDeleting}
                                     >
-                                        <Trash2 className="w-4 h-4" />
+                                        <Trash2 className="w-3 h-3" />
                                         {isDeleting ? 'Deleting...' : 'Delete'}
                                     </button>
                                 </div>
@@ -208,43 +208,43 @@ function CourseCard({ course, viewMode = 'grid', onRefresh, onEdit }) {
                 </div>
 
                 {/* Content */}
-                <div className="p-4">
-                    <h3 className="font-semibold text-light-text-primary dark:text-dark-text-primary truncate mb-1">
+                <div className="p-5 flex flex-col h-full relative z-10">
+                    <h3 className="font-semibold text-gray-900 dark:text-white truncate mb-1 text-lg tracking-tight group-hover:text-primary transition-colors">
                         {course.title}
                     </h3>
 
                     {/* Instructor */}
                     {course.instructor && (
                         <div
-                            className="flex items-center gap-2 mb-2 cursor-pointer hover:opacity-80 transition-opacity"
+                            className="flex items-center gap-2 mb-4 cursor-pointer hover:opacity-80 transition-opacity"
                             onClick={handleInstructorClick}
                             title={`View ${course.instructor}'s profile`}
                         >
-                            <div className="w-5 h-5 rounded-full bg-gradient-to-br from-primary to-primary-dark flex items-center justify-center text-white text-xs font-medium overflow-hidden">
+                            <div className="w-5 h-5 rounded-full bg-gray-100 dark:bg-neutral-800 border border-gray-200 dark:border-white/10 flex items-center justify-center text-gray-600 dark:text-white text-[10px] font-medium overflow-hidden">
                                 {instructorAvatar ? (
                                     <img src={instructorAvatar} alt="" className="w-full h-full object-cover" />
                                 ) : (
                                     course.instructor.charAt(0).toUpperCase()
                                 )}
                             </div>
-                            <span className="text-sm text-light-text-secondary dark:text-dark-text-secondary truncate hover:text-primary transition-colors">
+                            <span className="text-xs text-gray-500 dark:text-neutral-400 truncate hover:text-primary dark:hover:text-white transition-colors">
                                 {course.instructor}
                             </span>
                         </div>
                     )}
 
                     {/* Progress Bar */}
-                    <div className="progress-bar mb-2">
+                    <div className="progress-bar mb-3 h-1 bg-gray-100 dark:bg-white/5 rounded-full overflow-hidden">
                         <div
-                            className="progress-bar-fill"
+                            className="h-full bg-primary dark:bg-white shadow-sm dark:shadow-[0_0_8px_rgba(255,255,255,0.5)] rounded-full transition-all duration-300"
                             style={{ width: `${completionPercentage}%` }}
                         />
                     </div>
 
                     {/* Stats */}
-                    <div className="flex items-center justify-between text-sm text-light-text-secondary dark:text-dark-text-secondary">
-                        <span>{course.completedVideos}/{course.totalVideos} videos</span>
-                        <span className="font-medium text-primary">{Math.round(completionPercentage)}%</span>
+                    <div className="flex items-center justify-between text-xs text-gray-500 dark:text-neutral-500 font-medium">
+                        <span>{course.completedVideos} / {course.totalVideos} videos</span>
+                        <span className="text-primary dark:text-white">{Math.round(completionPercentage)}%</span>
                     </div>
                 </div>
             </Link>

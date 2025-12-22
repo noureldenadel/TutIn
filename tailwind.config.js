@@ -8,31 +8,40 @@ export default {
     theme: {
         extend: {
             colors: {
-                // Light Theme Colors
+                // Grayscale / True Dark Theme
+                dark: {
+                    bg: '#050505', // Pure Black
+                    surface: '#121212', // Dark Grey
+                    border: '#262626', // Subtle Grey
+                    text: {
+                        primary: '#FAFAFA', // White
+                        secondary: '#A3A3A3', // Metallic Grey
+                        muted: '#525252'
+                    }
+                },
+                // Light Theme (Optional/Fallback - keeping minimal)
                 light: {
                     bg: '#FFFFFF',
                     surface: '#F8F9FA',
                     border: '#E5E7EB',
                     text: {
-                        primary: '#1F2937',
-                        secondary: '#6B7280'
+                        primary: '#171717',
+                        secondary: '#737373'
                     }
                 },
-                // Dark Theme Colors (Pure Black/Grey)
-                dark: {
-                    bg: '#0A0A0A',
-                    surface: '#141414',
-                    border: '#262626',
-                    text: {
-                        primary: '#FAFAFA',
-                        secondary: '#A1A1A1'
-                    }
-                },
-                // Brand Colors
+                // Brand Colors - High Contrast
                 primary: {
-                    DEFAULT: '#3B82F6',
-                    light: '#60A5FA',
-                    dark: '#2563EB'
+                    DEFAULT: '#FFFFFF', // White for futuristic contrast
+                    hover: '#E5E5E5',
+                    content: '#000000'
+                },
+                secondary: {
+                    DEFAULT: '#A3A3A3', // Metallic
+                    hover: '#D4D4D4'
+                },
+                accent: {
+                    DEFAULT: '#38bdf8', // Subtle Neon for micro-interactions if needed
+                    glow: 'rgba(56, 189, 248, 0.5)'
                 },
                 success: {
                     DEFAULT: '#10B981',
@@ -68,6 +77,12 @@ export default {
                     '0%': { transform: 'scale(0.95)', opacity: '0' },
                     '100%': { transform: 'scale(1)', opacity: '1' }
                 }
+            },
+            boxShadow: {
+                'glass': '0 0 15px rgba(255, 255, 255, 0.1)',
+                'glass-hover': '0 0 20px rgba(255, 255, 255, 0.2)',
+                'glass-strong': '0 8px 30px rgba(0, 0, 0, 0.5)',
+                'neon': '0 0 10px rgba(255, 255, 255, 0.5), 0 0 20px rgba(255, 255, 255, 0.3)',
             }
         },
     },

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { X, Youtube, Save, AlertTriangle, PlayCircle, List, Loader } from 'lucide-react'
-import { formatDuration } from '../../utils/db'
+import { formatDuration, parseISODuration } from '../../utils/db'
 
 function YouTubeImportModal({ isOpen, onClose, onImport }) {
     const [url, setUrl] = useState('')
@@ -55,20 +55,62 @@ function YouTubeImportModal({ isOpen, onClose, onImport }) {
             setImportType(type)
 
             if (type === 'video') {
-                // Use noembed for single videos (no key needed)
-                const res = await fetch(`https://noembed.com/embed?url=${url}`)
-                const data = await res.json()
-                if (data.error) throw new Error(data.error)
+                let videoData = null
+                let duration = 0
+                let channelAvatar = null
+
+                // Try API first if key exists (for duration and channel avatar)
+                if (apiKey) {
+                    try {
+                        const res = await fetch(`https://www.googleapis.com/youtube/v3/videos?part=snippet,contentDetails&id=${id}&key=${apiKey}`)
+                        const data = await res.json()
+                        if (data.items?.length) {
+                            const item = data.items[0]
+                            videoData = {
+                                title: item.snippet.title,
+                                author_name: item.snippet.channelTitle,
+                                thumbnail_url: item.snippet.thumbnails?.high?.url || item.snippet.thumbnails?.default?.url
+                            }
+                            duration = parseISODuration(item.contentDetails.duration)
+
+                            // Fetch channel avatar
+                            const channelId = item.snippet.channelId
+                            if (channelId) {
+                                try {
+                                    const channelRes = await fetch(`https://www.googleapis.com/youtube/v3/channels?part=snippet&id=${channelId}&key=${apiKey}`)
+                                    const channelData = await channelRes.json()
+                                    if (channelData.items?.length) {
+                                        channelAvatar = channelData.items[0].snippet?.thumbnails?.default?.url ||
+                                            channelData.items[0].snippet?.thumbnails?.medium?.url
+                                    }
+                                } catch (e) {
+                                    console.warn('Failed to fetch channel avatar:', e)
+                                }
+                            }
+                        }
+                    } catch (e) {
+                        console.warn('API fetch failed, falling back to noembed', e)
+                    }
+                }
+
+                // Fallback to noembed (no avatar available without API)
+                if (!videoData) {
+                    const res = await fetch(`https://noembed.com/embed?url=${url}`)
+                    const data = await res.json()
+                    if (data.error) throw new Error(data.error)
+                    videoData = data
+                }
 
                 setPreviewData({
-                    title: data.title,
-                    author: data.author_name,
-                    thumbnail: data.thumbnail_url,
+                    title: videoData.title,
+                    author: videoData.author_name,
+                    thumbnail: videoData.thumbnail_url,
+                    channelAvatar: channelAvatar,
                     videos: [{
-                        title: data.title,
+                        title: videoData.title,
                         youtubeId: id,
                         url: url,
-                        duration: 0 // Noembed doesn't give duration :(
+                        duration: duration
                     }]
                 })
             } else {
@@ -110,12 +152,32 @@ function YouTubeImportModal({ isOpen, onClose, onImport }) {
                     const itemsData = await itemsRes.json()
 
                     const validItems = itemsData.items.filter(item => item.snippet.title !== 'Private video')
+
+                    // Fetch durations for this batch
+                    const videoIds = validItems.map(item => item.snippet.resourceId.videoId).join(',')
+                    let durations = {} // Map ID -> seconds
+
+                    if (videoIds) {
+                        try {
+                            const detailsRes = await fetch(`https://www.googleapis.com/youtube/v3/videos?part=contentDetails&id=${videoIds}&key=${apiKey}`)
+                            const detailsData = await detailsRes.json()
+                            if (detailsData.items) {
+                                detailsData.items.forEach(item => {
+                                    durations[item.id] = parseISODuration(item.contentDetails.duration)
+                                })
+                            }
+                        } catch (e) {
+                            console.warn('Failed to fetch batch durations:', e)
+                        }
+                    }
+
                     videos = [...videos, ...validItems.map(item => ({
                         title: item.snippet.title,
                         youtubeId: item.snippet.resourceId.videoId,
                         url: `https://www.youtube.com/watch?v=${item.snippet.resourceId.videoId}`,
                         thumbnail: item.snippet.thumbnails?.high?.url || item.snippet.thumbnails?.default?.url,
-                        description: item.snippet.description
+                        description: item.snippet.description,
+                        duration: durations[item.snippet.resourceId.videoId] || 0
                     }))]
 
                     nextPageToken = itemsData.nextPageToken

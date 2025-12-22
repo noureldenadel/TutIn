@@ -200,10 +200,8 @@ The File System Access API only works in Chromium browsers. For Firefox/Safari s
 
 
 File System Access API is not supported in this browser. Please use Chrome, Edge, or Opera for this feature.
-
 SAME COURSES ACROSSS ALL BROWSERS
 
 
 buy buy time watched
-
 concenterd area for all data

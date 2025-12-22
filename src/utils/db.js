@@ -685,6 +685,21 @@ export function formatDuration(seconds) {
 }
 
 /**
+ * Parse ISO 8601 duration (PT1H2M3S) to seconds
+ */
+export function parseISODuration(duration) {
+    if (!duration) return 0
+    const match = duration.match(/PT(\d+H)?(\d+M)?(\d+S)?/)
+    if (!match) return 0
+
+    const hours = (parseInt(match[1]) || 0)
+    const minutes = (parseInt(match[2]) || 0)
+    const seconds = (parseInt(match[3]) || 0)
+
+    return hours * 3600 + minutes * 60 + seconds
+}
+
+/**
  * Export all database data
  */
 export async function exportAllData() {
@@ -1090,6 +1105,49 @@ export async function removeInstructorAvatar(instructorName) {
             resolve(false)
         }
     })
+}
+
+/**
+ * Migrate legacy instructor avatars from courses to instructors store.
+ * This handles courses that were imported before the avatar deduplication change.
+ * Should be called once on app initialization.
+ */
+export async function migrateInstructorAvatars() {
+    try {
+        const db = await initDatabase()
+
+        // Check if migration already ran
+        const migrationKey = 'instructor_avatar_migration_v1'
+        if (localStorage.getItem(migrationKey)) {
+            return // Already migrated
+        }
+
+        // Get all courses
+        const courses = await getAllCourses()
+        let migratedCount = 0
+
+        for (const course of courses) {
+            // Check if course has legacy instructorAvatar data
+            if (course.instructor && course.instructorAvatar) {
+                // Check if instructor already exists in store
+                const existingAvatar = await getInstructorAvatarAsync(course.instructor)
+                if (!existingAvatar) {
+                    // Migrate avatar to instructors store
+                    await setInstructorAvatar(course.instructor, course.instructorAvatar)
+                    migratedCount++
+                }
+            }
+        }
+
+        // Mark migration as complete
+        localStorage.setItem(migrationKey, 'true')
+
+        if (migratedCount > 0) {
+            console.log(`Migrated ${migratedCount} instructor avatars from courses to instructors store`)
+        }
+    } catch (err) {
+        console.error('Failed to migrate instructor avatars:', err)
+    }
 }
 
 /**

@@ -12,25 +12,27 @@ function Header() {
 
     return (
         <>
-            <header className="h-16 bg-white dark:bg-dark-surface border-b border-light-border dark:border-dark-border sticky top-0 z-50">
+            <header className="h-16 sticky top-0 z-50 bg-black/60 backdrop-blur-2xl border-b border-white/5 transition-all duration-300">
                 <div className="h-full px-4 flex items-center justify-between">
                     {/* Left: Hamburger + Logo */}
                     <div className="flex items-center gap-4">
                         {/* Hamburger Menu */}
                         <button
                             onClick={toggleSidebar}
-                            className="p-2 rounded-lg hover:bg-light-surface dark:hover:bg-dark-bg transition-colors"
+                            className="p-2 rounded-full text-neutral-400 hover:text-white hover:bg-white/10 transition-all duration-200"
                             aria-label="Toggle sidebar"
                         >
-                            <Menu className="w-6 h-6 text-light-text-primary dark:text-dark-text-primary" />
+                            <Menu className="w-6 h-6" />
                         </button>
 
                         {/* Logo */}
                         <Link
                             to="/"
-                            className="flex items-center gap-2 text-xl font-bold text-primary hover:opacity-80 transition-opacity"
+                            className="flex items-center gap-2 group"
                         >
-                            <span>TutIn</span>
+                            <span className="text-xl font-bold text-white tracking-tight group-hover:text-neutral-300 transition-colors">
+                                TutIn
+                            </span>
                         </Link>
                     </div>
 
@@ -42,23 +44,23 @@ function Header() {
                         {/* Theme Toggle */}
                         <button
                             onClick={toggleTheme}
-                            className="p-2 rounded-lg hover:bg-light-surface dark:hover:bg-dark-bg transition-colors"
+                            className="p-2 rounded-full text-neutral-400 hover:text-white hover:bg-white/10 transition-all duration-200"
                             aria-label={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
                         >
                             {isDark ? (
-                                <Sun className="w-5 h-5 text-dark-text-primary" />
+                                <Sun className="w-5 h-5" />
                             ) : (
-                                <Moon className="w-5 h-5 text-light-text-primary" />
+                                <Moon className="w-5 h-5" />
                             )}
                         </button>
 
                         {/* Settings */}
                         <button
                             onClick={() => setShowSettings(true)}
-                            className="p-2 rounded-lg hover:bg-light-surface dark:hover:bg-dark-bg transition-colors"
+                            className="p-2 rounded-full text-neutral-400 hover:text-white hover:bg-white/10 transition-all duration-200"
                             aria-label="Open settings"
                         >
-                            <Settings className="w-5 h-5 text-light-text-primary dark:text-dark-text-primary" />
+                            <Settings className="w-5 h-5" />
                         </button>
                     </div>
                 </div>

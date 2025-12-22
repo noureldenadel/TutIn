@@ -273,17 +273,32 @@ function HomePage() {
                 await setInstructorAvatar(courseData.instructor, courseData.channelAvatar)
             }
 
-            const savedCourse = await addCourse(courseData)
+            // Calculate total duration and video count from modules
+            let totalDuration = 0
+            let totalVideos = 0
+            if (courseData.modules?.[0]) {
+                const videos = courseData.modules[0].videos || []
+                totalDuration = videos.reduce((sum, v) => sum + (v.duration || 0), 0)
+                totalVideos = videos.length
+            }
+
+            const savedCourse = await addCourse({
+                ...courseData,
+                totalDuration,
+                totalVideos
+            })
 
             // Add module and videos
             if (courseData.modules?.[0]) {
                 const module = courseData.modules[0]
+                const moduleDuration = module.videos.reduce((sum, v) => sum + (v.duration || 0), 0)
+
                 const savedModule = await addModule({
                     courseId: savedCourse.id,
                     title: module.title,
                     originalTitle: module.title,
                     order: 0,
-                    totalDuration: 0, // YouTube duration requires separate fetch or player
+                    totalDuration: moduleDuration,
                     totalVideos: module.videos.length
                 })
 
@@ -296,7 +311,7 @@ function HomePage() {
                         originalTitle: video.title,
                         youtubeId: video.youtubeId,
                         url: video.url,
-                        duration: 0,
+                        duration: video.duration || 0,
                         order: i // Explicit order
                     })
                 }
