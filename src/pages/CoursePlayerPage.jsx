@@ -1,15 +1,15 @@
 import { useState, useEffect, useRef } from 'react'
-import { useParams, Link } from 'react-router-dom'
+import { useParams, Link, useNavigate } from 'react-router-dom'
 import { ChevronLeft, Menu } from 'lucide-react'
 import { getCourse, getModulesByCourse, getVideosByModule, updateCourse, getInstructorAvatar } from '../utils/db'
 import { useSettings } from '../contexts/SettingsContext'
 import LoadingSpinner from '../components/common/LoadingSpinner'
 import VideoPlayer from '../components/player/VideoPlayer'
 import PlaylistSidebar from '../components/player/PlaylistSidebar'
-import InstructorProfileModal from '../components/course/InstructorProfileModal'
 
 function CoursePlayerPage() {
     const { courseId } = useParams()
+    const navigate = useNavigate()
     const { settings } = useSettings()
     const [course, setCourse] = useState(null)
     const [modules, setModules] = useState([])
@@ -18,11 +18,10 @@ function CoursePlayerPage() {
     const [error, setError] = useState(null)
     const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
     const [currentTime, setCurrentTime] = useState(0)
-    const [showInstructorModal, setShowInstructorModal] = useState(false)
     const [instructorAvatar, setInstructorAvatar] = useState(null)
     const videoRef = useRef(null)
 
-    const sidebarOnLeft = settings.sidebarPosition === 'left'
+    const sidebarOnLeft = false // Default to right side for video playlist
 
     // Load course data (reload when progress calculation mode changes)
     useEffect(() => {
@@ -267,7 +266,7 @@ function CoursePlayerPage() {
 
                                 <div
                                     className="flex items-center gap-4 pt-6 border-t border-light-border dark:border-dark-border cursor-pointer hover:opacity-80 transition-opacity"
-                                    onClick={() => course?.instructor && setShowInstructorModal(true)}
+                                    onClick={() => course?.instructor && navigate(`/instructors?filter=${encodeURIComponent(course.instructor)}`)}
                                     title={course?.instructor ? `View ${course.instructor}'s profile` : ''}
                                 >
                                     <div className="w-12 h-12 rounded-full bg-light-surface dark:bg-dark-surface border border-light-border dark:border-dark-border flex items-center justify-center overflow-hidden">
@@ -311,14 +310,6 @@ function CoursePlayerPage() {
                 />
             </div>
 
-            {/* Instructor Profile Modal */}
-            {showInstructorModal && course?.instructor && (
-                <InstructorProfileModal
-                    instructor={course.instructor}
-                    onClose={() => setShowInstructorModal(false)}
-                    onAvatarChange={() => setInstructorAvatar(getInstructorAvatar(course.instructor))}
-                />
-            )}
         </div>
     )
 }

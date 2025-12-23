@@ -7,6 +7,7 @@ import ErrorBoundary from './components/common/ErrorBoundary'
 import { loadPersistedRootFolder } from './utils/fileSystem'
 import { migrateInstructorAvatars } from './utils/db'
 import { SidebarProvider, useSidebar } from './contexts/SidebarContext'
+import { SearchProvider } from './contexts/SearchContext'
 
 // Lazy load pages for better performance
 const HomePage = lazy(() => import('./pages/HomePage'))
@@ -68,10 +69,13 @@ function App() {
     return (
         <ErrorBoundary>
             <SidebarProvider>
-                <AppContent />
+                <SearchProvider>
+                    <AppContent />
+                </SearchProvider>
             </SidebarProvider>
         </ErrorBoundary>
     )
 }
 
 export default App
+

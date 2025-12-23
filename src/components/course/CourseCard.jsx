@@ -1,13 +1,12 @@
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { Play, Clock, Video, MoreVertical, Pencil, Trash2, RefreshCw } from 'lucide-react'
 import { formatDuration, deleteCourse, getInstructorAvatar } from '../../utils/db'
 import { useState, useEffect } from 'react'
-import InstructorProfileModal from './InstructorProfileModal'
 
 function CourseCard({ course, viewMode = 'grid', onRefresh, onEdit }) {
+    const navigate = useNavigate()
     const [showMenu, setShowMenu] = useState(false)
     const [isDeleting, setIsDeleting] = useState(false)
-    const [showInstructorModal, setShowInstructorModal] = useState(false)
     const [instructorAvatar, setInstructorAvatar] = useState(null)
 
     // Load instructor avatar
@@ -21,7 +20,7 @@ function CourseCard({ course, viewMode = 'grid', onRefresh, onEdit }) {
         e.preventDefault()
         e.stopPropagation()
         if (course.instructor) {
-            setShowInstructorModal(true)
+            navigate(`/instructors?filter=${encodeURIComponent(course.instructor)}`)
         }
     }
 
@@ -248,17 +247,6 @@ function CourseCard({ course, viewMode = 'grid', onRefresh, onEdit }) {
                     </div>
                 </div>
             </Link>
-
-            {/* Instructor Profile Modal */}
-            {
-                showInstructorModal && (
-                    <InstructorProfileModal
-                        instructor={course.instructor}
-                        onClose={() => setShowInstructorModal(false)}
-                        onAvatarChange={handleAvatarChange}
-                    />
-                )
-            }
         </>
     )
 }

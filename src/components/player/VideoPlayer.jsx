@@ -77,8 +77,12 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
             return
         }
 
+        // Check if it's a YouTube video (has youtubeId or URL points to youtube.com/youtu.be)
+        const isYouTube = video.youtubeId ||
+            (video.url && (video.url.includes('youtube.com') || video.url.includes('youtu.be')))
+
         // Handle YouTube videos
-        if (video.youtubeId || video.url?.startsWith('http')) {
+        if (isYouTube) {
             const url = video.url || `https://www.youtube.com/watch?v=${video.youtubeId}`
             setVideoUrl(url)
             setIsLoading(true) // Wait for onReady
@@ -93,6 +97,25 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
                 // ReactPlayer has onStart. But let's check if we saved duration.
                 setResumePosition(percentage) // We'll store percentage for now
                 setShowResumePrompt(true)
+            }
+            return
+        }
+
+        // Handle Google Drive videos  
+        if (video.driveFileId || video.url?.includes('drive.google.com')) {
+            const url = video.url || `https://drive.google.com/uc?export=download&id=${video.driveFileId}`
+            setVideoUrl(url)
+            setIsLoading(true)
+            setNeedsFolderAccess(false)
+            setDuration(video.duration || 0)
+
+            // Restore last watched position
+            if (settings.resumePlayback && video.lastWatchedPosition > 5 && video.lastWatchedPosition < (video.duration - 10)) {
+                setResumePosition(video.lastWatchedPosition)
+                setShowResumePrompt(true)
+            } else {
+                setShowResumePrompt(false)
+                setResumePosition(0)
             }
             return
         }
@@ -811,8 +834,8 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
             onTouchStart={handleSpeedBoostStart}
             onTouchEnd={handleSpeedBoostEnd}
         >
-            {/* Video Element or YouTube iframe */}
-            {video?.youtubeId || video?.url?.startsWith('http') ? (
+            {/* YouTube iframe */}
+            {(video?.youtubeId || (video?.url && (video.url.includes('youtube.com') || video.url.includes('youtu.be')))) ? (
                 <div className="w-full h-full">
                     {/* YouTube Embed using native iframe with YouTube's built-in controls */}
                     <iframe
@@ -830,6 +853,28 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
                         onError={(e) => {
                             console.error('YouTube iframe error:', e)
                             setError("Failed to load YouTube video.")
+                            setIsLoading(false)
+                        }}
+                    />
+                </div>
+            ) : (video?.driveFileId || video?.url?.includes('drive.google.com')) ? (
+                <div className="w-full h-full">
+                    {/* Google Drive Embed using native iframe with Drive's built-in player */}
+                    <iframe
+                        ref={videoRef}
+                        src={`https://drive.google.com/file/d/${video.driveFileId || video.url?.match(/\/d\/([a-zA-Z0-9_-]+)/)?.[1]}/preview`}
+                        className="w-full h-full"
+                        frameBorder="0"
+                        allow="autoplay; encrypted-media; picture-in-picture"
+                        allowFullScreen
+                        onLoad={() => {
+                            console.log('Google Drive iframe loaded')
+                            setIsLoading(false)
+                            setError(null)
+                        }}
+                        onError={(e) => {
+                            console.error('Google Drive iframe error:', e)
+                            setError("Failed to load Google Drive video. Make sure the file is shared publicly.")
                             setIsLoading(false)
                         }}
                     />
@@ -955,7 +1000,7 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
                         </p>
                         <button
                             onClick={handleReselectFolder}
-                            className="px-6 py-3 bg-primary text-white rounded-lg hover:bg-primary-dark transition-colors flex items-center gap-2 mx-auto cursor-pointer"
+                            className="px-6 py-3 bg-white/10 text-white rounded-lg hover:bg-white/20 transition-colors flex items-center gap-2 mx-auto cursor-pointer border border-white/10"
                         >
                             <FolderOpen className="w-5 h-5" />
                             Select Course Folder
@@ -971,7 +1016,7 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
                         <p className="mb-4">{error}</p>
                         <button
                             onClick={loadVideo}
-                            className="px-4 py-2 bg-primary rounded hover:bg-primary-dark transition-colors"
+                            className="px-4 py-2 bg-white/10 text-white rounded-lg hover:bg-white/20 transition-colors border border-white/10"
                         >
                             Retry
                         </button>

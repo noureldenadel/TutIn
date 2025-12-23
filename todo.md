@@ -203,5 +203,22 @@ File System Access API is not supported in this browser. Please use Chrome, Edge
 SAME COURSES ACROSSS ALL BROWSERS
 
 
-buy buy time watched
+fix buy time watched
 concenterd area for all data
+add total no of courses in stats
+
+  better courses pages
+  inplement yanfaa
+
+  Highlight the connection path when hovering and when clicked or double clicked it remove
+
+  I DONT LIKE THE STATS. PAGE THE INFO THE PAGE GAVE AND THE UI HOW COULD WE IMPROVE IT
+
+I THINK THE APP IS MOSTLY REPONSIVE EXCEPT THE VIDEOS PAGE SO CAN YOU FIX THAT AND CHECK THE REPONSIVNESS OF THE REST
+
+fix the setting modal panel aslo btns that needs alpha 
+
+
+is it better that if we are in progress filter to show the courses that i have done n first for the user
+
+scrollbar shift the         ui

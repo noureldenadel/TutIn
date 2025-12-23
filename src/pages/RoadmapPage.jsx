@@ -252,13 +252,82 @@ function RoadmapPage() {
         return courses.find(c => c.id === node.courseId)
     }
 
-    // Get node position for connection drawing
-    const getNodeCenter = (nodeId) => {
-        const node = nodes.find(n => n.id === nodeId)
-        if (!node) return { x: 0, y: 0 }
+    // Get optimal connection point on node edge based on target position
+    const getNodeEdgePoint = (fromNodeId, toNodeId) => {
+        const fromNode = nodes.find(n => n.id === fromNodeId)
+        const toNode = nodes.find(n => n.id === toNodeId)
+        if (!fromNode || !toNode) return { from: { x: 0, y: 0 }, to: { x: 0, y: 0 } }
+
+        // Calculate centers
+        const fromCenter = { x: fromNode.x + fromNode.width / 2, y: fromNode.y + fromNode.height / 2 }
+        const toCenter = { x: toNode.x + toNode.width / 2, y: toNode.y + toNode.height / 2 }
+
+        // Calculate angle between nodes
+        const dx = toCenter.x - fromCenter.x
+        const dy = toCenter.y - fromCenter.y
+        const angle = Math.atan2(dy, dx)
+
+        // Determine which edge to connect from/to based on angle
+        const getEdgePoint = (node, isSource) => {
+            const cx = node.x + node.width / 2
+            const cy = node.y + node.height / 2
+            const hw = node.width / 2
+            const hh = node.height / 2
+
+            // For source, we go in direction of target; for target, opposite
+            const a = isSource ? angle : angle + Math.PI
+
+            // Calculate intersection with node rectangle
+            const tanA = Math.tan(a)
+            const cosA = Math.cos(a)
+            const sinA = Math.sin(a)
+
+            // Check horizontal vs vertical edge intersection
+            let px, py
+
+            if (Math.abs(cosA) * hh > Math.abs(sinA) * hw) {
+                // Intersects left or right edge
+                px = cosA > 0 ? cx + hw : cx - hw
+                py = cy + (px - cx) * tanA
+            } else {
+                // Intersects top or bottom edge
+                py = sinA > 0 ? cy + hh : cy - hh
+                px = cx + (py - cy) / tanA
+            }
+
+            return { x: px, y: py }
+        }
+
         return {
-            x: node.x + node.width / 2,
-            y: node.y + node.height / 2
+            from: getEdgePoint(fromNode, true),
+            to: getEdgePoint(toNode, false)
+        }
+    }
+
+    // Calculate smooth bezier curve control points
+    const getBezierControlPoints = (from, to) => {
+        const dx = to.x - from.x
+        const dy = to.y - from.y
+        const distance = Math.sqrt(dx * dx + dy * dy)
+
+        // Control point offset - increases with distance for smoother curves
+        const offset = Math.min(distance * 0.4, 100)
+
+        // Determine curve direction based on relative positions
+        const isHorizontal = Math.abs(dx) > Math.abs(dy)
+
+        if (isHorizontal) {
+            // Horizontal flow - curve horizontally then vertically
+            return {
+                cp1: { x: from.x + offset, y: from.y },
+                cp2: { x: to.x - offset, y: to.y }
+            }
+        } else {
+            // Vertical flow - curve vertically then horizontally  
+            return {
+                cp1: { x: from.x, y: from.y + (dy > 0 ? offset : -offset) },
+                cp2: { x: to.x, y: to.y + (dy > 0 ? -offset : offset) }
+            }
         }
     }
 
@@ -312,7 +381,7 @@ function RoadmapPage() {
 
                     <button
                         onClick={() => setShowNewRoadmapModal(true)}
-                        className="p-2 rounded-lg bg-primary text-white hover:bg-primary-dark transition-colors"
+                        className="p-2 rounded-lg bg-white/10 text-light-text-primary dark:text-dark-text-primary hover:bg-white/20 transition-colors border border-light-border dark:border-dark-border"
                         title="Create new roadmap"
                     >
                         <Plus className="w-5 h-5" />
@@ -353,8 +422,8 @@ function RoadmapPage() {
                                         onClick={() => !isOnCanvas && addCourseToCanvas(course)}
                                         disabled={isOnCanvas}
                                         className={`w-full p-3 rounded-lg text-left mb-2 transition-colors ${isOnCanvas
-                                                ? 'bg-primary/10 cursor-not-allowed opacity-60'
-                                                : 'bg-light-surface dark:bg-dark-bg hover:bg-primary/10'
+                                            ? 'bg-primary/10 cursor-not-allowed opacity-60'
+                                            : 'bg-light-surface dark:bg-dark-bg hover:bg-primary/10'
                                             }`}
                                     >
                                         <div className="flex items-start gap-3">
@@ -405,9 +474,9 @@ function RoadmapPage() {
                     <div className="absolute top-4 left-4 z-10 flex gap-2">
                         <button
                             onClick={() => setShowCoursePanel(prev => !prev)}
-                            className={`p-2 rounded-lg shadow-md transition-colors ${showCoursePanel
-                                    ? 'bg-primary text-white'
-                                    : 'bg-white dark:bg-dark-surface text-light-text-primary dark:text-dark-text-primary'
+                            className={`p-2 rounded-lg shadow-md transition-colors border border-light-border dark:border-dark-border ${showCoursePanel
+                                ? 'bg-white/20 text-primary dark:text-white'
+                                : 'bg-white/5 dark:bg-dark-surface text-light-text-secondary dark:text-dark-text-secondary hover:bg-white/10'
                                 }`}
                             title="Toggle course panel"
                         >
@@ -461,39 +530,39 @@ function RoadmapPage() {
                         >
                             <g style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})` }}>
                                 {connections.map(conn => {
-                                    const from = getNodeCenter(conn.fromNodeId)
-                                    const to = getNodeCenter(conn.toNodeId)
-                                    const midX = (from.x + to.x) / 2
-                                    const midY = (from.y + to.y) / 2
+                                    const points = getNodeEdgePoint(conn.fromNodeId, conn.toNodeId)
+                                    const from = points.from
+                                    const to = points.to
+                                    const { cp1, cp2 } = getBezierControlPoints(from, to)
 
-                                    // Calculate angle for arrow
-                                    const angle = Math.atan2(to.y - from.y, to.x - from.x)
-                                    const arrowLength = 12
-                                    const arrowAngle = Math.PI / 6
+                                    // Calculate angle at the endpoint for arrow
+                                    // Use the control point to determine arrow direction
+                                    const arrowAngle = Math.atan2(to.y - cp2.y, to.x - cp2.x)
+                                    const arrowLength = 10
+                                    const arrowSpread = Math.PI / 7
 
-                                    // Arrow points
-                                    const arrowX = to.x - Math.cos(angle) * 80
-                                    const arrowY = to.y - Math.sin(angle) * 80
-                                    const arrow1X = arrowX - Math.cos(angle - arrowAngle) * arrowLength
-                                    const arrow1Y = arrowY - Math.sin(angle - arrowAngle) * arrowLength
-                                    const arrow2X = arrowX - Math.cos(angle + arrowAngle) * arrowLength
-                                    const arrow2Y = arrowY - Math.sin(angle + arrowAngle) * arrowLength
+                                    // Arrow head vertices
+                                    const arrow1X = to.x - Math.cos(arrowAngle - arrowSpread) * arrowLength
+                                    const arrow1Y = to.y - Math.sin(arrowAngle - arrowSpread) * arrowLength
+                                    const arrow2X = to.x - Math.cos(arrowAngle + arrowSpread) * arrowLength
+                                    const arrow2Y = to.y - Math.sin(arrowAngle + arrowSpread) * arrowLength
 
                                     return (
-                                        <g key={conn.id} className="pointer-events-auto cursor-pointer" onClick={() => removeConnection(conn.id)}>
-                                            {/* Line */}
+                                        <g key={conn.id} className="pointer-events-auto cursor-pointer group" onClick={() => removeConnection(conn.id)}>
+                                            {/* Connection line - cubic bezier for smooth curves */}
                                             <path
-                                                d={`M ${from.x} ${from.y} Q ${midX} ${midY - 30} ${to.x} ${to.y}`}
+                                                d={`M ${from.x} ${from.y} C ${cp1.x} ${cp1.y}, ${cp2.x} ${cp2.y}, ${to.x} ${to.y}`}
                                                 fill="none"
                                                 stroke="var(--primary)"
-                                                strokeWidth="3"
-                                                className="hover:stroke-red-500 transition-colors"
+                                                strokeWidth="2.5"
+                                                strokeLinecap="round"
+                                                className="group-hover:stroke-red-500 transition-colors"
                                             />
-                                            {/* Arrow head */}
+                                            {/* Arrow head at endpoint */}
                                             <polygon
-                                                points={`${arrowX},${arrowY} ${arrow1X},${arrow1Y} ${arrow2X},${arrow2Y}`}
+                                                points={`${to.x},${to.y} ${arrow1X},${arrow1Y} ${arrow2X},${arrow2Y}`}
                                                 fill="var(--primary)"
-                                                className="hover:fill-red-500 transition-colors"
+                                                className="group-hover:fill-red-500 transition-colors"
                                             />
                                         </g>
                                     )
@@ -521,8 +590,8 @@ function RoadmapPage() {
                                     <div
                                         key={node.id}
                                         className={`absolute bg-white dark:bg-dark-surface rounded-xl shadow-lg border-2 transition-shadow cursor-move select-none ${isSelected ? 'border-primary shadow-xl ring-2 ring-primary/20' :
-                                                isConnecting ? 'border-green-500 shadow-xl' :
-                                                    'border-light-border dark:border-dark-border hover:shadow-xl'
+                                            isConnecting ? 'border-green-500 shadow-xl' :
+                                                'border-light-border dark:border-dark-border hover:shadow-xl'
                                             }`}
                                         style={{
                                             left: node.x,
@@ -576,8 +645,8 @@ function RoadmapPage() {
                                                 <div className="h-2 bg-light-surface dark:bg-dark-bg rounded-full overflow-hidden">
                                                     <div
                                                         className={`h-full rounded-full transition-all ${progress === 100
-                                                                ? 'bg-green-500'
-                                                                : 'bg-gradient-to-r from-primary to-primary-dark'
+                                                            ? 'bg-green-500'
+                                                            : 'bg-gradient-to-r from-primary to-primary-dark'
                                                             }`}
                                                         style={{ width: `${progress}%` }}
                                                     />
@@ -600,8 +669,8 @@ function RoadmapPage() {
                                                         startConnecting(node.id)
                                                     }}
                                                     className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${isConnecting
-                                                            ? 'bg-green-500 text-white'
-                                                            : 'bg-light-surface dark:bg-dark-bg hover:bg-primary/10 text-light-text-primary dark:text-dark-text-primary'
+                                                        ? 'bg-green-500 text-white'
+                                                        : 'bg-light-surface dark:bg-dark-bg hover:bg-primary/10 text-light-text-primary dark:text-dark-text-primary'
                                                         }`}
                                                     title={isConnecting ? 'Click another node to connect' : 'Connect to another course'}
                                                 >
@@ -650,7 +719,7 @@ function RoadmapPage() {
                                     <p className="text-lg font-medium mb-4">No roadmap selected</p>
                                     <button
                                         onClick={() => setShowNewRoadmapModal(true)}
-                                        className="btn-primary inline-flex items-center gap-2"
+                                        className="px-6 py-2.5 rounded-full bg-white/10 text-primary dark:text-white hover:bg-white/20 transition-all border border-white/10 flex items-center gap-2"
                                     >
                                         <Plus className="w-5 h-5" />
                                         Create Your First Roadmap
@@ -698,7 +767,7 @@ function RoadmapPage() {
                             <button
                                 onClick={createNewRoadmap}
                                 disabled={!newRoadmapTitle.trim()}
-                                className="flex-1 btn-primary disabled:opacity-50"
+                                className="flex-1 px-4 py-2 rounded-lg bg-white/10 text-primary dark:text-white hover:bg-white/20 disabled:opacity-50 transition-colors border border-white/10"
                             >
                                 Create
                             </button>

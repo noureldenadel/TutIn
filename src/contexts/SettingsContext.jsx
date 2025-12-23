@@ -4,7 +4,7 @@ const defaultSettings = {
     // Appearance
     theme: 'auto', // light, dark, auto
     accentColor: '#3B82F6',
-    sidebarPosition: 'right',
+
     density: 'comfortable', // comfortable, compact
     fontSize: 'medium', // small, medium, large
 

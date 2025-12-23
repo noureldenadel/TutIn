@@ -88,7 +88,7 @@ function SettingsModal({ isOpen, onClose }) {
                     transition-colors mb-1
                     ${activeTab === tab.id
                                             ? 'bg-primary/10 text-primary font-medium'
-                                            : 'hover:bg-light-surface dark:hover:bg-dark-bg'
+                                            : 'hover:bg-white/10 text-light-text-secondary dark:text-dark-text-secondary'
                                         }
                   `}
                                 >
@@ -172,28 +172,7 @@ function SettingsModal({ isOpen, onClose }) {
                                     </div>
                                 </div>
 
-                                {/* Sidebar Position */}
-                                <div>
-                                    <label className="block text-sm font-medium mb-3">Sidebar Position</label>
-                                    <div className="flex gap-3">
-                                        {['left', 'right'].map(position => (
-                                            <button
-                                                key={position}
-                                                onClick={() => updateSettings({ sidebarPosition: position })}
-                                                className={`
-                          flex-1 flex items-center justify-center gap-2 p-3 rounded-lg border-2 transition-all capitalize
-                          ${settings.sidebarPosition === position
-                                                        ? 'border-primary bg-primary/5'
-                                                        : 'border-light-border dark:border-dark-border hover:border-primary/50'
-                                                    }
-                        `}
-                                            >
-                                                <Layout className="w-4 h-4" />
-                                                {position}
-                                            </button>
-                                        ))}
-                                    </div>
-                                </div>
+
 
                                 {/* Density */}
                                 <div>
@@ -510,7 +489,7 @@ function SettingsModal({ isOpen, onClose }) {
                                                                 alert('Failed to restore access: ' + err.message)
                                                             }
                                                         }}
-                                                        className="flex items-center gap-2 px-4 py-2 bg-success text-white rounded-lg hover:bg-success/90 transition-colors"
+                                                        className="flex items-center gap-2 px-4 py-2 bg-success/10 text-success rounded-lg hover:bg-success/20 transition-colors border border-success/20"
                                                     >
                                                         <Check className="w-4 h-4" />
                                                         Restore Access
@@ -528,7 +507,7 @@ function SettingsModal({ isOpen, onClose }) {
                                                             alert('Failed to select folder: ' + err.message)
                                                         }
                                                     }}
-                                                    className="flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-lg hover:bg-primary/90 transition-colors"
+                                                    className="flex items-center gap-2 px-4 py-2 bg-white/10 text-primary dark:text-white rounded-lg hover:bg-white/20 transition-colors border border-white/10"
                                                 >
                                                     <FolderOpen className="w-4 h-4" />
                                                     {hasRootFolderAccess() ? 'Change Folder' : hasStoredRootFolder() ? 'Pick Different Folder' : 'Select Folder'}
@@ -539,7 +518,7 @@ function SettingsModal({ isOpen, onClose }) {
                                                             await clearRootFolderHandle()
                                                             setActiveTab('data')
                                                         }}
-                                                        className="px-4 py-2 border border-light-border dark:border-dark-border rounded-lg hover:bg-light-surface dark:hover:bg-dark-bg transition-colors"
+                                                        className="px-4 py-2 bg-white/5 dark:bg-dark-bg border border-light-border dark:border-dark-border rounded-lg hover:bg-white/10 transition-colors"
                                                     >
                                                         Clear
                                                     </button>
@@ -577,7 +556,7 @@ function SettingsModal({ isOpen, onClose }) {
                                                 alert('Failed to export data: ' + err.message)
                                             }
                                         }}
-                                        className="flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-lg hover:bg-primary/90 transition-colors"
+                                        className="flex items-center gap-2 px-4 py-2 bg-white/10 text-primary dark:text-white rounded-lg hover:bg-white/20 transition-colors border border-white/10"
                                     >
                                         <Download className="w-4 h-4" />
                                         Export Backup
@@ -615,7 +594,7 @@ function SettingsModal({ isOpen, onClose }) {
                                     />
                                     <button
                                         onClick={() => document.getElementById('import-file')?.click()}
-                                        className="flex items-center gap-2 px-4 py-2 border border-light-border dark:border-dark-border rounded-lg hover:bg-light-surface dark:hover:bg-dark-bg transition-colors"
+                                        className="flex items-center gap-2 px-4 py-2 bg-white/5 dark:bg-dark-surface border border-light-border dark:border-dark-border rounded-lg hover:bg-white/10 transition-colors"
                                     >
                                         <Upload className="w-4 h-4" />
                                         Import Backup
@@ -659,7 +638,7 @@ function SettingsModal({ isOpen, onClose }) {
                                                 alert('Failed to reset app: ' + err.message)
                                             }
                                         }}
-                                        className="flex items-center gap-2 px-4 py-2 bg-danger text-white rounded-lg hover:bg-danger/90 transition-colors"
+                                        className="flex items-center gap-2 px-4 py-2 bg-error/10 text-error rounded-lg hover:bg-error/20 transition-colors border border-error/20"
                                     >
                                         <AlertTriangle className="w-4 h-4" />
                                         Reset App - Delete All Data
@@ -680,7 +659,7 @@ function SettingsModal({ isOpen, onClose }) {
                     </button>
                     <button
                         onClick={onClose}
-                        className="px-4 py-2 bg-primary text-white rounded-lg hover:bg-primary-dark transition-colors text-sm font-medium"
+                        className="px-6 py-2 rounded-lg bg-white/10 text-primary dark:text-white hover:bg-white/20 transition-colors text-sm font-medium border border-white/10"
                     >
                         Done
                     </button>
