@@ -78,8 +78,8 @@ function Sidebar() {
             <aside
                 className={`
                     fixed top-16 left-0 h-[calc(100vh-4rem)] z-50
-                    bg-black/60 backdrop-blur-2xl
-                    border-r border-white/5
+                    bg-white dark:bg-black/60 backdrop-blur-2xl
+                    border-r border-gray-200 dark:border-white/5
                     transition-all duration-300 ease-in-out
                     flex flex-col
                     ${isMobileOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}
@@ -98,8 +98,8 @@ function Sidebar() {
                                         flex items-center gap-4 px-3 py-3 rounded-full
                                         transition-all duration-300 group
                                         ${isActive(path)
-                                            ? 'bg-white/10 text-white shadow-[0_0_15px_rgba(255,255,255,0.05)]'
-                                            : 'text-neutral-400 hover:text-white hover:bg-white/5'
+                                            ? 'bg-primary/10 text-primary dark:bg-white/10 dark:text-white shadow-sm'
+                                            : 'text-gray-600 dark:text-neutral-400 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-white/5'
                                         }
                                         ${!isExpanded ? 'justify-center' : ''}
                                     `}
@@ -127,8 +127,8 @@ function Sidebar() {
                                             to={`/instructors?filter=${encodeURIComponent(instructor.name)}`}
                                             onClick={handleNavClick}
                                             className="flex items-center gap-3 px-3 py-2.5 rounded-full text-sm
-                                                text-neutral-400 hover:text-white
-                                                hover:bg-white/5
+                                                text-gray-600 dark:text-neutral-400 hover:text-gray-900 dark:hover:text-white
+                                                hover:bg-gray-100 dark:hover:bg-white/5
                                                 transition-all duration-200"
                                         >
                                             {instructor.avatar ? (
@@ -167,7 +167,7 @@ function Sidebar() {
                 </nav>
 
                 {/* Bottom Section - Profile & Collapse Toggle */}
-                <div className="border-t border-white/5 p-3 bg-black/20">
+                <div className="border-t border-gray-200 dark:border-white/5 p-3 bg-gray-50 dark:bg-black/20">
                     {/* Profile Link */}
                     <NavLink
                         to="/profile"
@@ -176,8 +176,8 @@ function Sidebar() {
                             flex items-center gap-4 px-3 py-3 rounded-full mb-2
                             transition-all duration-300
                             ${isActive('/profile')
-                                ? 'bg-white/10 text-white'
-                                : 'text-neutral-400 hover:text-white hover:bg-white/5'
+                                ? 'bg-primary/10 text-primary dark:bg-white/10 dark:text-white'
+                                : 'text-gray-600 dark:text-neutral-400 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-white/5'
                             }
                             ${!isExpanded ? 'justify-center' : ''}
                         `}
@@ -192,8 +192,8 @@ function Sidebar() {
                         onClick={() => setIsExpanded(prev => !prev)}
                         className={`
                             hidden md:flex items-center gap-4 px-3 py-3 rounded-full w-full
-                            text-neutral-500 hover:text-white
-                            hover:bg-white/5
+                            text-gray-500 dark:text-neutral-500 hover:text-gray-900 dark:hover:text-white
+                            hover:bg-gray-100 dark:hover:bg-white/5
                             transition-all duration-200
                             ${!isExpanded ? 'justify-center' : ''}
                         `}

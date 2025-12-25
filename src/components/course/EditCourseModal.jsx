@@ -292,7 +292,7 @@ function EditCourseModal({ course, isOpen, onClose, onSave }) {
                                 type="button"
                                 onClick={handleAddTag}
                                 disabled={!newTag.trim() || formData.tags.length >= 10}
-                                className="px-4 py-2 bg-primary text-white rounded-lg hover:bg-primary-dark disabled:opacity-50 disabled:cursor-not-allowed"
+                                className="px-4 py-2 bg-white/10 text-primary dark:text-white rounded-lg hover:bg-white/20 disabled:opacity-50 disabled:cursor-not-allowed border border-white/10"
                             >
                                 Add
                             </button>
@@ -338,7 +338,7 @@ function EditCourseModal({ course, isOpen, onClose, onSave }) {
                     <button onClick={onClose} className="px-4 py-2 text-sm border border-light-border dark:border-dark-border rounded-lg hover:bg-light-surface dark:hover:bg-dark-bg" disabled={isSaving}>
                         Cancel
                     </button>
-                    <button onClick={handleSave} disabled={isSaving || !formData.title.trim()} className="px-4 py-2 text-sm bg-primary text-white rounded-lg hover:bg-primary-dark disabled:opacity-50 flex items-center gap-2">
+                    <button onClick={handleSave} disabled={isSaving || !formData.title.trim()} className="px-4 py-2 text-sm bg-white/10 text-primary dark:text-white rounded-lg hover:bg-white/20 disabled:opacity-50 flex items-center gap-2 border border-white/10">
                         {isSaving ? <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />Saving...</> : 'Save Changes'}
                     </button>
                 </div>

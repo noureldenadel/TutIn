@@ -61,14 +61,14 @@ function Header({ onImportData, onYouTubeImport, onGoogleDriveImport }) {
 
     return (
         <>
-            <header className="h-16 sticky top-0 z-50 bg-black/60 backdrop-blur-2xl border-b border-white/5 transition-all duration-300">
+            <header className="h-16 sticky top-0 z-50 bg-white dark:bg-black/60 backdrop-blur-2xl border-b border-gray-200 dark:border-white/5 transition-all duration-300">
                 <div className="h-full px-4 flex items-center">
                     {/* Left: Hamburger + Logo */}
                     <div className="flex items-center gap-4 flex-shrink-0">
                         {/* Hamburger Menu */}
                         <button
                             onClick={toggleSidebar}
-                            className="p-2 rounded-full text-neutral-400 hover:text-white hover:bg-white/10 transition-all duration-200"
+                            className="p-2 rounded-full text-gray-600 dark:text-neutral-400 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-white/10 transition-all duration-200"
                             aria-label="Toggle sidebar"
                         >
                             <Menu className="w-6 h-6" />
@@ -79,7 +79,7 @@ function Header({ onImportData, onYouTubeImport, onGoogleDriveImport }) {
                             to="/"
                             className="flex items-center gap-2 group"
                         >
-                            <span className="text-xl font-bold text-white tracking-tight group-hover:text-neutral-300 transition-colors">
+                            <span className="text-xl font-bold text-gray-900 dark:text-white tracking-tight group-hover:text-gray-600 dark:group-hover:text-neutral-300 transition-colors">
                                 TutIn
                             </span>
                         </Link>
@@ -98,14 +98,14 @@ function Header({ onImportData, onYouTubeImport, onGoogleDriveImport }) {
                                     placeholder="Search courses..."
                                     value={searchQuery}
                                     onChange={(e) => setSearchQuery(e.target.value)}
-                                    className="w-full pl-10 pr-10 py-2 rounded-full border border-white/10 bg-white/5 text-white placeholder-neutral-400 focus:ring-2 focus:ring-white/20 focus:border-transparent outline-none transition-all"
+                                    className="w-full pl-10 pr-10 py-2 rounded-full border border-gray-300 dark:border-white/10 bg-gray-100 dark:bg-white/5 text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-neutral-400 focus:ring-2 focus:ring-primary/30 dark:focus:ring-white/20 focus:border-transparent outline-none transition-all"
                                 />
                                 {searchQuery && (
                                     <button
                                         onClick={() => setSearchQuery('')}
-                                        className="absolute right-3 top-1/2 -translate-y-1/2 p-1 hover:bg-white/10 rounded-full"
+                                        className="absolute right-3 top-1/2 -translate-y-1/2 p-1 hover:bg-gray-200 dark:hover:bg-white/10 rounded-full"
                                     >
-                                        <X className="w-4 h-4 text-neutral-400" />
+                                        <X className="w-4 h-4 text-gray-500 dark:text-neutral-400" />
                                     </button>
                                 )}
                             </div>
@@ -123,7 +123,7 @@ function Header({ onImportData, onYouTubeImport, onGoogleDriveImport }) {
                                 {/* Main button - imports local folder */}
                                 <button
                                     onClick={handleImportClick}
-                                    className="flex items-center gap-2 px-4 py-2 bg-white/10 hover:bg-white/20 text-white rounded-l-full transition-all duration-200 border-r border-white/10"
+                                    className="flex items-center gap-2 px-4 py-2 bg-gray-900 dark:bg-white/10 text-white hover:bg-gray-800 dark:hover:bg-white/20 rounded-l-full transition-all duration-200 border-r border-gray-700 dark:border-white/10"
                                 >
                                     <Plus className="w-4 h-4" />
                                     <span className="hidden sm:inline text-sm font-medium">Add Course</span>
@@ -131,7 +131,7 @@ function Header({ onImportData, onYouTubeImport, onGoogleDriveImport }) {
                                 {/* Dropdown toggle */}
                                 <button
                                     onClick={() => setShowAddMenu(!showAddMenu)}
-                                    className="px-2 py-2 bg-white/10 hover:bg-white/20 text-white rounded-r-full transition-all duration-200"
+                                    className="px-2 py-2 bg-gray-900 dark:bg-white/10 text-white hover:bg-gray-800 dark:hover:bg-white/20 rounded-r-full transition-all duration-200"
                                 >
                                     <ChevronDown className="w-4 h-4" />
                                 </button>
@@ -139,10 +139,10 @@ function Header({ onImportData, onYouTubeImport, onGoogleDriveImport }) {
                                 {showAddMenu && (
                                     <>
                                         <div className="fixed inset-0 z-10" onClick={() => setShowAddMenu(false)} />
-                                        <div className="absolute right-0 top-full mt-2 w-48 py-2 bg-neutral-900 rounded-lg shadow-xl border border-white/10 z-20">
+                                        <div className="absolute right-0 top-full mt-2 w-48 py-2 bg-white dark:bg-neutral-900 rounded-lg shadow-xl border border-gray-200 dark:border-white/10 z-20">
                                             <button
                                                 onClick={handleImportClick}
-                                                className="w-full px-4 py-2 text-left text-sm text-white hover:bg-white/10 flex items-center gap-2"
+                                                className="w-full px-4 py-2 text-left text-sm text-gray-700 dark:text-white hover:bg-gray-100 dark:hover:bg-white/10 flex items-center gap-2"
                                             >
                                                 <FolderOpen className="w-4 h-4" />
                                                 Local Folder
@@ -152,7 +152,7 @@ function Header({ onImportData, onYouTubeImport, onGoogleDriveImport }) {
                                                     setShowYouTubeModal(true)
                                                     setShowAddMenu(false)
                                                 }}
-                                                className="w-full px-4 py-2 text-left text-sm text-white hover:bg-white/10 flex items-center gap-2"
+                                                className="w-full px-4 py-2 text-left text-sm text-gray-700 dark:text-white hover:bg-gray-100 dark:hover:bg-white/10 flex items-center gap-2"
                                             >
                                                 <Youtube className="w-4 h-4 text-red-500" />
                                                 From YouTube
@@ -162,7 +162,7 @@ function Header({ onImportData, onYouTubeImport, onGoogleDriveImport }) {
                                                     setShowGoogleDriveModal(true)
                                                     setShowAddMenu(false)
                                                 }}
-                                                className="w-full px-4 py-2 text-left text-sm text-white hover:bg-white/10 flex items-center gap-2"
+                                                className="w-full px-4 py-2 text-left text-sm text-gray-700 dark:text-white hover:bg-gray-100 dark:hover:bg-white/10 flex items-center gap-2"
                                             >
                                                 <HardDrive className="w-4 h-4 text-blue-500" />
                                                 From Google Drive
@@ -176,7 +176,7 @@ function Header({ onImportData, onYouTubeImport, onGoogleDriveImport }) {
                         {/* Theme Toggle */}
                         <button
                             onClick={toggleTheme}
-                            className="p-2 rounded-full text-neutral-400 hover:text-white hover:bg-white/10 transition-all duration-200"
+                            className="p-2 rounded-full text-gray-600 dark:text-neutral-400 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-white/10 transition-all duration-200"
                             aria-label={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
                         >
                             {isDark ? (
@@ -189,7 +189,7 @@ function Header({ onImportData, onYouTubeImport, onGoogleDriveImport }) {
                         {/* Settings */}
                         <button
                             onClick={() => setShowSettings(true)}
-                            className="p-2 rounded-full text-neutral-400 hover:text-white hover:bg-white/10 transition-all duration-200"
+                            className="p-2 rounded-full text-gray-600 dark:text-neutral-400 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-white/10 transition-all duration-200"
                             aria-label="Open settings"
                         >
                             <Settings className="w-5 h-5" />

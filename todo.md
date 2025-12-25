@@ -214,11 +214,9 @@ add total no of courses in stats
 
   I DONT LIKE THE STATS. PAGE THE INFO THE PAGE GAVE AND THE UI HOW COULD WE IMPROVE IT
 
-I THINK THE APP IS MOSTLY REPONSIVE EXCEPT THE VIDEOS PAGE SO CAN YOU FIX THAT AND CHECK THE REPONSIVNESS OF THE REST
 
-fix the setting modal panel aslo btns that needs alpha 
 
 
 is it better that if we are in progress filter to show the courses that i have done n first for the user
 
-scrollbar shift the         ui
+how can we improve the course page and improve it. ithink  the avatar and title below player are large in size the video player is small

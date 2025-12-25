@@ -152,7 +152,7 @@ function PlaylistSidebar({
           ${isCollapsed ? 'translate-x-full' : 'translate-x-0'}
           z-30
         `}
-                style={{ width: `${panelWidth}px`, maxWidth: '100%' }}
+                style={{ width: panelWidth, maxWidth: '100vw' }}
             >
                 {/* Resize Handle */}
                 <div

@@ -34,7 +34,6 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
     const [showAutoPlayCountdown, setShowAutoPlayCountdown] = useState(false)
     const [autoPlayCountdown, setAutoPlayCountdown] = useState(3)
     const [localAutoPlay, setLocalAutoPlay] = useState(true)
-    const [showResumePrompt, setShowResumePrompt] = useState(false)
     const [resumePosition, setResumePosition] = useState(0)
     const [captionsEnabled, setCaptionsEnabled] = useState(() => {
         const saved = localStorage.getItem('tutin_captions_enabled')
@@ -89,14 +88,11 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
             setNeedsFolderAccess(false)
             setDuration(video.duration || 0) // Try to trust duration if saved
 
-            // Restore last watched position
+            // Auto-restore last watched position (will be applied when player loads)
             if (video.lastWatchedAt && video.watchProgress > 0 && video.watchProgress < 0.95) {
-                const percentage = video.watchProgress
-                // Note: We can't know absolute duration yet for YouTube until it loads
-                // So we'll trust the player's onReady or just let it start from 0 and user seeks?
-                // ReactPlayer has onStart. But let's check if we saved duration.
-                setResumePosition(percentage) // We'll store percentage for now
-                setShowResumePrompt(true)
+                setResumePosition(video.watchProgress) // Store percentage for YouTube
+            } else {
+                setResumePosition(0)
             }
             return
         }
@@ -109,12 +105,10 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
             setNeedsFolderAccess(false)
             setDuration(video.duration || 0)
 
-            // Restore last watched position
+            // Auto-restore last watched position
             if (settings.resumePlayback && video.lastWatchedPosition > 5 && video.lastWatchedPosition < (video.duration - 10)) {
                 setResumePosition(video.lastWatchedPosition)
-                setShowResumePrompt(true)
             } else {
-                setShowResumePrompt(false)
                 setResumePosition(0)
             }
             return
@@ -214,12 +208,10 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
             const url = await getVideoUrl(fileSource)
             setVideoUrl(url)
 
-            // Show resume prompt if there's a saved position
+            // Auto-restore last watched position
             if (settings.resumePlayback && video.lastWatchedPosition > 5 && video.lastWatchedPosition < (video.duration - 10)) {
                 setResumePosition(video.lastWatchedPosition)
-                setShowResumePrompt(true)
             } else {
-                setShowResumePrompt(false)
                 setResumePosition(0)
             }
         } catch (err) {
@@ -251,6 +243,11 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
         if (videoRef.current) {
             setDuration(videoRef.current.duration)
             setIsLoading(false)
+
+            // Auto-resume from last watched position
+            if (resumePosition > 0) {
+                videoRef.current.currentTime = resumePosition
+            }
         }
     }
 
@@ -945,46 +942,6 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
             {isLoading && (
                 <div className="absolute inset-0 flex items-center justify-center bg-black/50">
                     <div className="w-12 h-12 border-4 border-white border-t-transparent rounded-full animate-spin" />
-                </div>
-            )}
-
-            {/* Resume Prompt Overlay */}
-            {showResumePrompt && !isLoading && !isPlaying && (
-                <div className="absolute inset-0 z-40 flex items-center justify-center bg-black/80 text-white text-center p-4">
-                    <div className="max-w-md">
-                        <Play className="w-16 h-16 mx-auto mb-4 text-primary" />
-                        <h3 className="text-xl font-semibold mb-2">Resume Watching?</h3>
-                        <p className="text-gray-400 mb-6">
-                            You left off at {formatDuration(resumePosition)}
-                        </p>
-                        <div className="flex gap-4 justify-center">
-                            <button
-                                onClick={() => {
-                                    if (videoRef.current) {
-                                        videoRef.current.currentTime = resumePosition
-                                    }
-                                    setShowResumePrompt(false)
-                                    togglePlay()
-                                }}
-                                className="px-6 py-3 bg-primary text-white rounded-lg hover:bg-primary-dark transition-colors flex items-center gap-2"
-                            >
-                                <Play className="w-5 h-5" />
-                                Resume
-                            </button>
-                            <button
-                                onClick={() => {
-                                    if (videoRef.current) {
-                                        videoRef.current.currentTime = 0
-                                    }
-                                    setShowResumePrompt(false)
-                                    togglePlay()
-                                }}
-                                className="px-6 py-3 bg-white/20 text-white rounded-lg hover:bg-white/30 transition-colors"
-                            >
-                                Start Over
-                            </button>
-                        </div>
-                    </div>
                 </div>
             )}
 

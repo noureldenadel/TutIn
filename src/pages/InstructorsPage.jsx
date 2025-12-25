@@ -124,7 +124,7 @@ function InstructorsPage() {
                     </div>
                     <button
                         onClick={clearFilter}
-                        className="p-2 hover:bg-primary/20 rounded-lg transition-colors"
+                        className="p-2 bg-white/5 hover:bg-white/10 rounded-lg transition-colors"
                         title="Clear filter"
                     >
                         <X className="w-5 h-5" />

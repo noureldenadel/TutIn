@@ -16,7 +16,7 @@ function CoursePlayerPage() {
     const [currentVideo, setCurrentVideo] = useState(null)
     const [isLoading, setIsLoading] = useState(true)
     const [error, setError] = useState(null)
-    const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+    const [sidebarCollapsed, setSidebarCollapsed] = useState(() => window.innerWidth < 1024)
     const [currentTime, setCurrentTime] = useState(0)
     const [instructorAvatar, setInstructorAvatar] = useState(null)
     const videoRef = useRef(null)
@@ -216,35 +216,13 @@ function CoursePlayerPage() {
 
     return (
         <div className="animate-fade-in -mx-4 -my-6">
-            {/* Course Header */}
-            <div className="h-12 px-4 bg-light-surface dark:bg-dark-surface border-b border-light-border dark:border-dark-border flex items-center gap-4">
-                <Link
-                    to="/"
-                    className="flex items-center gap-1 text-light-text-secondary dark:text-dark-text-secondary hover:text-light-text-primary dark:hover:text-dark-text-primary transition-colors"
-                >
-                    <ChevronLeft className="w-4 h-4" />
-                    <span className="text-sm">Home</span>
-                </Link>
-                <span className="text-light-border dark:text-dark-border">/</span>
-                <h1 className="text-sm font-medium truncate flex-1">
-                    {course?.title}
-                </h1>
-                <button
-                    onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
-                    className="p-2 rounded hover:bg-light-bg dark:hover:bg-dark-bg transition-colors lg:hidden"
-                    aria-label="Toggle sidebar"
-                >
-                    <Menu className="w-5 h-5" />
-                </button>
-            </div>
-
             {/* Main Content */}
-            <div className={`flex h-[calc(100vh-64px-48px)] ${sidebarOnLeft ? 'flex-row-reverse' : ''}`}>
+            <div className={`flex h-[calc(100vh-64px)] ${sidebarOnLeft ? 'flex-row-reverse' : ''}`}>
                 {/* Video Player Area */}
-                <div className={`flex-1 flex flex-col overflow-y-auto ${sidebarCollapsed ? '' : sidebarOnLeft ? 'lg:ml-[360px]' : 'lg:mr-[360px]'}`}>
+                <div className={`flex-1 flex flex-col overflow-y-auto transition-[margin] duration-300 ${!sidebarCollapsed ? 'lg:mr-[360px]' : ''}`}>
                     {currentVideo ? (
                         <>
-                            <div className="aspect-video bg-black sticky top-0 z-20">
+                            <div className="aspect-video bg-black sticky top-0 z-20 m-4 mb-0 rounded-xl overflow-hidden">
                                 <VideoPlayer
                                     ref={videoRef}
                                     video={currentVideo}
@@ -256,9 +234,9 @@ function CoursePlayerPage() {
                             </div>
 
                             {/* Video Info Section */}
-                            <div className="p-6 space-y-6">
+                            <div className="p-4 sm:p-6 space-y-4 sm:space-y-6">
                                 <div>
-                                    <h2 className="text-2xl font-bold mb-2">{currentVideo.title}</h2>
+                                    <h2 className="text-lg sm:text-2xl font-bold mb-2">{currentVideo.title}</h2>
                                     <h3 className="text-lg text-light-text-secondary dark:text-dark-text-secondary">
                                         {modules.find(m => m.id === currentVideo.moduleId)?.title}
                                     </h3>

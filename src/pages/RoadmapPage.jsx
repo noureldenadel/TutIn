@@ -475,8 +475,8 @@ function RoadmapPage() {
                         <button
                             onClick={() => setShowCoursePanel(prev => !prev)}
                             className={`p-2 rounded-lg shadow-md transition-colors border border-light-border dark:border-dark-border ${showCoursePanel
-                                ? 'bg-white/20 text-primary dark:text-white'
-                                : 'bg-white/5 dark:bg-dark-surface text-light-text-secondary dark:text-dark-text-secondary hover:bg-white/10'
+                                ? 'bg-white dark:bg-dark-surface text-primary'
+                                : 'bg-white dark:bg-dark-surface text-light-text-secondary dark:text-dark-text-secondary hover:bg-light-surface dark:hover:bg-dark-bg'
                                 }`}
                             title="Toggle course panel"
                         >
