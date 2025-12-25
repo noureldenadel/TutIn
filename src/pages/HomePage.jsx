@@ -370,7 +370,7 @@ function HomePage() {
                                                     setSortBy(option.value)
                                                     setShowSortMenu(false)
                                                 }}
-                                                className={`w-full px-4 py-2 text-left text-sm hover:bg-light-surface dark:hover:bg-dark-bg ${sortBy === option.value ? 'text-primary font-medium' : ''}`}
+                                                className={`w-full px-4 py-2 text-left text-sm hover:bg-light-surface dark:hover:bg-dark-bg ${sortBy === option.value ? 'text-blue-600 dark:text-white font-medium' : ''}`}
                                             >
                                                 {option.label}
                                             </button>

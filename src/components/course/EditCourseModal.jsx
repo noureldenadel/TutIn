@@ -201,7 +201,7 @@ function EditCourseModal({ course, isOpen, onClose, onSave }) {
                         </label>
                         <div className="flex items-start gap-4">
                             <div
-                                className={`w-40 h-24 rounded-lg border-2 border-dashed overflow-hidden flex items-center justify-center cursor-pointer transition-colors ${isDragging ? 'border-primary bg-primary/10' : 'border-light-border dark:border-dark-border hover:border-primary'
+                                className={`w-40 h-24 rounded-lg border-2 border-dashed overflow-hidden flex items-center justify-center cursor-pointer transition-colors ${isDragging ? 'border-blue-500 bg-blue-50 dark:bg-blue-500/10' : 'border-light-border dark:border-dark-border hover:border-blue-500'
                                     }`}
                                 onDragOver={handleDragOver}
                                 onDragLeave={handleDragLeave}
@@ -236,7 +236,7 @@ function EditCourseModal({ course, isOpen, onClose, onSave }) {
                             type="text"
                             value={formData.title}
                             onChange={(e) => handleChange('title', e.target.value)}
-                            className={`w-full px-3 py-2 rounded-lg border ${errors.title ? 'border-error' : 'border-light-border dark:border-dark-border'} bg-white dark:bg-dark-bg focus:ring-2 focus:ring-primary outline-none`}
+                            className={`w-full px-3 py-2 rounded-lg border ${errors.title ? 'border-error' : 'border-light-border dark:border-dark-border'} bg-white dark:bg-dark-bg focus:border-blue-500 dark:focus:border-blue-400 outline-none focus:outline-none ring-0 focus:ring-0`}
                             placeholder="Course title"
                             maxLength={200}
                         />
@@ -252,7 +252,7 @@ function EditCourseModal({ course, isOpen, onClose, onSave }) {
                             type="text"
                             value={formData.instructor}
                             onChange={(e) => handleChange('instructor', e.target.value)}
-                            className="w-full px-3 py-2 rounded-lg border border-light-border dark:border-dark-border bg-white dark:bg-dark-bg focus:ring-2 focus:ring-primary outline-none"
+                            className="w-full px-3 py-2 rounded-lg border border-light-border dark:border-dark-border bg-white dark:bg-dark-bg focus:border-blue-500 dark:focus:border-blue-400 outline-none focus:outline-none ring-0 focus:ring-0"
                             placeholder="Instructor name"
                             maxLength={100}
                         />
@@ -266,7 +266,7 @@ function EditCourseModal({ course, isOpen, onClose, onSave }) {
                         <textarea
                             value={formData.description}
                             onChange={(e) => handleChange('description', e.target.value)}
-                            className="w-full px-3 py-2 rounded-lg border border-light-border dark:border-dark-border bg-white dark:bg-dark-bg focus:ring-2 focus:ring-primary outline-none resize-none"
+                            className="w-full px-3 py-2 rounded-lg border border-light-border dark:border-dark-border bg-white dark:bg-dark-bg focus:border-blue-500 dark:focus:border-blue-400 outline-none focus:outline-none ring-0 focus:ring-0 resize-none"
                             placeholder="Course description, notes, URLs..."
                             rows={4}
                             maxLength={2000}
@@ -284,7 +284,7 @@ function EditCourseModal({ course, isOpen, onClose, onSave }) {
                                 value={newTag}
                                 onChange={(e) => setNewTag(e.target.value)}
                                 onKeyDown={handleTagKeyDown}
-                                className="flex-1 px-3 py-2 rounded-lg border border-light-border dark:border-dark-border bg-white dark:bg-dark-bg focus:ring-2 focus:ring-primary outline-none"
+                                className="flex-1 px-3 py-2 rounded-lg border border-light-border dark:border-dark-border bg-white dark:bg-dark-bg focus:border-blue-500 dark:focus:border-blue-400 outline-none focus:outline-none ring-0 focus:ring-0"
                                 placeholder="Add a tag..."
                                 maxLength={30}
                             />
@@ -292,7 +292,7 @@ function EditCourseModal({ course, isOpen, onClose, onSave }) {
                                 type="button"
                                 onClick={handleAddTag}
                                 disabled={!newTag.trim() || formData.tags.length >= 10}
-                                className="px-4 py-2 bg-white/10 text-primary dark:text-white rounded-lg hover:bg-white/20 disabled:opacity-50 disabled:cursor-not-allowed border border-white/10"
+                                className="px-4 py-2 bg-gray-900 dark:bg-white/10 text-white rounded-lg hover:bg-gray-800 dark:hover:bg-white/20 disabled:opacity-50 disabled:cursor-not-allowed"
                             >
                                 Add
                             </button>
@@ -301,13 +301,13 @@ function EditCourseModal({ course, isOpen, onClose, onSave }) {
                             {formData.tags.map((tag, index) => (
                                 <span
                                     key={index}
-                                    className="inline-flex items-center gap-1 px-3 py-1 bg-primary/10 text-primary rounded-full text-sm"
+                                    className="inline-flex items-center gap-1 px-3 py-1 bg-blue-100 dark:bg-blue-500/10 text-blue-600 dark:text-blue-400 rounded-full text-sm"
                                 >
                                     {tag}
                                     <button
                                         type="button"
                                         onClick={() => handleRemoveTag(tag)}
-                                        className="hover:bg-primary/20 rounded-full p-0.5"
+                                        className="hover:bg-blue-200 dark:hover:bg-blue-500/20 rounded-full p-0.5"
                                     >
                                         <X className="w-3 h-3" />
                                     </button>
@@ -338,7 +338,7 @@ function EditCourseModal({ course, isOpen, onClose, onSave }) {
                     <button onClick={onClose} className="px-4 py-2 text-sm border border-light-border dark:border-dark-border rounded-lg hover:bg-light-surface dark:hover:bg-dark-bg" disabled={isSaving}>
                         Cancel
                     </button>
-                    <button onClick={handleSave} disabled={isSaving || !formData.title.trim()} className="px-4 py-2 text-sm bg-white/10 text-primary dark:text-white rounded-lg hover:bg-white/20 disabled:opacity-50 flex items-center gap-2 border border-white/10">
+                    <button onClick={handleSave} disabled={isSaving || !formData.title.trim()} className="px-4 py-2 text-sm bg-gray-900 dark:bg-white/10 text-white rounded-lg hover:bg-gray-800 dark:hover:bg-white/20 disabled:opacity-50 flex items-center gap-2">
                         {isSaving ? <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />Saving...</> : 'Save Changes'}
                     </button>
                 </div>

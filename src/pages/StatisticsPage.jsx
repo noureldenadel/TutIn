@@ -144,7 +144,7 @@ function StatisticsPage() {
             {/* Header */}
             <div className="mb-8">
                 <h1 className="text-2xl font-bold text-light-text-primary dark:text-dark-text-primary flex items-center gap-3">
-                    <BarChart3 className="w-7 h-7 text-primary" />
+                    <BarChart3 className="w-7 h-7 text-blue-600 dark:text-white" />
                     Learning Statistics
                 </h1>
                 <p className="text-light-text-secondary dark:text-dark-text-secondary mt-1">
@@ -190,7 +190,7 @@ function StatisticsPage() {
                 {/* Weekly Activity Chart */}
                 <div className="bg-white dark:bg-dark-surface rounded-xl border border-light-border dark:border-dark-border p-6">
                     <h3 className="font-semibold text-light-text-primary dark:text-dark-text-primary mb-4 flex items-center gap-2">
-                        <Calendar className="w-5 h-5 text-primary" />
+                        <Calendar className="w-5 h-5 text-blue-600 dark:text-white" />
                         This Week's Activity
                     </h3>
                     <div className="flex items-end justify-between gap-2 h-40">
@@ -202,14 +202,14 @@ function StatisticsPage() {
                                     <div className="w-full flex flex-col items-center justify-end h-28">
                                         <div
                                             className={`w-full max-w-8 rounded-t-lg transition-all ${day.isToday
-                                                ? 'bg-primary'
-                                                : 'bg-primary/40'
+                                                ? 'bg-blue-600 dark:bg-white'
+                                                : 'bg-blue-600/40 dark:bg-white/40'
                                                 }`}
                                             style={{ height: `${Math.max(height, 4)}%` }}
                                         />
                                     </div>
                                     <span className={`text-xs mt-2 ${day.isToday
-                                        ? 'text-primary font-semibold'
+                                        ? 'text-blue-600 dark:text-white font-semibold'
                                         : 'text-light-text-secondary dark:text-dark-text-secondary'
                                         }`}>
                                         {day.day}
@@ -226,7 +226,7 @@ function StatisticsPage() {
                 {/* Overall Progress */}
                 <div className="bg-white dark:bg-dark-surface rounded-xl border border-light-border dark:border-dark-border p-6">
                     <h3 className="font-semibold text-light-text-primary dark:text-dark-text-primary mb-4 flex items-center gap-2">
-                        <TrendingUp className="w-5 h-5 text-primary" />
+                        <TrendingUp className="w-5 h-5 text-blue-600 dark:text-white" />
                         Overall Progress
                     </h3>
                     <div className="space-y-4">
@@ -291,7 +291,7 @@ function StatisticsPage() {
             {stats.topInstructors.length > 0 && (
                 <div className="bg-white dark:bg-dark-surface rounded-xl border border-light-border dark:border-dark-border p-6">
                     <h3 className="font-semibold text-light-text-primary dark:text-dark-text-primary mb-4 flex items-center gap-2">
-                        <BookOpen className="w-5 h-5 text-primary" />
+                        <BookOpen className="w-5 h-5 text-blue-600 dark:text-white" />
                         Most Watched Instructors
                     </h3>
                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
@@ -308,8 +308,8 @@ function StatisticsPage() {
                                             className="w-12 h-12 rounded-full object-cover"
                                         />
                                     ) : (
-                                        <div className="w-12 h-12 rounded-full bg-primary/20 flex items-center justify-center">
-                                            <span className="text-lg font-bold text-primary">
+                                        <div className="w-12 h-12 rounded-full bg-blue-100 dark:bg-blue-500/20 flex items-center justify-center">
+                                            <span className="text-lg font-bold text-blue-600 dark:text-white">
                                                 {instructor.name.charAt(0).toUpperCase()}
                                             </span>
                                         </div>
@@ -318,7 +318,7 @@ function StatisticsPage() {
                                     <div className={`absolute -top-1 -right-1 w-5 h-5 rounded-full flex items-center justify-center text-xs font-bold ${index === 0 ? 'bg-yellow-400 text-yellow-900' :
                                         index === 1 ? 'bg-gray-300 text-gray-700' :
                                             index === 2 ? 'bg-orange-400 text-orange-900' :
-                                                'bg-primary/20 text-primary'
+                                                'bg-blue-100 dark:bg-blue-500/20 text-blue-600 dark:text-white'
                                         }`}>
                                         {index + 1}
                                     </div>

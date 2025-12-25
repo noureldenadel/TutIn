@@ -112,7 +112,7 @@ function HistoryPage() {
             {/* Header */}
             <div className="mb-8">
                 <h1 className="text-2xl font-bold text-light-text-primary dark:text-dark-text-primary flex items-center gap-3">
-                    <History className="w-7 h-7 text-primary" />
+                    <History className="w-7 h-7 text-blue-600 dark:text-white" />
                     Watch History
                 </h1>
                 <p className="text-light-text-secondary dark:text-dark-text-secondary mt-1">
@@ -122,21 +122,21 @@ function HistoryPage() {
 
             {/* Search */}
             {watchedVideos.length > 0 && (
-                <div className="relative mb-6">
-                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-light-text-secondary dark:text-dark-text-secondary" />
+                <div className="relative mb-8 max-w-md">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-neutral-400" />
                     <input
                         type="text"
                         placeholder="Search history..."
                         value={searchQuery}
                         onChange={(e) => setSearchQuery(e.target.value)}
-                        className="w-full max-w-md pl-10 pr-10 py-2.5 rounded-lg border border-light-border dark:border-dark-border bg-white dark:bg-dark-surface focus:ring-2 focus:ring-primary outline-none"
+                        className="w-full pl-10 pr-10 py-2 rounded-full border border-gray-300 dark:border-white/10 bg-gray-100 dark:bg-white/5 text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-neutral-400 focus:border-gray-400 dark:focus:border-white/20 outline-none focus:outline-none focus-visible:outline-none ring-0 focus:ring-0 transition-all"
                     />
                     {searchQuery && (
                         <button
                             onClick={() => setSearchQuery('')}
-                            className="absolute right-3 top-1/2 -translate-y-1/2 p-1 hover:bg-white/10 rounded"
+                            className="absolute right-3 top-1/2 -translate-y-1/2 p-1 hover:bg-gray-200 dark:hover:bg-white/10 rounded-full"
                         >
-                            <X className="w-4 h-4" />
+                            <X className="w-4 h-4 text-gray-500 dark:text-neutral-400" />
                         </button>
                     )}
                 </div>
@@ -148,7 +148,7 @@ function HistoryPage() {
                     {sections.map(section => (
                         <div key={section.key}>
                             <h2 className="text-lg font-semibold text-light-text-primary dark:text-dark-text-primary mb-4 flex items-center gap-2">
-                                <Calendar className="w-5 h-5 text-primary" />
+                                <Calendar className="w-5 h-5 text-blue-600 dark:text-white" />
                                 {section.label}
                             </h2>
                             <div className="bg-white dark:bg-dark-surface rounded-lg border border-light-border dark:border-dark-border overflow-hidden">

@@ -29,7 +29,6 @@ TutIn is a modern, powerful course learning platform that helps you organize, tr
 - [Browser Support](#-browser-support)
 - [Troubleshooting](#-troubleshooting)
 - [Contributing](#-contributing)
-- [License](#-license)
 
 ---
 

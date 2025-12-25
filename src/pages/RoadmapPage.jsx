@@ -353,7 +353,7 @@ function RoadmapPage() {
             <div className="flex items-center justify-between mb-4">
                 <div>
                     <h1 className="text-2xl font-bold text-light-text-primary dark:text-dark-text-primary flex items-center gap-3">
-                        <Map className="w-7 h-7 text-primary" />
+                        <Map className="w-7 h-7 text-blue-600 dark:text-white" />
                         Learning Roadmap
                     </h1>
                     <p className="text-light-text-secondary dark:text-dark-text-secondary mt-1">
@@ -381,7 +381,7 @@ function RoadmapPage() {
 
                     <button
                         onClick={() => setShowNewRoadmapModal(true)}
-                        className="p-2 rounded-lg bg-white/10 text-light-text-primary dark:text-dark-text-primary hover:bg-white/20 transition-colors border border-light-border dark:border-dark-border"
+                        className="p-2 rounded-lg bg-gray-100 dark:bg-white/10 text-gray-700 dark:text-white hover:bg-gray-200 dark:hover:bg-white/20 transition-colors border border-light-border dark:border-dark-border"
                         title="Create new roadmap"
                     >
                         <Plus className="w-5 h-5" />
@@ -406,7 +406,7 @@ function RoadmapPage() {
                     <div className="w-72 bg-white dark:bg-dark-surface rounded-xl border border-light-border dark:border-dark-border flex flex-col overflow-hidden">
                         <div className="p-4 border-b border-light-border dark:border-dark-border">
                             <h3 className="font-semibold text-light-text-primary dark:text-dark-text-primary flex items-center gap-2">
-                                <BookOpen className="w-5 h-5 text-primary" />
+                                <BookOpen className="w-5 h-5 text-blue-600 dark:text-white" />
                                 Courses
                             </h3>
                             <p className="text-xs text-light-text-secondary dark:text-dark-text-secondary mt-1">
@@ -422,8 +422,8 @@ function RoadmapPage() {
                                         onClick={() => !isOnCanvas && addCourseToCanvas(course)}
                                         disabled={isOnCanvas}
                                         className={`w-full p-3 rounded-lg text-left mb-2 transition-colors ${isOnCanvas
-                                            ? 'bg-primary/10 cursor-not-allowed opacity-60'
-                                            : 'bg-light-surface dark:bg-dark-bg hover:bg-primary/10'
+                                            ? 'bg-blue-100 dark:bg-blue-500/10 cursor-not-allowed opacity-60'
+                                            : 'bg-light-surface dark:bg-dark-bg hover:bg-blue-50 dark:hover:bg-blue-500/10'
                                             }`}
                                     >
                                         <div className="flex items-start gap-3">
@@ -448,7 +448,7 @@ function RoadmapPage() {
                                                 <div className="text-xs text-light-text-secondary dark:text-dark-text-secondary flex items-center gap-2 mt-1">
                                                     <span>{Math.round(course.completionPercentage || 0)}%</span>
                                                     {isOnCanvas && (
-                                                        <span className="text-primary">Added</span>
+                                                        <span className="text-blue-600 dark:text-blue-400">Added</span>
                                                     )}
                                                 </div>
                                             </div>
@@ -476,7 +476,7 @@ function RoadmapPage() {
                             onClick={() => setShowCoursePanel(prev => !prev)}
                             className={`p-2 rounded-lg shadow-md transition-colors border border-light-border dark:border-dark-border ${showCoursePanel
                                 ? 'bg-white dark:bg-dark-surface text-blue-600 dark:text-white'
-                                : 'bg-white dark:bg-dark-surface text-light-text-secondary dark:text-dark-text-secondary hover:bg-light-surface dark:hover:bg-dark-bg'
+                                : 'bg-white dark:bg-dark-surface text-gray-700 dark:text-dark-text-secondary hover:bg-light-surface dark:hover:bg-dark-bg'
                                 }`}
                             title="Toggle course panel"
                         >
@@ -654,7 +654,7 @@ function RoadmapPage() {
                                                     <span className="text-light-text-secondary dark:text-dark-text-secondary">
                                                         {course.completedVideos || 0}/{course.totalVideos || 0} videos
                                                     </span>
-                                                    <span className={`font-medium ${progress === 100 ? 'text-green-500' : 'text-primary'
+                                                    <span className={`font-medium ${progress === 100 ? 'text-green-500' : 'text-blue-600 dark:text-blue-400'
                                                         }`}>
                                                         {Math.round(progress)}%
                                                     </span>
@@ -663,7 +663,7 @@ function RoadmapPage() {
                                                     <div
                                                         className={`h-full rounded-full transition-all ${progress === 100
                                                             ? 'bg-green-500'
-                                                            : 'bg-gradient-to-r from-primary to-primary-dark'
+                                                            : 'bg-gradient-to-r from-blue-500 to-blue-600'
                                                             }`}
                                                         style={{ width: `${progress}%` }}
                                                     />
@@ -674,7 +674,7 @@ function RoadmapPage() {
                                             <div className="flex items-center gap-2 mt-auto">
                                                 <Link
                                                     to={`/course/${course.id}`}
-                                                    className="flex-1 flex items-center justify-center gap-1 px-3 py-1.5 bg-primary/10 text-primary rounded-lg text-xs font-medium hover:bg-primary/20 transition-colors"
+                                                    className="flex-1 flex items-center justify-center gap-1 px-3 py-1.5 bg-blue-100 dark:bg-blue-500/10 text-blue-600 dark:text-blue-400 rounded-lg text-xs font-medium hover:bg-blue-200 dark:hover:bg-blue-500/20 transition-colors"
                                                     onClick={(e) => e.stopPropagation()}
                                                 >
                                                     <Play className="w-3 h-3" />
@@ -687,7 +687,7 @@ function RoadmapPage() {
                                                     }}
                                                     className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${isConnecting
                                                         ? 'bg-green-500 text-white'
-                                                        : 'bg-light-surface dark:bg-dark-bg hover:bg-primary/10 text-light-text-primary dark:text-dark-text-primary'
+                                                        : 'bg-light-surface dark:bg-dark-bg hover:bg-blue-50 dark:hover:bg-blue-500/10 text-light-text-primary dark:text-dark-text-primary'
                                                         }`}
                                                     title={isConnecting ? 'Click another node to connect' : 'Connect to another course'}
                                                 >
@@ -736,7 +736,7 @@ function RoadmapPage() {
                                     <p className="text-lg font-medium mb-4">No roadmap selected</p>
                                     <button
                                         onClick={() => setShowNewRoadmapModal(true)}
-                                        className="px-6 py-2.5 rounded-full bg-white/10 text-primary dark:text-white hover:bg-white/20 transition-all border border-white/10 flex items-center gap-2"
+                                        className="px-6 py-2.5 rounded-full bg-gray-100 dark:bg-white/10 text-gray-700 dark:text-white hover:bg-gray-200 dark:hover:bg-white/20 transition-all border border-gray-300 dark:border-white/10 flex items-center gap-2"
                                     >
                                         <Plus className="w-5 h-5" />
                                         Create Your First Roadmap
@@ -767,7 +767,7 @@ function RoadmapPage() {
                             value={newRoadmapTitle}
                             onChange={(e) => setNewRoadmapTitle(e.target.value)}
                             placeholder="Roadmap title..."
-                            className="w-full px-4 py-3 rounded-lg border border-light-border dark:border-dark-border bg-white dark:bg-dark-surface focus:ring-2 focus:ring-primary outline-none mb-4"
+                            className="w-full px-4 py-3 rounded-lg border border-light-border dark:border-dark-border bg-white dark:bg-dark-surface focus:border-blue-500 dark:focus:border-blue-400 outline-none focus:outline-none ring-0 focus:ring-0 mb-4"
                             autoFocus
                             onKeyDown={(e) => e.key === 'Enter' && createNewRoadmap()}
                         />
@@ -784,7 +784,7 @@ function RoadmapPage() {
                             <button
                                 onClick={createNewRoadmap}
                                 disabled={!newRoadmapTitle.trim()}
-                                className="flex-1 px-4 py-2 rounded-lg bg-white/10 text-primary dark:text-white hover:bg-white/20 disabled:opacity-50 transition-colors border border-white/10"
+                                className="flex-1 px-4 py-2 rounded-lg bg-gray-900 dark:bg-white/10 text-white hover:bg-gray-800 dark:hover:bg-white/20 disabled:opacity-50 transition-colors"
                             >
                                 Create
                             </button>

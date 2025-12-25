@@ -87,7 +87,7 @@ function SettingsModal({ isOpen, onClose }) {
                     w-full flex items-center gap-3 px-3 py-2 rounded-lg text-left text-sm
                     transition-colors mb-1
                     ${activeTab === tab.id
-                                            ? 'bg-primary/10 text-primary font-medium'
+                                            ? 'bg-blue-100 dark:bg-blue-500/10 text-blue-600 dark:text-white font-medium'
                                             : 'hover:bg-gray-100 dark:hover:bg-white/10 text-light-text-secondary dark:text-dark-text-secondary'
                                         }
                   `}
@@ -133,12 +133,12 @@ function SettingsModal({ isOpen, onClose }) {
                                                     className={`
                             flex-1 flex flex-col items-center gap-2 p-3 rounded-lg border-2 transition-all
                             ${isSelected
-                                                            ? 'border-primary bg-primary/5'
-                                                            : 'border-light-border dark:border-dark-border hover:border-primary/50'
+                                                            ? 'border-blue-500 bg-blue-50 dark:bg-blue-500/5'
+                                                            : 'border-light-border dark:border-dark-border hover:border-blue-400'
                                                         }
                           `}
                                                 >
-                                                    <Icon className={`w-5 h-5 ${isSelected ? 'text-primary' : ''}`} />
+                                                    <Icon className={`w-5 h-5 ${isSelected ? 'text-blue-600 dark:text-white' : ''}`} />
                                                     <span className="text-sm">{option.label}</span>
                                                 </button>
                                             )
@@ -185,8 +185,8 @@ function SettingsModal({ isOpen, onClose }) {
                                                 className={`
                           w-full flex items-center justify-between p-3 rounded-lg border-2 transition-all text-left
                           ${settings.density === option.value
-                                                        ? 'border-primary bg-primary/5'
-                                                        : 'border-light-border dark:border-dark-border hover:border-primary/50'
+                                                        ? 'border-blue-500 bg-blue-50 dark:bg-blue-500/5'
+                                                        : 'border-light-border dark:border-dark-border hover:border-blue-400'
                                                     }
                         `}
                                             >
@@ -197,7 +197,7 @@ function SettingsModal({ isOpen, onClose }) {
                                                     </div>
                                                 </div>
                                                 {settings.density === option.value && (
-                                                    <Check className="w-5 h-5 text-primary" />
+                                                    <Check className="w-5 h-5 text-blue-600 dark:text-white" />
                                                 )}
                                             </button>
                                         ))}
@@ -215,8 +215,8 @@ function SettingsModal({ isOpen, onClose }) {
                                                 className={`
                           flex-1 p-3 rounded-lg border-2 transition-all
                           ${settings.fontSize === option.value
-                                                        ? 'border-primary bg-primary/5'
-                                                        : 'border-light-border dark:border-dark-border hover:border-primary/50'
+                                                        ? 'border-blue-500 bg-blue-50 dark:bg-blue-500/5'
+                                                        : 'border-light-border dark:border-dark-border hover:border-blue-400'
                                                     }
                         `}
                                             >
@@ -247,7 +247,7 @@ function SettingsModal({ isOpen, onClose }) {
                                         onClick={() => updateSettings({ resumePlayback: !settings.resumePlayback })}
                                         className={`
                       w-12 h-6 rounded-full transition-colors relative
-                      ${settings.resumePlayback ? 'bg-primary' : 'bg-gray-300 dark:bg-gray-600'}
+                      ${settings.resumePlayback ? 'bg-blue-600 dark:bg-blue-500' : 'bg-gray-300 dark:bg-gray-600'}
                     `}
                                     >
                                         <div className={`
@@ -270,8 +270,8 @@ function SettingsModal({ isOpen, onClose }) {
                                                 className={`
                           flex-1 p-3 rounded-lg border-2 transition-all text-center
                           ${settings.autoMarkCompleteAt === option.value
-                                                        ? 'border-primary bg-primary/5'
-                                                        : 'border-light-border dark:border-dark-border hover:border-primary/50'
+                                                        ? 'border-blue-500 bg-blue-50 dark:bg-blue-500/5'
+                                                        : 'border-light-border dark:border-dark-border hover:border-blue-400'
                                                     }
                         `}
                                             >
@@ -301,8 +301,8 @@ function SettingsModal({ isOpen, onClose }) {
                                                 className={`
                           w-full flex items-center justify-between p-3 rounded-lg border-2 transition-all text-left
                           ${settings.progressCalculationMode === option.value
-                                                        ? 'border-primary bg-primary/5'
-                                                        : 'border-light-border dark:border-dark-border hover:border-primary/50'
+                                                        ? 'border-blue-500 bg-blue-50 dark:bg-blue-500/5'
+                                                        : 'border-light-border dark:border-dark-border hover:border-blue-400'
                                                     }
                         `}
                                             >
@@ -313,7 +313,7 @@ function SettingsModal({ isOpen, onClose }) {
                                                     </div>
                                                 </div>
                                                 {settings.progressCalculationMode === option.value && (
-                                                    <Check className="w-5 h-5 text-primary" />
+                                                    <Check className="w-5 h-5 text-blue-600 dark:text-white" />
                                                 )}
                                             </button>
                                         ))}
@@ -326,7 +326,7 @@ function SettingsModal({ isOpen, onClose }) {
                                     <select
                                         value={settings.defaultSpeed}
                                         onChange={(e) => updateSettings({ defaultSpeed: parseFloat(e.target.value) })}
-                                        className="w-full p-3 rounded-lg border border-light-border dark:border-dark-border bg-white dark:bg-dark-bg focus:ring-2 focus:ring-primary outline-none"
+                                        className="w-full p-3 rounded-lg border border-light-border dark:border-dark-border bg-white dark:bg-dark-bg focus:border-blue-500 dark:focus:border-blue-400 outline-none focus:outline-none ring-0 focus:ring-0"
                                     >
                                         {[0.5, 0.75, 1, 1.25, 1.5, 1.75, 2].map(speed => (
                                             <option key={speed} value={speed}>{speed}x</option>
@@ -343,7 +343,7 @@ function SettingsModal({ isOpen, onClose }) {
                                         max="60"
                                         value={settings.skipIntro}
                                         onChange={(e) => updateSettings({ skipIntro: parseInt(e.target.value) || 0 })}
-                                        className="w-full p-3 rounded-lg border border-light-border dark:border-dark-border bg-white dark:bg-dark-bg focus:ring-2 focus:ring-primary outline-none"
+                                        className="w-full p-3 rounded-lg border border-light-border dark:border-dark-border bg-white dark:bg-dark-bg focus:border-blue-500 dark:focus:border-blue-400 outline-none focus:outline-none ring-0 focus:ring-0"
                                         placeholder="0"
                                     />
                                     <p className="text-xs text-light-text-secondary dark:text-dark-text-secondary mt-1">
@@ -360,7 +360,7 @@ function SettingsModal({ isOpen, onClose }) {
                                         max="60"
                                         value={settings.skipOutro}
                                         onChange={(e) => updateSettings({ skipOutro: parseInt(e.target.value) || 0 })}
-                                        className="w-full p-3 rounded-lg border border-light-border dark:border-dark-border bg-white dark:bg-dark-bg focus:ring-2 focus:ring-primary outline-none"
+                                        className="w-full p-3 rounded-lg border border-light-border dark:border-dark-border bg-white dark:bg-dark-bg focus:border-blue-500 dark:focus:border-blue-400 outline-none focus:outline-none ring-0 focus:ring-0"
                                         placeholder="0"
                                     />
                                     <p className="text-xs text-light-text-secondary dark:text-dark-text-secondary mt-1">
@@ -384,7 +384,7 @@ function SettingsModal({ isOpen, onClose }) {
                                         onClick={() => updateSettings({ keyboardShortcuts: !settings.keyboardShortcuts })}
                                         className={`
                       w-12 h-6 rounded-full transition-colors relative
-                      ${settings.keyboardShortcuts ? 'bg-primary' : 'bg-gray-300 dark:bg-gray-600'}
+                      ${settings.keyboardShortcuts ? 'bg-blue-600 dark:bg-blue-500' : 'bg-gray-300 dark:bg-gray-600'}
                     `}
                                     >
                                         <div className={`
@@ -507,7 +507,7 @@ function SettingsModal({ isOpen, onClose }) {
                                                             alert('Failed to select folder: ' + err.message)
                                                         }
                                                     }}
-                                                    className="flex items-center gap-2 px-4 py-2 bg-white/10 text-primary dark:text-white rounded-lg hover:bg-white/20 transition-colors border border-white/10"
+                                                    className="flex items-center gap-2 px-4 py-2 bg-gray-900 dark:bg-white/10 text-white rounded-lg hover:bg-gray-800 dark:hover:bg-white/20 transition-colors"
                                                 >
                                                     <FolderOpen className="w-4 h-4" />
                                                     {hasRootFolderAccess() ? 'Change Folder' : hasStoredRootFolder() ? 'Pick Different Folder' : 'Select Folder'}
@@ -556,7 +556,7 @@ function SettingsModal({ isOpen, onClose }) {
                                                 alert('Failed to export data: ' + err.message)
                                             }
                                         }}
-                                        className="flex items-center gap-2 px-4 py-2 bg-white/10 text-primary dark:text-white rounded-lg hover:bg-white/20 transition-colors border border-white/10"
+                                        className="flex items-center gap-2 px-4 py-2 bg-gray-900 dark:bg-white/10 text-white rounded-lg hover:bg-gray-800 dark:hover:bg-white/20 transition-colors"
                                     >
                                         <Download className="w-4 h-4" />
                                         Export Backup

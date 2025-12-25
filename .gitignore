@@ -41,3 +41,9 @@ coverage
 
 # Local development
 *.local
+
+# User data (should not be committed)
+data/
+
+# Development artifacts
+.gemini/

@@ -54,7 +54,7 @@ function ProfilePage() {
             {/* Header */}
             <div className="mb-8">
                 <h1 className="text-2xl font-bold text-light-text-primary dark:text-dark-text-primary flex items-center gap-3">
-                    <User className="w-7 h-7 text-primary" />
+                    <User className="w-7 h-7 text-blue-600 dark:text-white" />
                     Profile
                 </h1>
                 <p className="text-light-text-secondary dark:text-dark-text-secondary mt-1">
