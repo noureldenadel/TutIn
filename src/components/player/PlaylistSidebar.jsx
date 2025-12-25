@@ -170,7 +170,7 @@ function PlaylistSidebar({
                             <span className="text-light-text-secondary dark:text-dark-text-secondary">
                                 {completedVideos}/{totalVideos} videos completed
                             </span>
-                            <span className="font-medium text-primary">
+                            <span className="font-medium text-blue-600 dark:text-white">
                                 {Math.round(progressPercentage)}%
                             </span>
                         </div>
@@ -192,7 +192,7 @@ function PlaylistSidebar({
                         <button
                             onClick={() => setActiveTab('playlist')}
                             className={`flex-1 py-2 text-sm font-medium border-b-2 transition-colors ${activeTab === 'playlist'
-                                ? 'border-primary text-primary'
+                                ? 'border-blue-600 text-blue-600 dark:border-white dark:text-white'
                                 : 'border-transparent text-light-text-secondary dark:text-dark-text-secondary hover:text-light-text-primary dark:hover:text-dark-text-primary'
                                 }`}
                         >
@@ -201,7 +201,7 @@ function PlaylistSidebar({
                         <button
                             onClick={() => setActiveTab('notes')}
                             className={`flex-1 py-2 text-sm font-medium border-b-2 transition-colors ${activeTab === 'notes'
-                                ? 'border-primary text-primary'
+                                ? 'border-blue-600 text-blue-600 dark:border-white dark:text-white'
                                 : 'border-transparent text-light-text-secondary dark:text-dark-text-secondary hover:text-light-text-primary dark:hover:text-dark-text-primary'
                                 }`}
                         >
@@ -210,7 +210,7 @@ function PlaylistSidebar({
                         <button
                             onClick={() => setActiveTab('ai')}
                             className={`flex-1 py-2 text-sm font-medium border-b-2 transition-colors ${activeTab === 'ai'
-                                ? 'border-primary text-primary'
+                                ? 'border-blue-600 text-blue-600 dark:border-white dark:text-white'
                                 : 'border-transparent text-light-text-secondary dark:text-dark-text-secondary hover:text-light-text-primary dark:hover:text-dark-text-primary'
                                 }`}
                         >
@@ -279,7 +279,7 @@ function PlaylistSidebar({
                                                                     w-full flex items-start gap-3 px-4 py-2 text-left cursor-pointer
                                                                     transition-colors group text-sm
                                                                     ${isActive
-                                                                    ? 'bg-primary/10 border-l-2 border-primary'
+                                                                    ? 'bg-blue-100 dark:bg-primary/10 border-l-2 border-blue-600 dark:border-primary'
                                                                     : 'hover:bg-light-surface dark:hover:bg-dark-bg border-l-2 border-transparent'
                                                                 }
                                                                 `}
@@ -301,7 +301,7 @@ function PlaylistSidebar({
 
                                                             {/* Title */}
                                                             <div className="flex-1 min-w-0">
-                                                                <div className={`line-clamp-2 ${isCompleted ? 'text-light-text-secondary dark:text-dark-text-secondary line-through' : ''} ${isActive ? 'text-primary font-medium' : ''}`}>
+                                                                <div className={`line-clamp-2 ${isCompleted ? 'text-light-text-secondary dark:text-dark-text-secondary line-through' : ''} ${isActive ? 'text-blue-600 dark:text-white font-medium' : ''}`}>
                                                                     {video.title}
                                                                 </div>
                                                                 <div className="flex items-center gap-2 mt-0.5 text-xs text-light-text-secondary dark:text-dark-text-secondary">

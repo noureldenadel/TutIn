@@ -322,8 +322,8 @@ function HomePage() {
                                     key={filter}
                                     onClick={() => setActiveFilter(filter)}
                                     className={`flex-shrink-0 px-4 py-1.5 rounded-full text-sm font-medium transition-colors ${activeFilter === filter
-                                        ? 'bg-white/20 dark:bg-white/10 text-white dark:text-white'
-                                        : 'bg-white/5 dark:bg-white/5 text-neutral-400 hover:bg-white/10 dark:hover:bg-white/10 hover:text-white'
+                                        ? 'bg-gray-900 dark:bg-white/10 text-white'
+                                        : 'bg-gray-100 dark:bg-white/5 text-gray-600 dark:text-neutral-400 hover:bg-gray-200 dark:hover:bg-white/10 hover:text-gray-900 dark:hover:text-white'
                                         }`}
                                 >
                                     {filter === 'all' ? 'All' :
@@ -337,8 +337,8 @@ function HomePage() {
                                     key={tag}
                                     onClick={() => setActiveFilter(tag)}
                                     className={`flex-shrink-0 px-4 py-1.5 rounded-full text-sm font-medium transition-colors ${activeFilter === tag
-                                        ? 'bg-white/20 dark:bg-white/10 text-white dark:text-white'
-                                        : 'bg-white/5 dark:bg-white/5 text-neutral-400 hover:bg-white/10 dark:hover:bg-white/10 hover:text-white'
+                                        ? 'bg-gray-900 dark:bg-white/10 text-white'
+                                        : 'bg-gray-100 dark:bg-white/5 text-gray-600 dark:text-neutral-400 hover:bg-gray-200 dark:hover:bg-white/10 hover:text-gray-900 dark:hover:text-white'
                                         }`}
                                 >
                                     {tag}

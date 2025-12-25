@@ -222,7 +222,7 @@ function AISummaryPanel({ video, courseId, onSeek, onVideoDataChange, currentTim
                             onClick={() => handleGenerateSummary()}
                             disabled={!canGenerate}
                             className={`px-4 py-2 rounded-lg flex items-center gap-2 mx-auto transition-colors ${canGenerate
-                                ? 'bg-primary text-white hover:bg-primary/90'
+                                ? 'bg-gray-900 dark:bg-white/10 text-white hover:bg-gray-800 dark:hover:bg-white/20'
                                 : 'bg-gray-300 dark:bg-gray-700 text-gray-500 cursor-not-allowed'
                                 }`}
                         >

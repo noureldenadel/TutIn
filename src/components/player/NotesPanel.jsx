@@ -149,7 +149,7 @@ function NotesPanel({
                     <div className="flex flex-wrap items-center gap-2">
                         <button
                             onClick={() => { setShowAddNote(true); setEditingNote(null) }}
-                            className="flex items-center gap-2 px-3 py-1.5 bg-primary text-white rounded-lg hover:bg-primary/90 transition-colors text-sm"
+                            className="flex items-center gap-2 px-3 py-1.5 bg-gray-900 dark:bg-white/10 text-white rounded-lg hover:bg-gray-800 dark:hover:bg-white/20 transition-colors text-sm"
                         >
                             <Plus className="w-4 h-4" />
                             Add Note at {formatDuration(currentTime)}
@@ -198,7 +198,7 @@ function NotesPanel({
                                 <button
                                     onClick={editingNote ? handleUpdateNote : handleAddNote}
                                     disabled={!noteContent.trim()}
-                                    className="px-3 py-1.5 text-sm bg-primary text-white rounded-lg hover:bg-primary/90 disabled:opacity-50"
+                                    className="px-3 py-1.5 text-sm bg-gray-900 dark:bg-white/10 text-white rounded-lg hover:bg-gray-800 dark:hover:bg-white/20 disabled:opacity-50"
                                 >
                                     {editingNote ? 'Save Changes' : 'Add Note'}
                                 </button>
@@ -225,7 +225,7 @@ function NotesPanel({
                                     <div className="flex items-start justify-between gap-2">
                                         <button
                                             onClick={() => onSeek?.(note.timestamp)}
-                                            className="flex items-center gap-1 text-sm text-primary hover:underline"
+                                            className="flex items-center gap-1 text-sm text-blue-600 dark:text-primary hover:underline"
                                         >
                                             <Clock className="w-3 h-3" />
                                             {formatDuration(note.timestamp)}

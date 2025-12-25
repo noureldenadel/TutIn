@@ -158,7 +158,7 @@ function InstructorsPage() {
                                 {course.completionPercentage > 0 && (
                                     <div className="absolute bottom-0 left-0 right-0 h-1 bg-black/30">
                                         <div
-                                            className="h-full bg-primary"
+                                            className="h-full bg-blue-600 dark:bg-white"
                                             style={{ width: `${course.completionPercentage}%` }}
                                         />
                                     </div>
@@ -240,7 +240,7 @@ function InstructorsPage() {
                                             </div>
                                             <div className="h-2 bg-light-surface dark:bg-dark-bg rounded-full overflow-hidden">
                                                 <div
-                                                    className="h-full bg-gradient-to-r from-primary to-primary-dark rounded-full transition-all"
+                                                    className="h-full bg-blue-600 dark:bg-white rounded-full transition-all"
                                                     style={{ width: `${(instructor.completedVideos / instructor.totalVideos) * 100}%` }}
                                                 />
                                             </div>

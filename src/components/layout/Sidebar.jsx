@@ -98,7 +98,7 @@ function Sidebar() {
                                         flex items-center gap-4 px-3 py-3 rounded-full
                                         transition-all duration-300 group
                                         ${isActive(path)
-                                            ? 'bg-primary/10 text-primary dark:bg-white/10 dark:text-white shadow-sm'
+                                            ? 'bg-blue-100 text-blue-700 dark:bg-white/10 dark:text-white'
                                             : 'text-gray-600 dark:text-neutral-400 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-white/5'
                                         }
                                         ${!isExpanded ? 'justify-center' : ''}

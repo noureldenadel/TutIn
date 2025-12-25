@@ -88,7 +88,7 @@ function SettingsModal({ isOpen, onClose }) {
                     transition-colors mb-1
                     ${activeTab === tab.id
                                             ? 'bg-primary/10 text-primary font-medium'
-                                            : 'hover:bg-white/10 text-light-text-secondary dark:text-dark-text-secondary'
+                                            : 'hover:bg-gray-100 dark:hover:bg-white/10 text-light-text-secondary dark:text-dark-text-secondary'
                                         }
                   `}
                                 >
@@ -659,7 +659,7 @@ function SettingsModal({ isOpen, onClose }) {
                     </button>
                     <button
                         onClick={onClose}
-                        className="px-6 py-2 rounded-lg bg-white/10 text-primary dark:text-white hover:bg-white/20 transition-colors text-sm font-medium border border-white/10"
+                        className="px-6 py-2 rounded-lg bg-gray-900 dark:bg-white/10 text-white hover:bg-gray-800 dark:hover:bg-white/20 transition-colors text-sm font-medium"
                     >
                         Done
                     </button>

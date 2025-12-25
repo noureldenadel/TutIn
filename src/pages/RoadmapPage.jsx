@@ -475,7 +475,7 @@ function RoadmapPage() {
                         <button
                             onClick={() => setShowCoursePanel(prev => !prev)}
                             className={`p-2 rounded-lg shadow-md transition-colors border border-light-border dark:border-dark-border ${showCoursePanel
-                                ? 'bg-white dark:bg-dark-surface text-primary'
+                                ? 'bg-white dark:bg-dark-surface text-blue-600 dark:text-white'
                                 : 'bg-white dark:bg-dark-surface text-light-text-secondary dark:text-dark-text-secondary hover:bg-light-surface dark:hover:bg-dark-bg'
                                 }`}
                             title="Toggle course panel"
@@ -548,7 +548,16 @@ function RoadmapPage() {
                                     const arrow2Y = to.y - Math.sin(arrowAngle + arrowSpread) * arrowLength
 
                                     return (
-                                        <g key={conn.id} className="pointer-events-auto cursor-pointer group" onClick={() => removeConnection(conn.id)}>
+                                        <g key={conn.id} className="cursor-pointer group">
+                                            {/* Invisible wider hit area for easier clicking */}
+                                            <path
+                                                d={`M ${from.x} ${from.y} C ${cp1.x} ${cp1.y}, ${cp2.x} ${cp2.y}, ${to.x} ${to.y}`}
+                                                fill="none"
+                                                stroke="transparent"
+                                                strokeWidth="20"
+                                                style={{ pointerEvents: 'stroke' }}
+                                                onClick={(e) => { e.stopPropagation(); removeConnection(conn.id); }}
+                                            />
                                             {/* Connection line - cubic bezier for smooth curves */}
                                             <path
                                                 d={`M ${from.x} ${from.y} C ${cp1.x} ${cp1.y}, ${cp2.x} ${cp2.y}, ${to.x} ${to.y}`}
@@ -556,14 +565,22 @@ function RoadmapPage() {
                                                 stroke="var(--primary)"
                                                 strokeWidth="2.5"
                                                 strokeLinecap="round"
-                                                className="group-hover:stroke-red-500 transition-colors"
+                                                className="group-hover:stroke-red-500 transition-colors pointer-events-none"
                                             />
                                             {/* Arrow head at endpoint */}
                                             <polygon
                                                 points={`${to.x},${to.y} ${arrow1X},${arrow1Y} ${arrow2X},${arrow2Y}`}
                                                 fill="var(--primary)"
-                                                className="group-hover:fill-red-500 transition-colors"
+                                                className="group-hover:fill-red-500 transition-colors pointer-events-none"
                                             />
+                                            {/* Delete indicator on hover - shows at midpoint */}
+                                            <g
+                                                className="opacity-0 group-hover:opacity-100 transition-opacity"
+                                                transform={`translate(${(from.x + to.x) / 2}, ${(from.y + to.y) / 2})`}
+                                            >
+                                                <circle r="12" fill="white" stroke="#ef4444" strokeWidth="2" />
+                                                <text x="0" y="1" textAnchor="middle" dominantBaseline="middle" fill="#ef4444" fontSize="14" fontWeight="bold">×</text>
+                                            </g>
                                         </g>
                                     )
                                 })}

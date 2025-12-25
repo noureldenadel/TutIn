@@ -105,7 +105,7 @@ function CourseCard({ course, viewMode = 'grid', onRefresh, onEdit }) {
                     {/* Progress Bar */}
                     <div className="mt-3 progress-bar h-1.5 bg-gray-200 dark:bg-white/10 rounded-full overflow-hidden">
                         <div
-                            className="h-full bg-primary dark:bg-white rounded-full shadow-sm dark:shadow-[0_0_10px_rgba(255,255,255,0.5)] transition-all duration-300"
+                            className="h-full bg-blue-600 dark:bg-white rounded-full transition-all duration-300"
                             style={{ width: `${completionPercentage}%` }}
                         />
                     </div>
@@ -135,7 +135,7 @@ function CourseCard({ course, viewMode = 'grid', onRefresh, onEdit }) {
         <>
             <Link
                 to={`/course/${course.id}`}
-                className="group glass rounded-2xl overflow-hidden hover:shadow-xl dark:hover:shadow-[0_0_30px_rgba(255,255,255,0.05)] transition-all duration-500 hover:-translate-y-1 relative"
+                className="group glass rounded-2xl overflow-hidden transition-all duration-500 hover:-translate-y-1 relative"
             >
                 {/* Thumbnail */}
                 <div className="aspect-video bg-gray-200 dark:bg-neutral-900 relative overflow-hidden">
@@ -208,34 +208,36 @@ function CourseCard({ course, viewMode = 'grid', onRefresh, onEdit }) {
 
                 {/* Content */}
                 <div className="p-5 flex flex-col h-full relative z-10">
-                    <h3 className="font-semibold text-gray-900 dark:text-white truncate mb-1 text-lg tracking-tight group-hover:text-primary transition-colors">
+                    <h3 className="font-semibold text-gray-900 dark:text-white truncate mb-1 text-lg tracking-tight group-hover:text-gray-700 dark:group-hover:text-gray-200 transition-colors">
                         {course.title}
                     </h3>
 
                     {/* Instructor */}
                     {course.instructor && (
-                        <div
-                            className="flex items-center gap-2 mb-4 cursor-pointer hover:opacity-80 transition-opacity"
-                            onClick={handleInstructorClick}
-                            title={`View ${course.instructor}'s profile`}
-                        >
-                            <div className="w-5 h-5 rounded-full bg-gray-100 dark:bg-neutral-800 border border-gray-200 dark:border-white/10 flex items-center justify-center text-gray-600 dark:text-white text-[10px] font-medium overflow-hidden">
-                                {instructorAvatar ? (
-                                    <img src={instructorAvatar} alt="" className="w-full h-full object-cover" />
-                                ) : (
-                                    course.instructor.charAt(0).toUpperCase()
-                                )}
+                        <div className="mb-4">
+                            <div
+                                className="inline-flex items-center gap-2 cursor-pointer hover:opacity-80 transition-opacity"
+                                onClick={handleInstructorClick}
+                                title={`View ${course.instructor}'s profile`}
+                            >
+                                <div className="w-5 h-5 rounded-full bg-gray-100 dark:bg-neutral-800 border border-gray-200 dark:border-white/10 flex items-center justify-center text-gray-600 dark:text-white text-[10px] font-medium overflow-hidden flex-shrink-0">
+                                    {instructorAvatar ? (
+                                        <img src={instructorAvatar} alt="" className="w-full h-full object-cover" />
+                                    ) : (
+                                        course.instructor.charAt(0).toUpperCase()
+                                    )}
+                                </div>
+                                <span className="text-xs text-gray-500 dark:text-neutral-400 truncate hover:text-gray-700 dark:hover:text-white transition-colors">
+                                    {course.instructor}
+                                </span>
                             </div>
-                            <span className="text-xs text-gray-500 dark:text-neutral-400 truncate hover:text-primary dark:hover:text-white transition-colors">
-                                {course.instructor}
-                            </span>
                         </div>
                     )}
 
                     {/* Progress Bar */}
                     <div className="progress-bar mb-3 h-1 bg-gray-100 dark:bg-white/5 rounded-full overflow-hidden">
                         <div
-                            className="h-full bg-primary dark:bg-white shadow-sm dark:shadow-[0_0_8px_rgba(255,255,255,0.5)] rounded-full transition-all duration-300"
+                            className="h-full bg-blue-600 dark:bg-white rounded-full transition-all duration-300"
                             style={{ width: `${completionPercentage}%` }}
                         />
                     </div>

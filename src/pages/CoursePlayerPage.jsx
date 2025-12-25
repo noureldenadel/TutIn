@@ -242,25 +242,27 @@ function CoursePlayerPage() {
                                     </h3>
                                 </div>
 
-                                <div
-                                    className="flex items-center gap-4 pt-6 border-t border-light-border dark:border-dark-border cursor-pointer hover:opacity-80 transition-opacity"
-                                    onClick={() => course?.instructor && navigate(`/instructors?filter=${encodeURIComponent(course.instructor)}`)}
-                                    title={course?.instructor ? `View ${course.instructor}'s profile` : ''}
-                                >
-                                    <div className="w-12 h-12 rounded-full bg-light-surface dark:bg-dark-surface border border-light-border dark:border-dark-border flex items-center justify-center overflow-hidden">
-                                        {instructorAvatar ? (
-                                            <img src={instructorAvatar} alt="" className="w-full h-full object-cover" />
-                                        ) : (
-                                            <span className="text-lg font-bold text-primary">
-                                                {course?.instructor ? course.instructor.charAt(0).toUpperCase() : 'I'}
-                                            </span>
-                                        )}
-                                    </div>
-                                    <div>
-                                        <p className="font-semibold hover:text-primary transition-colors">{course?.instructor || 'Instructor'}</p>
-                                        <p className="text-sm text-light-text-secondary dark:text-dark-text-secondary">
-                                            Course Instructor
-                                        </p>
+                                <div className="pt-6 border-t border-light-border dark:border-dark-border">
+                                    <div
+                                        className="inline-flex items-center gap-4 cursor-pointer hover:opacity-80 transition-opacity"
+                                        onClick={() => course?.instructor && navigate(`/instructors?filter=${encodeURIComponent(course.instructor)}`)}
+                                        title={course?.instructor ? `View ${course.instructor}'s profile` : ''}
+                                    >
+                                        <div className="w-12 h-12 rounded-full bg-light-surface dark:bg-dark-surface border border-light-border dark:border-dark-border flex items-center justify-center overflow-hidden flex-shrink-0">
+                                            {instructorAvatar ? (
+                                                <img src={instructorAvatar} alt="" className="w-full h-full object-cover" />
+                                            ) : (
+                                                <span className="text-lg font-bold text-blue-600 dark:text-white">
+                                                    {course?.instructor ? course.instructor.charAt(0).toUpperCase() : 'I'}
+                                                </span>
+                                            )}
+                                        </div>
+                                        <div>
+                                            <p className="font-semibold hover:text-gray-700 dark:hover:text-white transition-colors">{course?.instructor || 'Instructor'}</p>
+                                            <p className="text-sm text-light-text-secondary dark:text-dark-text-secondary">
+                                                Course Instructor
+                                            </p>
+                                        </div>
                                     </div>
                                 </div>
                             </div>
