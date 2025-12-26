@@ -4,7 +4,7 @@
 
 TutIn is a modern, powerful course learning platform that helps you organize, track, and master video courses from multiple sources. Built with React and powered by cutting-edge AI, it works completely offline after initial setup and gives you full control over your learning journey.
 
-![TutIn](./docs/screenshot.png)
+![TutIn](./screenshot.png)
 
 ## ✨ Why TutIn?
 
