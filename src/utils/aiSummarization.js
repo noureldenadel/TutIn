@@ -249,7 +249,12 @@ async function generateAISummary(transcript, onProgress) {
 
     onProgress?.({ stage: 'summarizing', progress: 0.1, message: 'Connecting to AI...' })
 
-    const OPENROUTER_API_KEY = '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'
+    // Get API key from environment variable (user must provide their own)
+    const OPENROUTER_API_KEY = import.meta.env.VITE_OPENROUTER_API_KEY
+
+    if (!OPENROUTER_API_KEY) {
+        throw new Error('OpenRouter API key not configured. Please add VITE_OPENROUTER_API_KEY to your .env file.')
+    }
 
     // Truncate transcript if too long (Gemini has token limits)
     const maxChars = 15000
