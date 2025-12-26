@@ -253,7 +253,6 @@ Once installed, check out these guides:
 - **[README.md](README.md)**: Complete feature documentation
 - **[Keyboard Shortcuts](README.md#%EF%B8%8F-keyboard-shortcuts)**: Learn efficient navigation
 - **[Usage Guide](README.md#-usage)**: Detailed usage instructions
-- **[CHANGELOG.md](CHANGELOG.md)**: See what's new in each version
 
 ---
 
