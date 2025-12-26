@@ -1,7 +1,22 @@
 {
   "name": "tutin",
-  "private": true,
-  "version": "0.0.1",
+  "version": "2.0.0",
+  "description": "AI-Powered Course Learning Platform - Lock In & Learn",
+  "author": "noor",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/noureldenadel/TutIn.git"
+  },
+  "keywords": [
+    "course-management",
+    "video-player",
+    "ai-transcription",
+    "learning-platform",
+    "offline-first",
+    "react",
+    "vite"
+  ],
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -34,6 +49,7 @@
     "globals": "^15.14.0",
     "postcss": "^8.4.49",
     "tailwindcss": "^3.4.17",
+    "terser": "^5.44.1",
     "vite": "^6.0.5"
   }
 }

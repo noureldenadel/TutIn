@@ -1,10 +1,29 @@
 # TutIn - AI-Powered Course Learning Platform
 
+[![Version](https://img.shields.io/badge/version-2.0.0-blue.svg)](https://github.com/noureldenadel/TutIn/releases)
+[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+
 > **Lock In & Learn** - Your offline-first, AI-enhanced video course management system
 
 TutIn is a modern, powerful course learning platform that helps you organize, track, and master video courses from multiple sources. Built with React and powered by cutting-edge AI, it works completely offline after initial setup and gives you full control over your learning journey.
 
 ![TutIn](./screenshot.png)
+
+## 🚀 Quick Start
+
+```bash
+# Install dependencies
+npm install
+
+# Start development server
+npm run dev
+```
+
+Open your browser to `http://localhost:3000` and start learning!
+
+📖 **New to TutIn?** Check out the [Installation Guide](INSTALL.md) for detailed setup instructions.
+
+📝 **What's New?** See the [Changelog](CHANGELOG.md) for v2.0 features and updates.
 
 ## ✨ Why TutIn?
 
@@ -19,6 +38,7 @@ TutIn is a modern, powerful course learning platform that helps you organize, tr
 
 ## 📋 Table of Contents
 
+- [Quick Start](#-quick-start)
 - [Features](#-features)
 - [Screenshots](#-screenshots)
 - [Getting Started](#-getting-started)
@@ -29,6 +49,8 @@ TutIn is a modern, powerful course learning platform that helps you organize, tr
 - [Browser Support](#-browser-support)
 - [Troubleshooting](#-troubleshooting)
 - [Contributing](#-contributing)
+- [Changelog](CHANGELOG.md)
+- [Installation Guide](INSTALL.md)
 
 ---
 
@@ -223,9 +245,16 @@ VITE_OPENROUTER_API_KEY=your_api_key_here
 # Build optimized production bundle
 npm run build
 
-# Preview production build
+# Preview production build locally
 npm run preview
 ```
+
+The production build will be created in the `dist/` folder, ready for deployment.
+
+**Deployment Options:**
+- **GitHub Pages**: See [deployment guide](https://vitejs.dev/guide/static-deploy.html#github-pages)
+- **Netlify**: Drag & drop the `dist/` folder
+- **Vercel**: Connect your GitHub repository
 
 ---
 
