@@ -1,0 +1,527 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ============================================
+   SEMANTIC DESIGN TOKEN SYSTEM
+   
+   Usage: Use these tokens via Tailwind classes:
+     bg-theme          → page background
+     bg-surface        → card/panel background
+     bg-surface-alt    → slightly different surface (sidebars, modals)
+     bg-elevated       → elevated elements (dropdowns, popovers)
+     bg-hover          → hover state background
+     bg-active         → active/pressed state
+     bg-input          → input field background
+     text-theme        → primary text
+     text-secondary    → secondary/supporting text
+     text-muted        → placeholder/hint text
+     text-inverse      → text on primary-colored backgrounds
+     border-theme      → default borders
+     border-subtle     → very subtle dividers
+     border-strong     → emphasized borders
+     ring-theme        → focus ring color
+     
+   All tokens adapt automatically to light/dark mode.
+   No need to write dark: prefixes!
+   ============================================ */
+
+:root {
+  /* ── Backgrounds ── */
+  --bg-primary: #FFFFFF;
+  --bg-secondary: #F5F5F5;
+  --surface: #FAFAFA;
+  --surface-alt: #F0F0F0;
+  --elevated: #FFFFFF;
+  --hover: #F5F5F5;
+  --active: #EBEBEB;
+  --overlay: rgba(0, 0, 0, 0.5);
+
+  /* ── Text ── */
+  --text-primary: #171717;
+  --text-secondary: #525252;
+  --text-muted: #A3A3A3;
+  --text-inverse: #FFFFFF;
+  --text-link: #2563EB;
+  --text-link-hover: #1D4ED8;
+
+  /* ── Borders ── */
+  --border: #E5E5E5;
+  --border-subtle: #F0F0F0;
+  --border-strong: #D4D4D4;
+
+  /* ── Interactive / Brand ── */
+  --primary: #171717;
+  --primary-hover: #404040;
+  --primary-content: #FFFFFF;
+  --primary-fg: var(--primary);
+  --ring: rgba(0, 0, 0, 0.2);
+
+  /* ── Classic (Glass) Accent ── */
+  --classic-primary: #111827;
+  --classic-hover: #1f2937;
+  --classic-content: #ffffff;
+
+  /* ── Component: Input ── */
+  --input-bg: #FFFFFF;
+  --input-border: #D4D4D4;
+  --input-focus-border: #A3A3A3;
+  --input-placeholder: #A3A3A3;
+
+  /* ── Component: Card ── */
+  --card-bg: #FFFFFF;
+  --card-border: #E5E5E5;
+  --card-hover-border: #D4D4D4;
+
+  /* ── Component: Modal ── */
+  --modal-bg: #FFFFFF;
+  --modal-border: #E5E5E5;
+
+  /* ── Component: Badge ── */
+  --badge-bg: #F5F5F5;
+  --badge-text: #525252;
+
+  /* ── Component: Sidebar ── */
+  --sidebar-bg: #FAFAFA;
+  --sidebar-active: #F0F0F0;
+  --sidebar-hover: #F5F5F5;
+
+  /* ── Status ── */
+  --success: #10B981;
+  --success-bg: #ECFDF5;
+  --warning: #F59E0B;
+  --warning-bg: #FFFBEB;
+  --error: #EF4444;
+  --error-bg: #FEF2F2;
+  --info: #3B82F6;
+  --info-bg: #EFF6FF;
+}
+
+.dark {
+  /* ── Backgrounds ── */
+  --bg-primary: #050505;
+  --bg-secondary: #0A0A0A;
+  --surface: #121212;
+  --surface-alt: #1A1A1A;
+  --elevated: #1E1E1E;
+  --hover: rgba(255, 255, 255, 0.05);
+  --active: rgba(255, 255, 255, 0.1);
+  --overlay: rgba(0, 0, 0, 0.7);
+
+  /* ── Text ── */
+  --text-primary: #FAFAFA;
+  --text-secondary: #A3A3A3;
+  --text-muted: #525252;
+  --text-inverse: #000000;
+  --text-link: #60A5FA;
+  --text-link-hover: #93C5FD;
+
+  /* ── Borders ── */
+  --border: #262626;
+  --border-subtle: #1A1A1A;
+  --border-strong: #404040;
+
+  /* ── Interactive / Brand ── */
+  --primary: #FFFFFF;
+  --primary-hover: #E5E5E5;
+  --primary-content: #000000;
+  --primary-fg: var(--primary);
+  --ring: rgba(255, 255, 255, 0.2);
+
+  /* ── Classic (Glass) Accent ── */
+  --classic-primary: rgba(255, 255, 255, 0.1);
+  --classic-hover: rgba(255, 255, 255, 0.2);
+  --classic-content: #ffffff;
+
+  /* ── Component: Input ── */
+  --input-bg: rgba(0, 0, 0, 0.2);
+  --input-border: rgba(255, 255, 255, 0.1);
+  --input-focus-border: rgba(255, 255, 255, 0.2);
+  --input-placeholder: #525252;
+
+  /* ── Component: Card ── */
+  --card-bg: #121212;
+  --card-border: #262626;
+  --card-hover-border: #404040;
+
+  /* ── Component: Modal ── */
+  --modal-bg: #121212;
+  --modal-border: #262626;
+
+  /* ── Component: Badge ── */
+  --badge-bg: rgba(255, 255, 255, 0.05);
+  --badge-text: #A3A3A3;
+
+  /* ── Component: Sidebar ── */
+  --sidebar-bg: #0A0A0A;
+  --sidebar-active: rgba(255, 255, 255, 0.1);
+  --sidebar-hover: rgba(255, 255, 255, 0.05);
+
+  /* ── Status ── */
+  --success: #10B981;
+  --success-bg: rgba(16, 185, 129, 0.1);
+  --warning: #F59E0B;
+  --warning-bg: rgba(245, 158, 11, 0.1);
+  --error: #EF4444;
+  --error-bg: rgba(239, 68, 68, 0.1);
+  --info: #3B82F6;
+  --info-bg: rgba(59, 130, 246, 0.1);
+}
+
+/* Base Styles */
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html {
+  overflow-y: scroll;
+  /* Always show scrollbar to prevent layout shift */
+}
+
+body {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  /* Prefer Inter if available */
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  line-height: 1.6;
+  transition: background-color 0.3s ease, color 0.3s ease;
+  overflow-x: clip;
+  /* Prevent horizontal scroll without breaking sticky pos */
+  scrollbar-gutter: stable;
+  /* Prevent UI shift when scrollbar appears */
+}
+
+/* Scrollbar Styling - Sleek & Minimal */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 99px;
+  transition: background 0.2s;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-secondary);
+}
+
+/* Focus Styles */
+:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+/* Custom Utility Classes */
+@layer components {
+
+  /* Glassmorphism Utility */
+  .glass {
+    @apply bg-white/80 dark:bg-neutral-900/60 backdrop-blur-xl border border-gray-200 dark:border-white/5;
+  }
+
+  .glass-hover {
+    @apply hover:bg-white/90 dark:hover:bg-neutral-800/60 hover:border-gray-300 dark:hover:border-white/10 transition-all duration-300;
+  }
+
+  /* Buttons */
+  .btn {
+    @apply px-6 py-2.5 rounded-full font-medium tracking-wide transition-all duration-300 focus:outline-none focus:ring-2 focus:ring-gray-400/30 dark:focus:ring-white/20 active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+
+  .btn-primary {
+    @apply btn bg-primary text-primary-content hover:bg-primary-hover dark:bg-white/10 dark:hover:bg-white/20 dark:text-white dark:border dark:border-white/10;
+  }
+
+  .btn-secondary {
+    @apply btn bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-white/5 dark:text-white dark:hover:bg-white/10;
+  }
+
+  .btn-ghost {
+    @apply btn bg-transparent text-gray-600 hover:text-gray-900 hover:bg-gray-100 dark:text-neutral-400 dark:hover:text-white dark:hover:bg-white/5;
+  }
+
+  /* Cards */
+  .card {
+    @apply glass rounded-2xl overflow-hidden transition-all duration-300;
+  }
+
+  .card-hover {
+    @apply hover:border-gray-300 dark:hover:border-white/20 transform hover:-translate-y-1;
+  }
+
+  .input {
+    @apply w-full px-4 py-3 rounded-xl border border-gray-300 dark:border-white/10 bg-white dark:bg-black/20 text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-neutral-500 focus:ring-2 focus:ring-gray-400/30 dark:focus:ring-white/20 focus:border-gray-400 dark:focus:border-white/20 transition-all duration-200 outline-none;
+  }
+
+  /* Hide scrollbar */
+  .scrollbar-hide {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+/* Video Player Styles */
+/*
+   The 16/9 aspect-ratio bounding box is owned by the wrapper div in
+   CoursePlayerPage (with max-height + max-width to prevent overflow).
+   This element just fills that wrapper. */
+.video-container {
+  position: relative;
+  width: 100%;
+  height: 100%;   /* fill the wrapper — wrapper sets the aspect-ratio */
+  background-color: #000;
+  overflow: hidden;
+}
+
+.video-container video {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+/* Progress Bar */
+.progress-bar {
+  height: 8px;
+  background-color: var(--bg-secondary);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.progress-bar-fill {
+  height: 100%;
+  background: var(--primary-fg);
+  border-radius: 4px;
+  transition: width 0.3s ease;
+}
+
+/* Animations */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes pulse {
+
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.5;
+  }
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.2s ease-in-out;
+}
+
+.animate-slide-up {
+  animation: slideUp 0.25s ease-out;
+}
+
+.animate-pulse {
+  animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+/* Smooth transitions for all interactive elements */
+button,
+a,
+input,
+select,
+textarea {
+  transition: all 0.15s ease-in-out;
+}
+
+/* Improved focus states for accessibility */
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid var(--color-primary, #3B82F6);
+  outline-offset: 2px;
+}
+
+/* Skip focus ring for mouse clicks */
+button:focus:not(:focus-visible),
+a:focus:not(:focus-visible) {
+  outline: none;
+}
+
+/* Countdown Circle Animation */
+@keyframes countdown-fill {
+  from {
+    stroke-dashoffset: 0;
+  }
+
+  to {
+    stroke-dashoffset: 263.89;
+    /* Circumference for r=42 */
+  }
+}
+
+.animate-countdown-fill {
+  animation: countdown-fill 3s linear forwards;
+}
+
+/* Modal scale-in animation */
+@keyframes scaleIn {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.animate-scale-in {
+  animation: scaleIn 0.2s ease-out;
+}
+
+/* ── Note Editor (contentEditable) ── */
+.note-editor:empty::before {
+  content: attr(data-placeholder);
+  color: var(--text-muted);
+  pointer-events: none;
+}
+
+.note-editor img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 6px;
+  margin: 8px 0;
+  cursor: default;
+}
+
+.note-editor ul,
+.note-editor ol {
+  padding-left: 1.5em;
+  margin: 4px 0;
+}
+
+.note-editor ul {
+  list-style-type: disc;
+}
+
+.note-editor ol {
+  list-style-type: decimal;
+}
+
+.note-editor li {
+  margin: 2px 0;
+}
+
+/* ── Rendered Note Content ── */
+.note-content {
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+  line-height: 1.6;
+}
+
+.note-content b,
+.note-content strong {
+  font-weight: 600;
+}
+
+.note-content i,
+.note-content em {
+  font-style: italic;
+}
+
+.note-content s,
+.note-content strike,
+.note-content del {
+  text-decoration: line-through;
+  opacity: 0.7;
+}
+
+.note-content ul,
+.note-content ol {
+  padding-left: 1.5em;
+  margin: 4px 0;
+}
+
+.note-content ul {
+  list-style-type: disc;
+}
+
+.note-content ol {
+  list-style-type: decimal;
+}
+
+.note-content li {
+  margin: 2px 0;
+}
+
+.note-content img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 6px;
+  margin: 8px 0;
+  border: 1px solid var(--border);
+  cursor: pointer;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.note-content img:hover {
+  transform: scale(1.01);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+/* Reduce motion for users who prefer it */
+@media (prefers-reduced-motion: reduce) {
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Hide Number Input Spinners */
+.no-spinner::-webkit-inner-spin-button,
+.no-spinner::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.no-spinner {
+  -moz-appearance: textfield;
+  /* Firefox */
+}

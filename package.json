@@ -1,0 +1,62 @@
+{
+  "name": "tutin",
+  "version": "4.0.0",
+  "description": "AI-Powered Course Learning Platform",
+  "author": "noor",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/noureldenadel/TutIn.git"
+  },
+  "keywords": [
+    "course-management",
+    "video-player",
+    "ai-transcription",
+    "learning-platform",
+    "offline-first",
+    "react",
+    "vite"
+  ],
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "server": "node server/index.js",
+    "server:dev": "node --watch server/index.js",
+    "start": "concurrently \"npm run server\" \"npm run dev\"",
+    "start:prod": "cross-env NODE_ENV=production node server/index.js",
+    "build": "vite build",
+    "lint": "eslint .",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@xenova/transformers": "^2.17.2",
+    "canvas-confetti": "^1.9.4",
+    "cross-env": "^10.1.0",
+    "hls.js": "^1.6.15",
+    "lucide-react": "^0.469.0",
+    "mpegts.js": "^1.8.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-markdown": "^10.1.0",
+    "react-player": "^3.4.0",
+    "react-router-dom": "^7.1.1",
+    "recharts": "^2.15.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.17.0",
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "@vitejs/plugin-react": "^4.3.4",
+    "autoprefixer": "^10.4.20",
+    "concurrently": "^9.2.1",
+    "eslint": "^9.17.0",
+    "eslint-plugin-react": "^7.37.2",
+    "eslint-plugin-react-hooks": "^5.0.0",
+    "eslint-plugin-react-refresh": "^0.4.16",
+    "globals": "^15.14.0",
+    "postcss": "^8.4.49",
+    "tailwindcss": "^3.4.17",
+    "terser": "^5.44.1",
+    "vite": "^6.0.5"
+  }
+}
