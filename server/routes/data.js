@@ -21,6 +21,7 @@ router.delete('/reset', (req, res) => {
     try {
         const db = getDb()
         const tables = [
+            'dub_jobs',
             'watch_sessions',
             'analytics',
             'notes',
@@ -82,6 +83,7 @@ router.get('/export', (req, res) => {
         const instructors = getAll('SELECT * FROM instructors')
         const roadmaps    = getAll('SELECT * FROM roadmaps')
         const settings    = getAll('SELECT * FROM settings')
+        const dub_jobs    = getAll('SELECT * FROM dub_jobs')
 
         res.json({
             version: 4,
@@ -95,6 +97,7 @@ router.get('/export', (req, res) => {
             instructors,
             roadmaps,
             settings,
+            dub_jobs,
         })
     } catch (err) {
         res.status(500).json({ error: err.message })
@@ -163,7 +166,7 @@ router.post('/import', (req, res) => {
                     'is_required','is_completed','is_favorite','watch_progress',
                     'last_watched_position','last_watched_at','completed_at','watch_count',
                     'tags','bookmarks','youtube_id','url','has_transcript','has_summary',
-                    'transcript_generated_at','summary_generated_at'
+                    'transcript_generated_at','summary_generated_at','subtitle_sources'
                 ])
             }
             if (data.notes) {
@@ -193,6 +196,12 @@ router.post('/import', (req, res) => {
                 upsert('roadmaps', data.roadmaps, [
                     'id','name','nodes','connections','viewport','is_active',
                     'created_at','updated_at'
+                ])
+            }
+            if (data.dub_jobs) {
+                upsert('dub_jobs', data.dub_jobs, [
+                    'id','video_id','language','status','step','progress',
+                    'audio_path','file_size','error_message','created_at','completed_at'
                 ])
             }
             if (data.settings) {

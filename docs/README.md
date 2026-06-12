@@ -35,17 +35,12 @@ The easiest way to launch TutIn is using the automated setup script for Windows.
 
 - [Quick Start](#-quick-start)
 - [Features](#-features)
-- [Screenshots](#-screenshots)
 - [Getting Started](#-getting-started)
 - [Usage](#-usage)
 - [Architecture](#-architecture)
 - [Keyboard Shortcuts](#%EF%B8%8F-keyboard-shortcuts)
 - [Configuration](#%EF%B8%8F-configuration)
 - [Browser Support](#-browser-support)
-- [Troubleshooting](#-troubleshooting)
-- [Contributing](#-contributing)
-- [Changelog](CHANGELOG.md)
-- [User Guide](docs/USER_GUIDE.md)
 
 ---
 
@@ -200,67 +195,40 @@ The easiest way to launch TutIn is using the automated setup script for Windows.
 
 ---
 
-## 📸 Screenshots
-
-> *Screenshots coming soon - the app features a sleek dark theme with glassmorphism design*
-
----
-
 ## 🚀 Getting Started
 
 ### Prerequisites
 
-- **Node.js** 18 or higher
-- **npm** or **yarn** package manager
+- **Windows OS** (required for the automated `.bat` setup script)
+- **Node.js** 18 or higher (the script will install this automatically if missing)
 - **Modern Browser**: Chrome, Edge, or Opera (for File System Access API)
+- *(Optional)* Python 3.10+ (if you plan to use local AI Dubbing)
 
 ### Installation
 
-```bash
-# Clone the repository
-git clone https://github.com/yourusername/tutin.git
+1. Download or clone the TutIn repository to your local machine.
+2. Open the `tutin` folder.
+3. Double-click **`start-dev.bat`**.
 
-# Navigate to project folder
-cd tutin
+That's it! The script will automatically:
+- Check if you have Node.js installed (and download it if you don't).
+- Install all necessary dependencies for both the frontend and the companion server.
+- Start the servers and open the app in your default browser.
 
-# Install dependencies
-npm install
+### API Key Configuration (Optional)
 
-# Start development server
-npm run dev
-```
+TutIn is designed to be completely offline, but you can plug in API keys to unlock advanced features.
 
-The app will be available at `http://localhost:5173`
+Instead of messing with `.env` files, **all API keys are managed directly in the app's UI:**
+1. Open TutIn in your browser.
+2. Click the **Settings** gear icon.
+3. Go to the **AI & API Keys** tab.
 
-### Environment Setup (Optional)
+Here you can configure:
+- **Google API Key**: Required *only* if you want to import complete YouTube playlists or Google Drive folders. Single videos work without it.
+- **OpenRouter API Key**: Required *only* if you want Gemini/Claude to generate structured summaries from your offline transcripts.
 
-For AI summarization features, create a `.env` file:
-
-```env
-# OpenRouter API key for Gemini AI summarization
-VITE_OPENROUTER_API_KEY=your_api_key_here
-```
-
-> **Note**: AI transcription works completely offline without any API key. Only summarization requires an API key.
-
-### Build for Production
-
-```bash
-# Build optimized production bundle
-npm run build
-
-# Preview production build locally
-npm run preview
-```
-
-The production build will be created in the `dist/` folder, ready for deployment.
-
-**Deployment Options:**
-- **GitHub Pages**: See [deployment guide](https://vitejs.dev/guide/static-deploy.html#github-pages)
-- **Netlify**: Drag & drop the `dist/` folder
-- **Vercel**: Connect your GitHub repository
-
----
+> **Note**: AI Transcription runs 100% locally on your machine via WebGPU. No API keys or internet connection are required to transcribe your videos.
 
 ## 📖 Usage
 
@@ -362,15 +330,21 @@ The production build will be created in the `dist/` folder, ready for deployment
 - **React Context API** - Global state for theme, settings, sidebar, and search
 - **Local State** - Component-level state with useState and useReducer
 
+#### Backend Services (Companion Servers)
+- **Node.js + Express**: Local API server handling data routing and heavy filesystem ops
+- **SQLite 3**: Robust, scalable local database for course metadata and analytics
+- **Python + FastAPI**: Dedicated dubbing server running Coqui XTTS v2 for voice cloning
+- **Better-SQLite3**: High-performance synchronous SQLite driver for Node.js
+
 #### Storage & Persistence
-- **IndexedDB** - Primary data store for courses, modules, videos, notes, instructors, roadmaps, and folder handles
-- **localStorage** - User settings and preferences
-- **File System Access API** - Persistent folder access for local courses
+- **SQLite + IndexedDB**: Hybrid data store for absolute data safety without browser limits
+- **localStorage**: User settings and UI preferences
+- **File System Access API**: Persistent folder access for local courses
 
 #### AI & Machine Learning
-- **Transformers.js 2.17** - In-browser ML with Whisper Tiny model
-- **Web Workers** - Background AI processing without blocking UI
-- **OpenRouter API** - Gemini 2.0 Flash for AI summarization
+- **Transformers.js 2.17**: In-browser ML with Whisper Tiny model
+- **Coqui XTTS v2**: High-quality zero-shot voice cloning for 16+ languages (via Python server)
+- **OpenRouter API**: Cloud AI models (Gemini 2.0 Flash / Claude) for summarization
 
 #### Video Playback
 - **ReactPlayer 3.4** - Universal video player component
@@ -472,9 +446,9 @@ tutin/
 
 ### Key Features Implementation
 
-- **Offline-First**: All IndexedDB operations async, no server required
-- **Persistent Folder Access**: FileSystemHandle stored in IndexedDB, restored on app load
-- **AI Processing**: Web Workers prevent UI blocking during transcription
+- **Offline-First**: All data is routed through the local SQLite companion server and IndexedDB, ensuring zero cloud dependency.
+- **Persistent Folder Access**: FileSystemHandle stored locally, restored on app load
+- **AI Processing**: Dedicated Web Workers and local Python servers prevent UI blocking during transcription or dubbing
 - **Lazy Loading**: Pages and heavy components loaded on-demand
 - **Error Boundaries**: Graceful error handling prevents app crashes
 - **Responsive**: Mobile-first design with Tailwind breakpoints
@@ -545,14 +519,15 @@ Configure in **Settings → Playback**:
 
 ### AI Configuration
 
-- **Whisper Model**: Currently uses `Xenova/whisper-tiny` (40MB)
-- **Gemini Model**: Gemini 2.0 Flash via OpenRouter
-- **Web Worker**: Enabled by default for transcription
+- **Transcription Model**: Built-in `Xenova/whisper-tiny` (40MB, cached locally)
+- **Summarization Model**: Configurable in UI (defaults to Gemini 2.0 Flash via OpenRouter)
+- **Dubbing Model**: Local Coqui XTTS v2 running via the Python companion server
 
-To use AI summarization:
-1. Get an API key from [OpenRouter.ai](https://openrouter.ai/)
-2. Add to `.env`: `VITE_OPENROUTER_API_KEY=your_key`
-3. Restart dev server
+To configure AI keys:
+1. Open the TutIn App in your browser.
+2. Navigate to **Settings → AI & API Keys**.
+3. Paste your OpenRouter API key and/or Google API key.
+4. Changes are applied instantly. No restarts required!
 
 ---
 
@@ -577,69 +552,6 @@ To use AI summarization:
 | AI Transcription | ✅ | ✅ |
 | AI Summarization | ✅ | ✅ |
 | Persistent folder access | ✅ | ❌ |
-
----
-
-## 🔧 Troubleshooting
-
-### "Cannot restore folder access"
-
-**Cause**: Browser cleared IndexedDB or folder permissions revoked
-
-**Solution**: 
-1. Go to Settings → Data → Courses Folder
-2. Click "Select Root Folder" and choose your courses folder again
-3. Grant permission when prompted
-
-### AI Transcription fails or is slow
-
-**Cause**: First-time model download or insufficient memory
-
-**Solutions**:
-- First use downloads ~40MB Whisper model - wait for it to complete
-- Close other memory-intensive tabs
-- Try transcribing shorter videos first
-- Check browser console for specific errors
-
-### Videos won't play
-
-**Cause**: Browser doesn't support video format or File System API permission not granted
-
-**Solutions**:
-- Use Chrome, Edge, or Opera for best compatibility
-- For local videos, ensure folder permission was granted
-- For YouTube, check if video is embeddable
-- For Google Drive, ensure video is set to "Anyone with link can view"
-
-### YouTube videos not importing
-
-**Cause**: Invalid URL, private playlist, or API rate limit
-
-**Solutions**:
-- Verify the playlist/video is public
-- Check URL format (should be `youtube.com/watch?v=...` or `youtube.com/playlist?list=...`)
-- Wait a few minutes if rate-limited
-- Try individual video instead of entire playlist
-
-### Export/Import data not working
-
-**Cause**: Corrupted JSON or browser storage limits
-
-**Solutions**:
-- Ensure exported JSON file is not corrupted
-- Try exporting/importing smaller batches
-- Check browser console for specific errors
-- Clear browser cache and try again
-
-### App performance issues
-
-**Cause**: Too many courses or large video files
-
-**Solutions**:
-- Use course filters to reduce visible items
-- Delete unused courses
-- Consider archiving old courses via export
-- Restart browser to clear memory
 
 ---
 
