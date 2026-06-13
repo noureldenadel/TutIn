@@ -18,8 +18,10 @@
     "vite"
   ],
   "type": "module",
+  "workspaces": [
+    "server"
+  ],
   "scripts": {
-    "postinstall": "npm install --prefix server",
     "dev": "vite",
     "server": "node server/index.js",
     "server:dev": "node --watch server/index.js",
