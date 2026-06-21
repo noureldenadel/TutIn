@@ -31,7 +31,9 @@ router.get('/by-course/:courseId', (req, res) => {
             tags: JSON.parse(video.tags || '[]'),
             bookmarks: JSON.parse(video.bookmarks || '[]'),
             youtubeId: video.youtube_id,
-            url: video.url
+            url: video.url,
+            hasTranscript: video.has_transcript === 1,
+            subtitleSources: JSON.parse(video.subtitle_sources || '[]')
         }))
         res.json(mappedVideos)
     } catch (err) {
@@ -67,7 +69,9 @@ router.get('/by-module/:moduleId', (req, res) => {
             tags: JSON.parse(video.tags || '[]'),
             bookmarks: JSON.parse(video.bookmarks || '[]'),
             youtubeId: video.youtube_id,
-            url: video.url
+            url: video.url,
+            hasTranscript: video.has_transcript === 1,
+            subtitleSources: JSON.parse(video.subtitle_sources || '[]')
         }))
         res.json(mappedVideos)
     } catch (err) {
@@ -136,7 +140,9 @@ router.get('/:id', (req, res) => {
             tags: JSON.parse(video.tags || '[]'),
             bookmarks: JSON.parse(video.bookmarks || '[]'),
             youtubeId: video.youtube_id,
-            url: video.url
+            url: video.url,
+            hasTranscript: video.has_transcript === 1,
+            subtitleSources: JSON.parse(video.subtitle_sources || '[]')
         })
     } catch (err) {
         res.status(500).json({ error: err.message })

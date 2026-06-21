@@ -218,6 +218,13 @@ function NotesPanel({
             setNotes([])
             setIsLoading(false)
         }
+        
+        // Reset draft state when switching to a different video
+        setShowAddNote(false)
+        setEditingNote(null)
+        setNoteContent('')
+        setNoteTimestamp(null)
+        setEditorKey(prev => prev + 1)
     }, [video?.id])
 
     async function loadNotes() {

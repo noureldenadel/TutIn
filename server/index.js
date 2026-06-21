@@ -77,6 +77,7 @@ import searchRouter from './routes/search.js'
 import dataRouter from './routes/data.js'
 import fsRouter from './routes/filesystem.js'
 import dubbingRouter from './routes/dubbing.js'
+import youtubeRouter from './routes/youtube.js'
 
 // ============================================
 // MOUNT ROUTES
@@ -96,6 +97,7 @@ app.use('/api/search', searchRouter)
 app.use('/api/data', dataRouter)
 app.use('/api/fs', fsRouter)
 app.use('/api/dub', dubbingRouter)
+app.use('/api/youtube', youtubeRouter)
 
 // ============================================
 // STATIC FILE SERVING (PRODUCTION)
