@@ -55,7 +55,7 @@ function SyncPreviewModal({ preview, isOpen, onConfirm, onCancel, isApplying }) 
                             onClick={() => setActiveTab(tab.id)}
                             className={`flex-shrink-0 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
                                 activeTab === tab.id
-                                    ? 'bg-primary text-primary-content'
+                                    ? 'bg-primary dark:bg-primary-fg/15 text-primary-content dark:text-primary-fg'
                                     : 'text-light-text-secondary dark:text-dark-text-secondary hover:bg-light-surface dark:hover:bg-dark-bg'
                             }`}
                         >
