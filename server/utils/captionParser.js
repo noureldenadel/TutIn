@@ -5,12 +5,13 @@
  */
 
 const LANG_NAME_MAP = {
-    arabic:'ar', french:'fr', spanish:'es', german:'de', italian:'it',
-    portuguese:'pt', russian:'ru', japanese:'ja', korean:'ko', chinese:'zh',
-    hindi:'hi', turkish:'tr', dutch:'nl', polish:'pl', indonesian:'id',
-    vietnamese:'vi', english:'en', hebrew:'he', greek:'el', swedish:'sv',
-    danish:'da', norwegian:'no', finnish:'fi', czech:'cs', hungarian:'hu',
-    romanian:'ro', thai:'th', ukrainian:'uk',
+    arabic:'ar', ara:'ar', french:'fr', fre:'fr', fra:'fr', spanish:'es', spa:'es', german:'de', ger:'de', 
+    italian:'it', ita:'it', portuguese:'pt', por:'pt', russian:'ru', rus:'ru', japanese:'ja', jpn:'ja', 
+    korean:'ko', kor:'ko', chinese:'zh', chi:'zh', zho:'zh', hindi:'hi', hin:'hi', turkish:'tr', tur:'tr', 
+    dutch:'nl', dut:'nl', nld:'nl', polish:'pl', pol:'pl', indonesian:'id', ind:'id', vietnamese:'vi', vie:'vi', 
+    english:'en', eng:'en', hebrew:'he', heb:'he', greek:'el', gre:'el', ell:'el', swedish:'sv', swe:'sv',
+    danish:'da', dan:'da', norwegian:'no', nor:'no', finnish:'fi', fin:'fi', czech:'cs', cze:'cs', ces:'cs', 
+    hungarian:'hu', hun:'hu', romanian:'ro', rum:'ro', ron:'ro', thai:'th', tha:'th', ukrainian:'uk', ukr:'uk',
 }
 
 // ── Format Detection ──────────────────────────────────────────
@@ -28,22 +29,30 @@ export function detectFormat(filename) {
  * Extract ISO 639-1 language code from subtitle filename.
  * Supports: video.ar.srt | video.Arabic.srt | video - Arabic.srt
  */
-export function extractLangCode(filename, baseName) {
-    const withoutBase = filename.slice(baseName.length)
-    const withoutExt = withoutBase.replace(/\.[a-z0-9]+$/i, '')
+export function extractLangCode(filename, baseName = '') {
+    const nameWithoutExt = filename.replace(/\.[a-z0-9]+$/i, '').toLowerCase()
 
-    // Pattern: .ar or .Arabic
-    const dotMatch = withoutExt.match(/^\.([a-zA-Z]{2,})$/)
-    if (dotMatch) {
-        const code = dotMatch[1].toLowerCase()
-        return LANG_NAME_MAP[code] || (code.length <= 3 ? code : null)
+    // 1. Try strict matching if the file starts with the video base name
+    if (baseName && filename.toLowerCase().startsWith(baseName.toLowerCase())) {
+        const withoutBase = nameWithoutExt.slice(baseName.length)
+        const strictMatch = withoutBase.match(/^[\.\s-]*([a-z]{2,})$/)
+        if (strictMatch) {
+            const code = strictMatch[1]
+            if (LANG_NAME_MAP[code]) return LANG_NAME_MAP[code]
+            if (Object.values(LANG_NAME_MAP).includes(code)) return code
+            if (code.length <= 3) return code
+        }
     }
-    // Pattern: " - Arabic" or " - ar"
-    const dashMatch = withoutExt.match(/^\s*-\s*([a-zA-Z]{2,})$/)
-    if (dashMatch) {
-        const code = dashMatch[1].toLowerCase()
-        return LANG_NAME_MAP[code] || (code.length <= 3 ? code : null)
+
+    // 2. Try scanning the whole filename for known language names or codes
+    const words = nameWithoutExt.split(/[^a-z]+/)
+    // Reverse to prefer suffixes (e.g. "my-video-english.srt" -> "english")
+    for (const word of words.reverse()) { 
+        if (!word) continue
+        if (LANG_NAME_MAP[word]) return LANG_NAME_MAP[word]
+        if (Object.values(LANG_NAME_MAP).includes(word)) return word
     }
+
     return null // source language
 }
 

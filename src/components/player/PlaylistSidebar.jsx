@@ -388,37 +388,37 @@ function PlaylistSidebar({
                     </div>
 
                     {/* Playlist Toolbar */}
-                    {activeTab === 'playlist' && !isBulkEditing && (
-                        <div className="flex items-center justify-between p-3 border-t border-light-border dark:border-dark-border bg-light-surface/50 dark:bg-dark-bg/50">
-                            <h3 className="text-sm font-semibold">Playlist</h3>
-                            <button
-                                onClick={() => setIsBulkEditing(true)}
-                                className="flex items-center gap-1 text-sm text-primary-fg hover:text-primary-dark"
-                            >
-                                <Pencil className="w-3 h-3" />
-                                Bulk Edit
-                            </button>
-                        </div>
-                    )}
+                    <div className={`items-center justify-between p-3 border-t border-light-border dark:border-dark-border bg-light-surface/50 dark:bg-dark-bg/50 ${activeTab === 'playlist' && !isBulkEditing ? 'flex' : 'hidden'}`}>
+                        <h3 className="text-sm font-semibold">Playlist</h3>
+                        <button
+                            onClick={() => setIsBulkEditing(true)}
+                            className="flex items-center gap-1 text-sm text-primary-fg hover:text-primary-dark"
+                        >
+                            <Pencil className="w-3 h-3" />
+                            Bulk Edit
+                        </button>
+                    </div>
                 </div>
 
                 {/* Content Area */}
-                <div className="flex-1 overflow-hidden relative">
-                    {activeTab === 'playlist' && (
-                        isBulkEditing ? (
+                <div className="flex-1 overflow-hidden relative flex flex-col">
+                    {/* Playlist Tab */}
+                    <div className={`flex-1 overflow-hidden flex-col ${activeTab === 'playlist' ? 'flex' : 'hidden'}`}>
+                        {isBulkEditing ? (
                             <BulkEditPlaylist
                                 modules={modules}
                                 onSave={handleBulkSave}
                                 onCancel={() => setIsBulkEditing(false)}
                             />
                         ) : (
-                            <div className="h-full overflow-y-auto">
+                            <div className="flex-1 overflow-y-auto">
                                 {modules.map(module => renderModule(module, 0))}
                             </div>
-                        )
-                    )}
+                        )}
+                    </div>
 
-                    {activeTab === 'notes' && (
+                    {/* Notes Tab */}
+                    <div className={`flex-1 overflow-hidden flex-col ${activeTab === 'notes' ? 'flex' : 'hidden'}`}>
                         <div className="h-full overflow-y-auto">
                             <NotesPanel
                                 video={currentVideo}
@@ -429,9 +429,10 @@ function PlaylistSidebar({
                                 hideHeader={true}
                             />
                         </div>
-                    )}
+                    </div>
 
-                    {activeTab === 'ai' && (
+                    {/* AI Tab */}
+                    <div className={`flex-1 overflow-hidden flex-col ${activeTab === 'ai' ? 'flex' : 'hidden'}`}>
                         <div className="h-full overflow-y-auto">
                             <AISummaryPanel
                                 video={currentVideo}
@@ -441,7 +442,7 @@ function PlaylistSidebar({
                                 currentTime={currentTime}
                             />
                         </div>
-                    )}
+                    </div>
                 </div>
             </div>
 

@@ -33,9 +33,12 @@ function AISummaryPanel({ video, courseId, onSeek, onVideoDataChange, currentTim
     const [languages, setLanguages] = useState({ sourceExists: false, translatedLangs: [], existingLangs: [] })
     const [showTranslateModal, setShowTranslateModal] = useState(false)
     const fileInputRef = useRef(null)
+    const activeVideoIdRef = useRef(video?.id)
 
     // Load existing data when video changes
     useEffect(() => {
+        activeVideoIdRef.current = video?.id
+        
         if (video?.id) {
             loadExistingData()
         } else {
@@ -44,6 +47,11 @@ function AISummaryPanel({ video, courseId, onSeek, onVideoDataChange, currentTim
             setCaptionChunks([])
             setMissingCaptions(false)
         }
+        
+        // Reset processing state and errors when switching videos
+        setIsProcessing(false)
+        setError(null)
+        setProgress({ stage: '', progress: 0, message: '' })
     }, [video?.id])
 
     // Re-fetch chunks when active language changes
@@ -57,6 +65,7 @@ function AISummaryPanel({ video, courseId, onSeek, onVideoDataChange, currentTim
                     const lang = settings.captionLanguage || 'source'
                     const chunks = await get(`/api/transcripts/${video.id}/chunks?lang=${lang}`)
                     setCaptionChunks(chunks || [])
+                    setMissingCaptions(!chunks || chunks.length === 0)
                 }
             } catch (err) {
                 console.error('Failed to fetch translated chunks:', err)
@@ -65,7 +74,7 @@ function AISummaryPanel({ video, courseId, onSeek, onVideoDataChange, currentTim
         fetchChunks()
     }, [video?.id, settings.captionLanguage])
 
-    async function loadExistingData() {
+    async function loadExistingData(forceLang = null) {
         try {
             const { isServerAvailable, get } = await import('../../utils/api')
             const serverAvailable = await isServerAvailable()
@@ -78,7 +87,7 @@ function AISummaryPanel({ video, courseId, onSeek, onVideoDataChange, currentTim
                         const transcriptText = await fetch(`${SERVER_URL}/api/transcripts/${video.id}/text`).then(r => r.text())
                         setTranscript(transcriptText || null)
                         
-                        const lang = settings.captionLanguage || 'source'
+                        const lang = forceLang || settings.captionLanguage || 'source'
                         const chunks = await get(`/api/transcripts/${video.id}/chunks?lang=${lang}`)
                         setCaptionChunks(chunks || [])
                         setMissingCaptions(!chunks || chunks.length === 0)
@@ -115,6 +124,8 @@ function AISummaryPanel({ video, courseId, onSeek, onVideoDataChange, currentTim
     }
 
     async function handleGenerateSummary() {
+        const targetVideoId = video.id
+
         if (!isAIAvailable()) {
             setError('AI features require a modern browser with WebAssembly support.')
             return
@@ -156,6 +167,8 @@ function AISummaryPanel({ video, courseId, onSeek, onVideoDataChange, currentTim
                 settings.aiDevice
             )
 
+            if (activeVideoIdRef.current !== targetVideoId) return
+
             setTranscript(result.transcript)
             setSummary(result.summary)
             setCaptionChunks(result.captionChunks || [])
@@ -164,10 +177,11 @@ function AISummaryPanel({ video, courseId, onSeek, onVideoDataChange, currentTim
             // Notify parent that video data has changed (for CC icon update)
             onVideoDataChange?.()
         } catch (err) {
+            if (activeVideoIdRef.current !== targetVideoId) return
             console.error('AI processing failed:', err)
             setError(err.message)
         } finally {
-            setIsProcessing(false)
+            if (activeVideoIdRef.current === targetVideoId) setIsProcessing(false)
         }
     }
 
@@ -189,7 +203,10 @@ function AISummaryPanel({ video, courseId, onSeek, onVideoDataChange, currentTim
             .then(res => res.json())
             .then(data => {
                 if (data.success) {
-                    loadExistingData()
+                    if (data.language) {
+                        updateSettings({ captionLanguage: data.language })
+                    }
+                    loadExistingData(data.language || 'source')
                     onVideoDataChange?.()
                 }
             })
@@ -219,6 +236,7 @@ function AISummaryPanel({ video, courseId, onSeek, onVideoDataChange, currentTim
 
     // Regenerate just the summary (no file needed, uses existing transcript)
     async function handleRegenerateSummary() {
+        const targetVideoId = video.id
         const textToSummarize = transcript || captionChunks.map(c => c.text).join(' ')
 
         if (!textToSummarize) {
@@ -232,12 +250,16 @@ function AISummaryPanel({ video, courseId, onSeek, onVideoDataChange, currentTim
             setProgress({ stage: 'summarizing', progress: 0, message: 'Regenerating summary...' })
 
             const newSummary = await regenerateSummaryOnly(video.id, textToSummarize, setProgress, settings.openRouterApiKey, settings.openRouterModel)
+            
+            if (activeVideoIdRef.current !== targetVideoId) return
+            
             setSummary(newSummary)
         } catch (err) {
+            if (activeVideoIdRef.current !== targetVideoId) return
             console.error('Summary regeneration failed:', err)
             setError(err.message)
         } finally {
-            setIsProcessing(false)
+            if (activeVideoIdRef.current === targetVideoId) setIsProcessing(false)
         }
     }
 

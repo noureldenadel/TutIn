@@ -279,6 +279,27 @@ function CoursePlayerPage() {
         }
     }
 
+    // Auto-fetch YouTube transcripts
+    useEffect(() => {
+        if (!currentVideo) return
+        const isYouTube = currentVideo.youtubeId ||
+            (currentVideo.url && (currentVideo.url.includes('youtube.com') || currentVideo.url.includes('youtu.be')))
+
+        if (isYouTube && !currentVideo.hasTranscript) {
+            const videoIdOrUrl = currentVideo.youtubeId || currentVideo.url
+            import('../utils/api').then(({ fetchYoutubeTranscript, put }) => {
+                fetchYoutubeTranscript(videoIdOrUrl)
+                    .then(async (data) => {
+                        if (data.chunks && data.chunks.length > 0) {
+                            await put(`/api/transcripts/${currentVideo.id}`, { chunks: data.chunks })
+                            refreshCurrentVideoOnly()
+                        }
+                    })
+                    .catch(err => console.log('Notice: Could not auto-fetch YouTube transcript:', err.message))
+            })
+        }
+    }, [currentVideo?.id, currentVideo?.hasTranscript])
+
     function handleVideoComplete(videoId) {
         // Lightweight refresh - only updates sidebar, doesn't reload video player
         refreshModulesOnly()
@@ -332,6 +353,8 @@ function CoursePlayerPage() {
     }
 
     // Ambient Mode Effect
+    const innerAmbientCanvasRef = useRef(null)
+
     useEffect(() => {
         let animationFrameId
         let originalWidth = 0
@@ -360,6 +383,16 @@ function CoursePlayerPage() {
                 if (canvas.width > 0 && canvas.height > 0) {
                     try {
                         ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
+
+                        // Duplicate to inner canvas for letterboxes
+                        if (innerAmbientCanvasRef.current) {
+                            const innerCtx = innerAmbientCanvasRef.current.getContext('2d')
+                            if (innerAmbientCanvasRef.current.width !== canvas.width) {
+                                innerAmbientCanvasRef.current.width = canvas.width
+                                innerAmbientCanvasRef.current.height = canvas.height
+                            }
+                            innerCtx.drawImage(canvas, 0, 0)
+                        }
                     } catch (err) {
                         // Ignore cross-origin errors if any
                     }
@@ -423,26 +456,38 @@ function CoursePlayerPage() {
                 >
                     {currentVideo ? (
                         <>
-                            {/* Player wrapper — JS-driven height (YouTube's approach):
-                                height = wrapperWidth × (h/w), capped at 100vh−136px.
-                                ResizeObserver keeps it in sync with sidebar + window changes.
-                                Works for any video ratio: 16:9, 4:3, 21:9, portrait, etc. */}
+                            {/* Player wrapper */}
                             <div
                                 ref={setPlayerWrapperEl}
-                                className="bg-black sticky top-0 z-20 mx-4 mt-4 rounded-xl overflow-hidden"
+                                className="bg-transparent relative sticky top-0 z-20 mx-4 mt-4 rounded-xl overflow-hidden"
                                 style={{ height: playerHeight }}
                             >
-                                <VideoPlayer
-                                    ref={videoRef}
-                                    video={currentVideo}
-                                    courseId={courseId}
-                                    onComplete={handleVideoComplete}
-                                    onNext={handleNextVideo}
-                                    onPrevious={handlePreviousVideo}
-                                    autoPlay={autoPlay}
-                                    onTimeUpdate={setCurrentTime}
-                                    onAspectRatioChange={(w, h) => setVideoAspect({ w, h })}
-                                />
+                                {/* Inner Ambient for Letterboxes */}
+                                <div className="absolute inset-0 z-0 pointer-events-none transition-opacity duration-1000">
+                                    <canvas
+                                        ref={innerAmbientCanvasRef}
+                                        className="w-full h-full object-cover"
+                                        style={{
+                                            filter: 'blur(30px) saturate(200%)',
+                                            transform: 'scale(1.05)',
+                                            opacity: 0.05
+                                        }}
+                                    />
+                                </div>
+
+                                <div className="relative z-10 w-full h-full">
+                                    <VideoPlayer
+                                        ref={videoRef}
+                                        video={currentVideo}
+                                        courseId={courseId}
+                                        onComplete={handleVideoComplete}
+                                        onNext={handleNextVideo}
+                                        onPrevious={handlePreviousVideo}
+                                        autoPlay={autoPlay}
+                                        onTimeUpdate={setCurrentTime}
+                                        onAspectRatioChange={(w, h) => setVideoAspect({ w, h })}
+                                    />
+                                </div>
                             </div>
 
                             {/* Video Info Section */}
@@ -456,8 +501,8 @@ function CoursePlayerPage() {
                                             {findModulePath(modules, currentVideo.moduleId).map(mod => (
                                                 <span key={mod.id} className="flex items-center gap-1.5">
                                                     <span className="text-light-text-secondary dark:text-dark-text-secondary font-normal">/</span>
-                                                    <span 
-                                                        className="text-light-text-secondary dark:text-dark-text-secondary font-medium truncate max-w-[150px] sm:max-w-[250px]" 
+                                                    <span
+                                                        className="text-light-text-secondary dark:text-dark-text-secondary font-medium truncate max-w-[150px] sm:max-w-[250px]"
                                                         title={mod.title}
                                                     >
                                                         {mod.title}

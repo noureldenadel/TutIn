@@ -192,9 +192,9 @@ export function listVideoLanguages(videoId, subtitleSources = []) {
     } catch { /* AppData not ready */ }
 
     const sourceExists = fs.existsSync(path.join(transcriptsDir, `${videoId}.json`))
-    const existingLangs = subtitleSources
-        .filter(s => s.origin === 'existing')
-        .map(s => s.lang || 'source')
+    const existingLangs = Array.from(new Set(subtitleSources
+        .filter(s => s.origin === 'existing' || s.origin === 'uploaded')
+        .map(s => s.lang || 'source')))
 
     return { sourceExists, translatedLangs, existingLangs }
 }

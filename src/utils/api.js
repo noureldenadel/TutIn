@@ -38,7 +38,9 @@ async function handleErrorResponse(res) {
  * GET request wrapper
  */
 export async function get(path) {
-    const res = await fetch(`${SERVER_URL}${path}`)
+    const separator = path.includes('?') ? '&' : '?'
+    const timestampedPath = `${path}${separator}_t=${Date.now()}`
+    const res = await fetch(`${SERVER_URL}${timestampedPath}`)
     if (!res.ok) await handleErrorResponse(res)
     return res.json()
 }
@@ -84,4 +86,15 @@ export async function del(path) {
 export function videoUrl(filePath) {
     if (!filePath) return ''
     return `${SERVER_URL}/video/${encodeURIComponent(filePath)}`
+}
+
+/**
+ * Fetch YouTube transcript via the local server proxy
+ */
+export async function fetchYoutubeTranscript(videoId, lang = null) {
+    let url = `/api/youtube/transcript?videoId=${encodeURIComponent(videoId)}`
+    if (lang) {
+        url += `&lang=${encodeURIComponent(lang)}`
+    }
+    return get(url)
 }

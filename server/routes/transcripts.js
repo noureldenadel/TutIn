@@ -102,16 +102,7 @@ router.get('/:videoId/chunks', (req, res) => {
         const videoMeta = getVideoMeta(req.params.videoId)
         const chunks = loadCaptionChunks(req.params.videoId, lang, videoMeta.subtitleSources)
 
-        // Fallback for old AI generation (custom_metadata.captionChunks) if no source chunks exist
-        if (chunks.length === 0 && lang === 'source') {
-            const video = getOne('SELECT custom_metadata FROM videos WHERE id = ?', [req.params.videoId])
-            if (video && video.custom_metadata) {
-                const meta = JSON.parse(video.custom_metadata)
-                if (meta.captionChunks) {
-                    return res.json(meta.captionChunks)
-                }
-            }
-        }
+        // custom_metadata fallback removed due to missing column
         res.json(chunks)
     } catch (err) {
         res.status(500).json({ error: err.message })
@@ -142,13 +133,7 @@ router.post('/:videoId/translate', async (req, res) => {
         let sourceChunks = loadCaptionChunks(req.params.videoId, 'source', videoMeta.subtitleSources)
 
         if (sourceChunks.length === 0) {
-            const video = getOne('SELECT custom_metadata FROM videos WHERE id = ?', [req.params.videoId])
-            if (video && video.custom_metadata) {
-                const meta = JSON.parse(video.custom_metadata)
-                if (meta.captionChunks) {
-                    sourceChunks = meta.captionChunks
-                }
-            }
+        // custom_metadata fallback removed
         }
 
         if (sourceChunks.length === 0) {
@@ -197,13 +182,7 @@ router.get('/:videoId/text', (req, res) => {
         const videoMeta = getVideoMeta(req.params.videoId)
         let chunks = loadCaptionChunks(req.params.videoId, lang, videoMeta.subtitleSources)
 
-        if (chunks.length === 0 && lang === 'source') {
-            const video = getOne('SELECT custom_metadata FROM videos WHERE id = ?', [req.params.videoId])
-            if (video && video.custom_metadata) {
-                const meta = JSON.parse(video.custom_metadata)
-                if (meta.captionChunks) chunks = meta.captionChunks
-            }
-        }
+        // custom_metadata fallback removed
         
         res.type('text/plain').send(chunksToText(chunks))
     } catch (err) {

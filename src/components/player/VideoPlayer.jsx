@@ -346,7 +346,14 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
     useImperativeHandle(ref, () => ({
         seekTo: (time) => {
             if (videoRef.current) {
-                if (videoRef.current.seekTo) {
+                const isYt = video?.youtubeId || video?.url?.includes('youtube.com') || video?.url?.includes('youtu.be')
+                if (isYt && videoRef.current.contentWindow) {
+                    videoRef.current.contentWindow.postMessage(JSON.stringify({
+                        event: 'command',
+                        func: 'seekTo',
+                        args: [time, true]
+                    }), '*')
+                } else if (videoRef.current.seekTo) {
                     videoRef.current.seekTo(time)
                 } else {
                     videoRef.current.currentTime = time
@@ -594,10 +601,15 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
                 if (!e.origin.includes('youtube.com')) return
                 try {
                     const data = typeof e.data === 'string' ? JSON.parse(e.data) : e.data
-                    if (data?.event === 'infoDelivery' && data.info?.currentTime != null) {
-                        const t = data.info.currentTime
-                        setCurrentTime(t)
-                        onTimeUpdate?.(t)
+                    if (data?.event === 'infoDelivery') {
+                        if (data.info?.currentTime != null) {
+                            const t = data.info.currentTime
+                            setCurrentTime(t)
+                            onTimeUpdate?.(t)
+                        }
+                        if (data.info?.playerState === 0) {
+                            handleEnded()
+                        }
                     }
                 } catch { /* non-JSON messages — ignore */ }
             }
@@ -627,6 +639,10 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
                 elapsed += 1
                 setCurrentTime(elapsed)
                 onTimeUpdate?.(elapsed)
+                
+                if (video?.duration > 0 && elapsed >= video.duration) {
+                    handleEnded()
+                }
             }, 1000)
 
             return () => clearInterval(ticker)
@@ -1013,7 +1029,8 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
     return (
         <div
             ref={containerRef}
-            className="video-container bg-black relative group"
+            className="video-container relative group w-full h-full bg-transparent"
+            style={{ backgroundColor: 'transparent' }}
             onMouseDown={handleSpeedBoostStart}
             onMouseUp={handleSpeedBoostEnd}
             onMouseLeave={handleSpeedBoostEnd}
@@ -1080,7 +1097,8 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
                 <video
                     ref={videoRef}
                     src={isTs ? undefined : videoUrl}
-                    className="w-full h-full"
+                    className="w-full h-full bg-transparent"
+                    style={{ backgroundColor: 'transparent' }}
                     onLoadedMetadata={handleLoadedMetadata}
                     onTimeUpdate={handleTimeUpdate}
                     onPlay={handlePlay}
@@ -1303,7 +1321,7 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
                                             
                                             <div className="max-h-[180px] overflow-y-auto mt-1">
                                                 {/* Source/Generated */}
-                                                {captionLanguages.sourceExists && (
+                                                {captionLanguages.sourceExists && !captionLanguages.existingLangs.includes('source') && (
                                                     <button
                                                         onClick={() => { setSelectedCaptionLang('source'); setCaptionsEnabled(true); setShowCCMenu(false) }}
                                                         className={`w-full px-3 py-2 text-xs text-left hover:bg-white/10 flex items-center justify-between ${selectedCaptionLang === 'source' ? 'text-[var(--primary-fg)] font-bold bg-white/5' : ''}`}
