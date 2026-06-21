@@ -400,16 +400,13 @@ function NotesPanel({
                         )}
                     </div>
 
-                    {/* Add/Edit Note Form */}
-                    {(showAddNote || editingNote) && (
+                    {/* Add Note Form */}
+                    {showAddNote && !editingNote && (
                         <div className="p-3 bg-light-surface dark:bg-dark-bg rounded-lg space-y-3 animate-fade-in">
                             <div className="flex items-center justify-between">
                                 <div className="flex items-center gap-2 text-sm text-light-text-secondary dark:text-dark-text-secondary">
                                     <Clock className="w-4 h-4" />
-                                    {editingNote
-                                        ? `Editing note at ${formatDuration(editingNote.timestamp)}`
-                                        : `New note at ${formatDuration(noteTimestamp ?? currentTime)}`
-                                    }
+                                    New note at {formatDuration(noteTimestamp ?? currentTime)}
                                 </div>
                                 <button
                                     onClick={cancelEdit}
@@ -422,7 +419,7 @@ function NotesPanel({
 
                             <NoteEditor
                                 key={editorKey}
-                                content={editingNote ? editingNote.content : ''}
+                                content=""
                                 onChange={setNoteContent}
                                 placeholder="Write your note... (paste or drag images here)"
                             />
@@ -436,10 +433,10 @@ function NotesPanel({
                                     Cancel
                                 </button>
                                 <button
-                                    onClick={editingNote ? handleUpdateNote : handleAddNote}
+                                    onClick={handleAddNote}
                                     className="px-3 py-1.5 text-sm bg-primary text-primary-content hover:bg-primary-hover rounded-lg hover:bg-gray-800 dark:hover:bg-white/20 disabled:opacity-50"
                                 >
-                                    {editingNote ? 'Save Changes' : 'Add Note'}
+                                    Add Note
                                 </button>
                             </div>
                         </div>
@@ -495,10 +492,35 @@ function NotesPanel({
                                         </div>
                                     </div>
 
-                                    <div
-                                        className="note-content mt-2 text-sm"
-                                        dangerouslySetInnerHTML={{ __html: note.content }}
-                                    />
+                                    {editingNote?.id === note.id ? (
+                                        <div className="mt-3 space-y-3 animate-fade-in">
+                                            <NoteEditor
+                                                key={editorKey}
+                                                content={noteContent}
+                                                onChange={setNoteContent}
+                                                placeholder="Edit your note..."
+                                            />
+                                            <div className="flex justify-end gap-2">
+                                                <button
+                                                    onClick={cancelEdit}
+                                                    className="px-3 py-1.5 text-sm hover:bg-gray-100 dark:hover:bg-dark-surface rounded"
+                                                >
+                                                    Cancel
+                                                </button>
+                                                <button
+                                                    onClick={handleUpdateNote}
+                                                    className="px-3 py-1.5 text-sm bg-primary text-primary-content hover:bg-primary-hover rounded-lg hover:bg-gray-800 dark:hover:bg-white/20 disabled:opacity-50"
+                                                >
+                                                    Save Changes
+                                                </button>
+                                            </div>
+                                        </div>
+                                    ) : (
+                                        <div
+                                            className="note-content mt-2 text-sm"
+                                            dangerouslySetInnerHTML={{ __html: note.content }}
+                                        />
+                                    )}
                                 </div>
                             ))}
                         </div>

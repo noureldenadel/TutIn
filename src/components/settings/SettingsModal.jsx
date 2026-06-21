@@ -129,8 +129,8 @@ function SettingsModal({ isOpen, onClose }) {
                                                     className={`
                              flex-1 flex flex-col items-center gap-2 p-3 rounded-lg border-2 transition-all
                              ${isSelected
-                                                             ? 'border-primary bg-primary/5'
-                                                             : 'border-light-border dark:border-dark-border hover:border-blue-400'
+                                                             ? 'border-primary-fg/40 bg-primary-fg/5'
+                                                             : 'border-light-border dark:border-dark-border hover:border-primary-fg/30'
                                                          }
                            `}
                                                 >
@@ -186,7 +186,7 @@ function SettingsModal({ isOpen, onClose }) {
                                         onClick={() => updateSettings({ resumePlayback: !settings.resumePlayback })}
                                         className={`
                        w-12 h-6 rounded-full transition-colors relative
-                       ${settings.resumePlayback ? 'bg-primary text-primary-content' : 'bg-gray-300 dark:bg-gray-600'}
+                       ${settings.resumePlayback ? 'bg-primary dark:bg-primary-fg/30 text-primary-content' : 'bg-gray-300 dark:bg-gray-600'}
                      `}
                                     >
                                         <div className={`
@@ -209,8 +209,8 @@ function SettingsModal({ isOpen, onClose }) {
                                                 className={`
                            flex-1 p-3 rounded-lg border-2 transition-all text-center
                            ${settings.autoMarkCompleteAt === option.value
-                                                         ? 'border-primary bg-primary/5'
-                                                         : 'border-light-border dark:border-dark-border hover:border-blue-400'
+                                                         ? 'border-primary-fg/40 bg-primary-fg/5'
+                                                         : 'border-light-border dark:border-dark-border hover:border-primary-fg/30'
                                                      }
                          `}
                                             >
@@ -240,8 +240,8 @@ function SettingsModal({ isOpen, onClose }) {
                                                 className={`
                            w-full flex items-center justify-between p-3 rounded-lg border-2 transition-all text-left
                            ${settings.progressCalculationMode === option.value
-                                                         ? 'border-primary bg-primary/5'
-                                                         : 'border-light-border dark:border-dark-border hover:border-blue-400'
+                                                         ? 'border-primary-fg/40 bg-primary-fg/5'
+                                                         : 'border-light-border dark:border-dark-border hover:border-primary-fg/30'
                                                      }
                          `}
                                             >
@@ -275,7 +275,7 @@ function SettingsModal({ isOpen, onClose }) {
                                         onClick={() => updateSettings({ keyboardShortcuts: !settings.keyboardShortcuts })}
                                         className={`
                        w-12 h-6 rounded-full transition-colors relative
-                       ${settings.keyboardShortcuts ? 'bg-primary text-primary-content' : 'bg-gray-300 dark:bg-gray-600'}
+                       ${settings.keyboardShortcuts ? 'bg-primary dark:bg-primary-fg/30 text-primary-content' : 'bg-gray-300 dark:bg-gray-600'}
                      `}
                                     >
                                         <div className={`
@@ -348,8 +348,8 @@ function SettingsModal({ isOpen, onClose }) {
                                                     className={`
                                                         w-full flex items-center justify-between p-3 rounded-lg border-2 transition-all text-left
                                                         ${settings.aiDevice === option.value
-                                                            ? 'border-primary bg-primary/5'
-                                                            : 'border-light-border dark:border-dark-border hover:border-blue-400'
+                                                            ? 'border-primary-fg/40 bg-primary-fg/5'
+                                                            : 'border-light-border dark:border-dark-border hover:border-primary-fg/30'
                                                         }
                                                     `}
                                                 >
@@ -509,7 +509,7 @@ function SettingsModal({ isOpen, onClose }) {
                                             onClick={() => updateSettings({ autoDetectThumbnails: !settings.autoDetectThumbnails })}
                                             className={`
                        w-12 h-6 rounded-full transition-colors relative
-                       ${settings.autoDetectThumbnails ? 'bg-primary text-primary-content' : 'bg-gray-300 dark:bg-gray-600'}
+                       ${settings.autoDetectThumbnails ? 'bg-primary dark:bg-primary-fg/30 text-primary-content' : 'bg-gray-300 dark:bg-gray-600'}
                      `}
                                         >
                                             <div className={`

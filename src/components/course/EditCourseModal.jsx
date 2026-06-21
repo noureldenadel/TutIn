@@ -246,7 +246,7 @@ function EditCourseModal({ course, isOpen, onClose, onSave }) {
                         </label>
                         <div className="flex items-start gap-4">
                             <div
-                                className={`w-40 h-24 rounded-lg border-2 border-dashed overflow-hidden flex items-center justify-center cursor-pointer transition-colors ${isDragging ? 'border-primary bg-primary/5' : 'border-light-border dark:border-dark-border hover:border-primary'
+                                className={`w-40 h-24 rounded-lg border-2 border-dashed overflow-hidden flex items-center justify-center cursor-pointer transition-colors ${isDragging ? 'border-primary-fg/40 bg-primary-fg/5' : 'border-light-border dark:border-dark-border hover:border-primary-fg/30'
                                     }`}
                                 onDragOver={handleDragOver}
                                 onDragLeave={handleDragLeave}

@@ -575,11 +575,71 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
         }
     }, [videoUrl])
 
+    // ── YouTube / Drive current-time tracking ──────────────────────────
+    // YouTube: uses IFrame Player API (postMessage).  enablejsapi=1 is
+    //   already in the embed URL, so the iframe posts 'infoDelivery'
+    //   messages that include currentTime when we send a 'listening' cmd.
+    // Drive: no JS API available — use a simple elapsed-time counter.
+    useEffect(() => {
+        const isYouTube = !!(video?.youtubeId ||
+            (video?.url && (video.url.includes('youtube.com') || video.url.includes('youtu.be'))))
+        const isDrive = !!(video?.driveFileId ||
+            (video?.url && video.url.includes('drive.google.com')))
+
+        if (!isYouTube && !isDrive) return
+
+        // ── YouTube: postMessage API ────────────────────────────────
+        if (isYouTube) {
+            function handleMessage(e) {
+                if (!e.origin.includes('youtube.com')) return
+                try {
+                    const data = typeof e.data === 'string' ? JSON.parse(e.data) : e.data
+                    if (data?.event === 'infoDelivery' && data.info?.currentTime != null) {
+                        const t = data.info.currentTime
+                        setCurrentTime(t)
+                        onTimeUpdate?.(t)
+                    }
+                } catch { /* non-JSON messages — ignore */ }
+            }
+
+            window.addEventListener('message', handleMessage)
+
+            // Poll the iframe to trigger infoDelivery events
+            const poll = setInterval(() => {
+                try {
+                    videoRef.current?.contentWindow?.postMessage(
+                        JSON.stringify({ event: 'listening' }),
+                        'https://www.youtube.com'
+                    )
+                } catch { /* iframe not ready */ }
+            }, 500)
+
+            return () => {
+                window.removeEventListener('message', handleMessage)
+                clearInterval(poll)
+            }
+        }
+
+        // ── Drive: elapsed-time fallback ────────────────────────────
+        if (isDrive) {
+            let elapsed = 0
+            const ticker = setInterval(() => {
+                elapsed += 1
+                setCurrentTime(elapsed)
+                onTimeUpdate?.(elapsed)
+            }, 1000)
+
+            return () => clearInterval(ticker)
+        }
+    }, [video?.id])
+
     // Keyboard shortcuts
     useEffect(() => {
         function handleKeyDown(e) {
             if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable) return
             if (!settings.keyboardShortcuts) return
+            // Don't intercept browser shortcuts (Ctrl+F, Ctrl+C, Cmd+A, Alt+…, etc.)
+            if (e.ctrlKey || e.metaKey || e.altKey) return
 
             const key = e.key.toLowerCase()
             const speedOptions = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2]
@@ -690,6 +750,8 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
     }, [currentTime, duration, settings.keyboardShortcuts])
 
     // Auto-hide controls
+    const hasOpenMenu = showSettingsMenu || showCCMenu || showSpeedMenu || showAudioMenu
+
     useEffect(() => {
         function handleMouseMove() {
             setShowControls(true)
@@ -698,28 +760,64 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
                 clearTimeout(controlsTimeoutRef.current)
             }
 
-            if (isPlaying) {
+            if (isPlaying && !hasOpenMenu) {
                 controlsTimeoutRef.current = setTimeout(() => {
                     setShowControls(false)
                 }, 3000)
             }
         }
 
+        function handleMouseLeave() {
+            // If a menu is open, KEEP controls and menu visible
+            if (hasOpenMenu) return
+            
+            // Otherwise hide instantly like before
+            setShowControls(false)
+        }
+
         const container = containerRef.current
         if (container) {
             container.addEventListener('mousemove', handleMouseMove)
-            container.addEventListener('mouseleave', () => setShowControls(false))
+            container.addEventListener('mouseleave', handleMouseLeave)
         }
 
         return () => {
             if (container) {
                 container.removeEventListener('mousemove', handleMouseMove)
+                container.removeEventListener('mouseleave', handleMouseLeave)
             }
             if (controlsTimeoutRef.current) {
                 clearTimeout(controlsTimeoutRef.current)
             }
         }
-    }, [isPlaying])
+    }, [isPlaying, hasOpenMenu])
+
+    // Close menu on outside click
+    useEffect(() => {
+        function handleOutsideClick(e) {
+            if (!hasOpenMenu) return
+
+            // Check if click was inside any menu or menu trigger
+            if (e.target.closest('.tut-in-menu-container') || e.target.closest('.tut-in-menu-trigger')) {
+                return
+            }
+
+            // Close all menus
+            setShowSettingsMenu(false)
+            setShowCCMenu(false)
+            setShowSpeedMenu(false)
+            setShowAudioMenu(false)
+
+            // If cursor is NOT on the player viewport (e.g. they clicked outside the player),
+            // hide the controls too.
+            if (containerRef.current && !containerRef.current.contains(e.target)) {
+                setShowControls(false)
+            }
+        }
+
+        document.addEventListener('mousedown', handleOutsideClick)
+        return () => document.removeEventListener('mousedown', handleOutsideClick)
+    }, [hasOpenMenu])
 
     // Update volume when it changes
     useEffect(() => {
@@ -906,6 +1004,12 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
 
     const speedOptions = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2]
 
+    // YouTube and Google Drive videos are embedded in cross-origin iframes
+    // whose play/pause/seek/volume can't be controlled from outside.
+    // We still show TutIn's prev/next, fullscreen, settings, and captions controls.
+    const isEmbeddedPlayer = !!(video?.youtubeId || video?.driveFileId ||
+        (video?.url && (video.url.includes('youtube.com') || video.url.includes('youtu.be') || video.url.includes('drive.google.com'))))
+
     return (
         <div
             ref={containerRef}
@@ -918,11 +1022,11 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
         >
             {/* YouTube iframe */}
             {(video?.youtubeId || (video?.url && (video.url.includes('youtube.com') || video.url.includes('youtu.be')))) ? (
-                <div className="w-full h-full">
+                <div className="w-full h-full relative z-10">
                     {/* YouTube Embed using native iframe with YouTube's built-in controls */}
                     <iframe
                         ref={videoRef}
-                        src={`https://www.youtube.com/embed/${video.youtubeId || videoUrl?.match(/[?&]v=([^&]+)/)?.[1] || videoUrl?.match(/youtu\.be\/([^?]+)/)?.[1]}?enablejsapi=1&modestbranding=1&rel=0&origin=${window.location.origin}&autoplay=${autoPlay ? 1 : 0}&mute=0`}
+                        src={`https://www.youtube.com/embed/${video.youtubeId || videoUrl?.match(/[?&]v=([^&]+)/)?.[1] || videoUrl?.match(/youtu\.be\/([^?]+)/)?.[1]}?enablejsapi=1&controls=1&modestbranding=1&rel=0&origin=${window.location.origin}&autoplay=${autoPlay ? 1 : 0}&mute=0`}
                         className="w-full h-full"
                         frameBorder="0"
                         allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
@@ -931,6 +1035,12 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
                             console.log('YouTube iframe loaded')
                             setIsLoading(false)
                             setError(null)
+                            // Record in watch history — YouTube iframes can't fire
+                            // native play/pause events so saveProgress() never runs.
+                            // We record a minimal progress entry so last_watched_at is set.
+                            if (video?.id) {
+                                updateVideoProgress(video.id, 0, video.duration || 0)
+                            }
                         }}
                         onError={(e) => {
                             console.error('YouTube iframe error:', e)
@@ -940,7 +1050,7 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
                     />
                 </div>
             ) : (video?.driveFileId || video?.url?.includes('drive.google.com')) ? (
-                <div className="w-full h-full">
+                <div className="w-full h-full relative z-10">
                     {/* Google Drive Embed using native iframe with Drive's built-in player */}
                     <iframe
                         ref={videoRef}
@@ -953,6 +1063,11 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
                             console.log('Google Drive iframe loaded')
                             setIsLoading(false)
                             setError(null)
+                            // Record in watch history — Drive iframes can't fire
+                            // native play/pause events so saveProgress() never runs.
+                            if (video?.id) {
+                                updateVideoProgress(video.id, 0, video.duration || 0)
+                            }
                         }}
                         onError={(e) => {
                             console.error('Google Drive iframe error:', e)
@@ -1039,7 +1154,8 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
                 </div>
             )}
 
-            {/* Caption Overlay */}
+            {/* Caption Overlay — hidden for YouTube/Drive embeds (they handle captions internally) */}
+            {!isEmbeddedPlayer && (
             <CaptionOverlay
                 chunks={captionChunks}
                 currentTime={currentTime}
@@ -1053,17 +1169,19 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
                 showBackground={settings.captionBackground}
                 controlsVisible={controlsVisible}
             />
+            )}
 
-            {/* Controls Overlay - Hidden for YouTube videos (they use native controls) */}
-            {!(video?.youtubeId || video?.url?.startsWith('http')) && (
-                <div
-                    className={`absolute inset-0 flex flex-col justify-end transition-opacity duration-200 pointer-events-none ${showControls || !isPlaying ? 'opacity-100' : 'opacity-0'
-                        }`}
-                >
+            {/* Controls Overlay — hidden for YouTube/Drive embeds (they have their own built-in controls) */}
+            {!isEmbeddedPlayer && (
+            <div
+                className={`absolute inset-0 flex flex-col justify-end transition-opacity duration-200 pointer-events-none ${showControls || !isPlaying ? 'opacity-100' : 'opacity-0'
+                    }`}
+            >
                     {/* Gradient */}
                     <div className="absolute inset-x-0 bottom-0 h-32 bg-gradient-to-t from-black/80 to-transparent pointer-events-none" />
 
-                    {/* Progress Bar */}
+                    {/* Progress Bar — only for native video, not iframe embeds */}
+                    {!isEmbeddedPlayer && (
                     <div
                         ref={progressRef}
                         className="relative h-1 bg-white/30 cursor-pointer mx-4 mb-2 group/progress pointer-events-auto"
@@ -1078,13 +1196,15 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
                             style={{ left: `${(currentTime / duration) * 100}%`, marginLeft: '-6px' }}
                         />
                     </div>
+                    )}
 
                     {/* Controls Bar */}
                     <div className="relative flex items-center justify-between px-4 pb-4 text-white pointer-events-auto">
                         
                         {/* Left Side Group */}
                         <div className="flex items-center gap-2">
-                            {/* Play/Pause */}
+                            {/* Play/Pause — only for native video */}
+                            {!isEmbeddedPlayer && (
                             <button
                                 onClick={togglePlay}
                                 className="w-10 h-10 rounded-full flex items-center justify-center bg-white/15 hover:bg-white/25 backdrop-blur-sm transition-all text-white shadow-sm"
@@ -1092,6 +1212,7 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
                             >
                                 {isPlaying ? <Pause className="w-5 h-5 fill-current" /> : <Play className="w-5 h-5 fill-current ml-0.5" />}
                             </button>
+                            )}
 
                             {/* Prev/Next Pill */}
                             <div className="h-10 px-3.5 rounded-full flex items-center bg-white/15 backdrop-blur-sm transition-all text-white gap-3 shadow-sm">
@@ -1119,7 +1240,8 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
                                 </button>
                             </div>
 
-                            {/* Volume Pill with Expanding Slider */}
+                            {/* Volume Pill — only for native video */}
+                            {!isEmbeddedPlayer && (
                             <div className="flex items-center gap-1 group/volume h-10 px-3 bg-white/15 hover:bg-white/25 backdrop-blur-sm rounded-full transition-all text-white shadow-sm">
                                 <button
                                     onClick={toggleMute}
@@ -1138,11 +1260,14 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
                                     className="w-0 overflow-hidden group-hover/volume:w-20 group-hover/volume:ml-1.5 transition-all duration-200 accent-white cursor-pointer"
                                 />
                             </div>
+                            )}
 
-                            {/* Time Pill */}
+                            {/* Time Pill — only for native video */}
+                            {!isEmbeddedPlayer && (
                             <div className="h-10 px-4 flex items-center bg-black/40 backdrop-blur-sm rounded-full text-white text-xs font-semibold select-none shadow-sm tabular-nums">
                                 {formatDuration(currentTime)} / {formatDuration(duration)}
                             </div>
+                            )}
                         </div>
 
                         {/* Right Side Pill */}
@@ -1156,14 +1281,14 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
                                             setShowCCMenu(!showCCMenu);
                                             setShowSettingsMenu(false);
                                         }}
-                                        className={`p-1.5 hover:bg-white/15 rounded-full transition-all ${captionsEnabled ? 'text-[var(--primary-fg)]' : 'opacity-70 hover:opacity-100'}`}
+                                        className={`tut-in-menu-trigger p-1.5 hover:bg-white/15 rounded-full transition-all ${captionsEnabled ? 'text-[var(--primary-fg)]' : 'opacity-70 hover:opacity-100'}`}
                                         title="Captions Menu (C)"
                                     >
                                         <Captions className="w-4.5 h-4.5" />
                                     </button>
 
                                     {showCCMenu && (
-                                        <div className="absolute bottom-full right-0 mb-3 bg-black/90 backdrop-blur-md rounded-xl py-2 min-w-[200px] shadow-2xl border border-white/10 text-white text-sm z-50">
+                                        <div className="tut-in-menu-container absolute bottom-full right-0 mb-3 bg-black/90 backdrop-blur-md rounded-xl py-2 min-w-[200px] shadow-2xl border border-white/10 text-white text-sm z-50">
                                             <div className="px-3 py-2 border-b border-white/10 flex justify-between items-center">
                                                 <span className="font-bold text-xs uppercase tracking-wider opacity-60">Captions</span>
                                                 <button 
@@ -1254,14 +1379,14 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
                                         setSettingsSubMenu('main');
                                         setShowCCMenu(false);
                                     }}
-                                    className={`p-1.5 hover:bg-white/15 rounded-full transition-all ${showSettingsMenu ? 'text-[var(--primary-fg)]' : 'opacity-70 hover:opacity-100'}`}
+                                    className={`tut-in-menu-trigger p-1.5 hover:bg-white/15 rounded-full transition-all ${showSettingsMenu ? 'text-[var(--primary-fg)]' : 'opacity-70 hover:opacity-100'}`}
                                     title="Settings"
                                 >
                                     <Settings className={`w-4.5 h-4.5 transition-transform duration-300 ${showSettingsMenu ? 'rotate-45' : ''}`} />
                                 </button>
 
                                 {showSettingsMenu && (
-                                    <div className="absolute bottom-full right-0 mb-3 bg-black/90 backdrop-blur-md text-white rounded-xl py-2 min-w-[220px] shadow-2xl border border-white/10 z-50 animate-scale-in text-sm">
+                                    <div className="tut-in-menu-container absolute bottom-full right-0 mb-3 bg-black/90 backdrop-blur-md text-white rounded-xl py-2 min-w-[220px] shadow-2xl border border-white/10 z-50 animate-scale-in text-sm">
                                         {settingsSubMenu === 'main' && (
                                             <div className="flex flex-col py-1">
                                                 {/* Playback Speed */}
@@ -1345,41 +1470,41 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
                                                 >
                                                     <ChevronLeft className="w-4 h-4" /> Audio track
                                                 </button>
-                                                <div className="max-h-[180px] overflow-y-auto py-1">
+                                                <div className="max-h-[200px] overflow-y-auto py-1">
                                                     <button
                                                         onClick={() => {
-                                                            setSelectedDubLang('none')
+                                                            handleDubChange('none')
                                                             setShowSettingsMenu(false)
                                                         }}
                                                         className={`w-full px-8 py-2 text-left hover:bg-white/10 flex items-center justify-between text-xs ${selectedDubLang === 'none' ? 'text-[var(--primary-fg)] font-bold bg-white/5' : ''}`}
                                                     >
-                                                        <span>Original Audio</span>
+                                                        <span>Original (No Dub)</span>
                                                         {selectedDubLang === 'none' && <Check className="w-3.5 h-3.5 text-[var(--primary-fg)]" />}
                                                     </button>
                                                     {dubLanguages.map(lang => (
                                                         <button
-                                                            key={`dub-${lang}`}
+                                                            key={lang}
                                                             onClick={() => {
-                                                                setSelectedDubLang(lang)
+                                                                handleDubChange(lang)
                                                                 setShowSettingsMenu(false)
                                                             }}
                                                             className={`w-full px-8 py-2 text-left hover:bg-white/10 flex items-center justify-between text-xs ${selectedDubLang === lang ? 'text-[var(--primary-fg)] font-bold bg-white/5' : ''}`}
                                                         >
-                                                            <span>{lang.toUpperCase()} (Dubbed)</span>
+                                                            <span>{lang.toUpperCase()}</span>
                                                             {selectedDubLang === lang && <Check className="w-3.5 h-3.5 text-[var(--primary-fg)]" />}
                                                         </button>
                                                     ))}
                                                 </div>
-                                                <div className="border-t border-white/10 mt-1 pt-1">
+
+                                                <div className="border-t border-white/10 mt-1 pt-1 px-2 pb-1">
                                                     <button
                                                         onClick={() => {
                                                             setShowSettingsMenu(false)
                                                             setShowDubModal(true)
                                                         }}
-                                                        className="w-full px-4 py-2 text-left hover:bg-white/10 flex items-center justify-between text-xs text-white/70"
+                                                        className="w-full px-3 py-1.5 text-xs text-center border border-white/20 rounded hover:bg-white/10 transition-colors"
                                                     >
-                                                        <span>+ Generate dub...</span>
-                                                        <Headphones className="w-3.5 h-3.5 opacity-70" />
+                                                        Generate New Dub
                                                     </button>
                                                 </div>
                                             </div>

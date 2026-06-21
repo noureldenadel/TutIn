@@ -446,7 +446,7 @@ function HomePage() {
                                     key={filter}
                                     onClick={() => setActiveFilter(filter)}
                                     className={`flex-shrink-0 px-4 py-1.5 rounded-full text-sm font-medium transition-colors ${activeFilter === filter
-                                        ? 'bg-primary text-primary-content hover:bg-primary-hover'
+                                        ? 'bg-primary dark:bg-primary-fg/15 text-primary-content dark:text-primary-fg hover:bg-primary-hover'
                                         : 'bg-gray-100 dark:bg-white/5 text-gray-600 dark:text-neutral-400 hover:bg-gray-200 dark:hover:bg-white/10 hover:text-gray-900 dark:hover:text-white'
                                         }`}
                                 >
@@ -461,7 +461,7 @@ function HomePage() {
                                     key={tag}
                                     onClick={() => setActiveFilter(tag)}
                                     className={`flex-shrink-0 px-4 py-1.5 rounded-full text-sm font-medium transition-colors ${activeFilter === tag
-                                        ? 'bg-primary text-primary-content hover:bg-primary-hover'
+                                        ? 'bg-primary dark:bg-primary-fg/15 text-primary-content dark:text-primary-fg hover:bg-primary-hover'
                                         : 'bg-gray-100 dark:bg-white/5 text-gray-600 dark:text-neutral-400 hover:bg-gray-200 dark:hover:bg-white/10 hover:text-gray-900 dark:hover:text-white'
                                         }`}
                                 >
