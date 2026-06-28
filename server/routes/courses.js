@@ -3,6 +3,34 @@ import { getAll, getOne, run, transaction } from '../database.js'
 
 const router = express.Router()
 
+/**
+ * Map a raw SQLite course row (snake_case) to a camelCase API response object.
+ */
+function mapCourseRow(course) {
+    return {
+        id: course.id,
+        title: course.title,
+        originalTitle: course.original_title,
+        description: course.description,
+        instructor: course.instructor,
+        tags: JSON.parse(course.tags || '[]'),
+        thumbnailData: course.thumbnail_data,
+        folderPath: course.folder_path,
+        sourceType: course.source_type,
+        courseUrl: course.course_url,
+        dateAdded: course.date_added,
+        dateModified: course.date_modified,
+        lastAccessed: course.last_accessed,
+        lastAccessedClickTime: course.last_accessed_click_time,
+        totalDuration: course.total_duration,
+        totalVideos: course.total_videos,
+        completedVideos: course.completed_videos,
+        completionPercentage: course.completion_percentage,
+        customMetadata: JSON.parse(course.custom_metadata || '{}'),
+        order: course.order
+    }
+}
+
 // GET /api/courses
 router.get('/', (req, res) => {
     try {
@@ -17,29 +45,7 @@ router.get('/', (req, res) => {
         query += ' ORDER BY "order" ASC, last_accessed DESC'
 
         const courses = getAll(query, params)
-        const mappedCourses = courses.map(course => ({
-            id: course.id,
-            title: course.title,
-            originalTitle: course.original_title,
-            description: course.description,
-            instructor: course.instructor,
-            tags: JSON.parse(course.tags || '[]'),
-            thumbnailData: course.thumbnail_data,
-            folderPath: course.folder_path,
-            sourceType: course.source_type,
-            courseUrl: course.course_url,
-            dateAdded: course.date_added,
-            dateModified: course.date_modified,
-            lastAccessed: course.last_accessed,
-            lastAccessedClickTime: course.last_accessed_click_time,
-            totalDuration: course.total_duration,
-            totalVideos: course.total_videos,
-            completedVideos: course.completed_videos,
-            completionPercentage: course.completion_percentage,
-            customMetadata: JSON.parse(course.custom_metadata || '{}'),
-            order: course.order
-        }))
-        res.json(mappedCourses)
+        res.json(courses.map(mapCourseRow))
     } catch (err) {
         res.status(500).json({ error: err.message })
     }
@@ -51,29 +57,7 @@ router.get('/:id', (req, res) => {
         const course = getOne('SELECT * FROM courses WHERE id = ?', [req.params.id])
         if (!course) return res.status(404).json({ error: 'Course not found' })
 
-        const mappedCourse = {
-            id: course.id,
-            title: course.title,
-            originalTitle: course.original_title,
-            description: course.description,
-            instructor: course.instructor,
-            tags: JSON.parse(course.tags || '[]'),
-            thumbnailData: course.thumbnail_data,
-            folderPath: course.folder_path,
-            sourceType: course.source_type,
-            courseUrl: course.course_url,
-            dateAdded: course.date_added,
-            dateModified: course.date_modified,
-            lastAccessed: course.last_accessed,
-            lastAccessedClickTime: course.last_accessed_click_time,
-            totalDuration: course.total_duration,
-            totalVideos: course.total_videos,
-            completedVideos: course.completed_videos,
-            completionPercentage: course.completion_percentage,
-            customMetadata: JSON.parse(course.custom_metadata || '{}'),
-            order: course.order
-        }
-        res.json(mappedCourse)
+        res.json(mapCourseRow(course))
     } catch (err) {
         res.status(500).json({ error: err.message })
     }

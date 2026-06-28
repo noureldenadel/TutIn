@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect } from 'react'
+import { createContext, useContext, useState, useEffect, useRef } from 'react'
 
 const defaultSettings = {
     // Appearance
@@ -112,11 +112,17 @@ export function SettingsProvider({ children }) {
         return defaultSettings
     })
 
+    // Track whether the initial server load has completed
+    const isInitializedRef = useRef(false)
+
     // Save settings to localStorage and server
     useEffect(() => {
         try {
             localStorage.setItem('tutin_settings', JSON.stringify(settings))
             
+            // Don't sync to server during initial load to avoid a feedback loop
+            if (!isInitializedRef.current) return
+
             // Sync with backend
             import('../utils/api.js').then(api => {
                 api.put('/api/settings', settings).catch(err => {
@@ -137,6 +143,8 @@ export function SettingsProvider({ children }) {
                 }
             }).catch(err => {
                 console.warn('Initial settings load from server failed:', err.message)
+            }).finally(() => {
+                isInitializedRef.current = true
             })
         })
     }, [])

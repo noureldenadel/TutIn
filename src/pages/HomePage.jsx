@@ -1,9 +1,10 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useCallback } from 'react'
 import { Grid, List, SortAsc, ChevronDown, FolderOpen, Search } from 'lucide-react'
 import { getAllCourses, addCourse, addModule, addVideo, setInstructorAvatar, recalculateAllCoursesProgress } from '../utils/db'
 import { useSettings } from '../contexts/SettingsContext'
 import { useSearch } from '../contexts/SearchContext'
 import { useNotification } from '../contexts/NotificationContext'
+import { useImport } from '../contexts/ImportContext'
 import CourseCard from '../components/course/CourseCard'
 import LoadingSpinner from '../components/common/LoadingSpinner'
 import ImportPreviewModal from '../components/course/ImportPreviewModal'
@@ -254,19 +255,36 @@ function HomePage() {
         }
     }
 
-    // These handlers are passed from App via Header
-    // Exposed for Header callbacks
-    window.__homePageHandlers = {
-        handleImportData: (data) => {
-            if (data) {
-                const dupe = courses.find(c => c.title === data.title || c.originalTitle === data.title)
-                if (dupe) {
-                    if (!confirm(`A course named "${data.title}" already exists. Import anyway?`)) return
-                }
-                setImportData(data)
-            }
-        },
-        handleYouTubeImport: async (courseData) => {
+    // ─── Import handlers via ImportContext (replaces window.__homePageHandlers) ───
+    const {
+        pendingImport, clearImport,
+        pendingYouTube, clearYouTube,
+        pendingGoogleDrive, clearGoogleDrive,
+        pendingExternalLink, clearExternalLink,
+        registerLoadCourses,
+    } = useImport()
+
+    // Register loadCourses so other components can trigger a refresh
+    useEffect(() => { registerLoadCourses(loadCourses) }, [registerLoadCourses])
+
+    // Handle local folder import
+    useEffect(() => {
+        if (!pendingImport) return
+        const data = pendingImport
+        clearImport()
+        const dupe = courses.find(c => c.title === data.title || c.originalTitle === data.title)
+        if (dupe) {
+            if (!confirm(`A course named "${data.title}" already exists. Import anyway?`)) return
+        }
+        setImportData(data)
+    }, [pendingImport])
+
+    // Handle YouTube import
+    useEffect(() => {
+        if (!pendingYouTube) return
+        const courseData = pendingYouTube
+        clearYouTube()
+        ;(async () => {
             try {
                 const dupe = courses.find(c => c.title === courseData.title)
                 if (dupe) {
@@ -342,8 +360,15 @@ function HomePage() {
                 console.error('Failed to save YouTube course:', err)
                 showNotification('Failed to save: ' + err.message, 'error')
             }
-        },
-        handleGoogleDriveImport: async (courseData) => {
+        })()
+    }, [pendingYouTube])
+
+    // Handle Google Drive import
+    useEffect(() => {
+        if (!pendingGoogleDrive) return
+        const courseData = pendingGoogleDrive
+        clearGoogleDrive()
+        ;(async () => {
             try {
                 const dupe = courses.find(c => c.title === courseData.title)
                 if (dupe) {
@@ -400,8 +425,15 @@ function HomePage() {
                 console.error('Failed to save Google Drive course:', err)
                 showNotification('Failed to save: ' + err.message, 'error')
             }
-        },
-        handleExternalLinkImport: async (courseData) => {
+        })()
+    }, [pendingGoogleDrive])
+
+    // Handle External Link import
+    useEffect(() => {
+        if (!pendingExternalLink) return
+        const courseData = pendingExternalLink
+        clearExternalLink()
+        ;(async () => {
             try {
                 const dupe = courses.find(c => c.title === courseData.title)
                 if (dupe) {
@@ -414,9 +446,8 @@ function HomePage() {
                 console.error('Failed to save External Link course:', err)
                 showNotification('Failed to save: ' + err.message, 'error')
             }
-        },
-        loadCourses
-    }
+        })()
+    }, [pendingExternalLink])
 
     const sortOptions = [
         { value: 'lastAccessed', label: 'Recently Accessed' },

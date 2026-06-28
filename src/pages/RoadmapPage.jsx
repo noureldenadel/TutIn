@@ -1,9 +1,9 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { Link } from 'react-router-dom'
 import {
-    Map, Plus, Save, Trash2, ZoomIn, ZoomOut,
-    Move, Maximize2, BookOpen, Play, CheckCircle,
-    ArrowRight, X, Grid3X3, Edit3, Download
+    Map, Plus, Trash2, ZoomIn, ZoomOut,
+    Maximize2, BookOpen, Play, CheckCircle,
+    ArrowRight, X, Grid3X3
 } from 'lucide-react'
 import { getAllCourses } from '../utils/db'
 import { getRoadmaps, addRoadmap, updateRoadmap, deleteRoadmap as deleteRoadmapDb } from '../utils/roadmapDb'
