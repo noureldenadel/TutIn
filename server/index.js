@@ -78,6 +78,7 @@ import dataRouter from './routes/data.js'
 import fsRouter from './routes/filesystem.js'
 import dubbingRouter from './routes/dubbing.js'
 import youtubeRouter from './routes/youtube.js'
+import feedbackRouter from './routes/feedback.js'
 
 // ============================================
 // MOUNT ROUTES
@@ -98,6 +99,7 @@ app.use('/api/data', dataRouter)
 app.use('/api/fs', fsRouter)
 app.use('/api/dub', dubbingRouter)
 app.use('/api/youtube', youtubeRouter)
+app.use('/api/feedback', feedbackRouter)
 
 // ============================================
 // STATIC FILE SERVING (PRODUCTION)

@@ -11,7 +11,7 @@ import { useSettings } from '../../contexts/SettingsContext'
 import { SERVER_URL } from '../../utils/api'
 import CaptionOverlay from './CaptionOverlay'
 import TranslateModal from './TranslateModal'
-import DubModal from './DubModal'
+// [DUB FEATURE HIDDEN] import DubModal from './DubModal'
 import mpegts from 'mpegts.js'
 
 
@@ -24,6 +24,12 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
     const [isPlaying, setIsPlaying] = useState(false)
     const [currentTime, setCurrentTime] = useState(0)
     const [duration, setDuration] = useState(0)
+    
+    // Refs for accessing latest state in closures (e.g. interval timers and YouTube message handlers)
+    const currentTimeRef = useRef(currentTime)
+    const durationRef = useRef(duration)
+    useEffect(() => { currentTimeRef.current = currentTime }, [currentTime])
+    useEffect(() => { durationRef.current = duration }, [duration])
     const [volume, setVolume] = useState(() => settings.volume)
     const [isMuted, setIsMuted] = useState(false)
     const [isFullscreen, setIsFullscreen] = useState(false)
@@ -50,11 +56,16 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
     const wasSpeedBoostingRef = useRef(false)
     const pendingAutoPlayRef = useRef(false) // Track autoplay intent during video transitions
     const [showTranslateModal, setShowTranslateModal] = useState(false)
+    // [DUB FEATURE HIDDEN] — state kept but hardcoded to disabled
     const dubAudioRef = useRef(null)
-    const [dubLanguages, setDubLanguages] = useState([])
-    const [selectedDubLang, setSelectedDubLang] = useState('none')
-    const [showAudioMenu, setShowAudioMenu] = useState(false)
-    const [showDubModal, setShowDubModal] = useState(false)
+    const dubLanguages = [] // was: useState([])
+    const setDubLanguages = () => {} // no-op
+    const selectedDubLang = 'none' // was: useState('none')
+    const setSelectedDubLang = () => {} // no-op
+    const showAudioMenu = false // was: useState(false)
+    const setShowAudioMenu = () => {} // no-op
+    const showDubModal = false // was: useState(false)
+    const setShowDubModal = () => {} // no-op
     const [showSettingsMenu, setShowSettingsMenu] = useState(false)
     const [settingsSubMenu, setSettingsSubMenu] = useState('main')
 
@@ -141,6 +152,7 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
         }
     }, [videoUrl, isTs])
 
+    /* [DUB FEATURE HIDDEN] — dub audio loading effect disabled
     // Load dub audio when selectedDubLang changes
     useEffect(() => {
         if (selectedDubLang === 'none' || !video?.id) {
@@ -161,6 +173,7 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
             }
         }
     }, [selectedDubLang, video?.id])
+    */
 
     // Load video when video prop changes
     useEffect(() => {
@@ -331,6 +344,7 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
             setCurrentTime(videoRef.current.currentTime)
             onTimeUpdate?.(videoRef.current.currentTime)
             
+            /* [DUB FEATURE HIDDEN] — dub audio sync disabled
             // Sync dub audio
             if (selectedDubLang !== 'none' && dubAudioRef.current) {
                 const diff = Math.abs(videoRef.current.currentTime - dubAudioRef.current.currentTime)
@@ -339,6 +353,7 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
                     dubAudioRef.current.currentTime = videoRef.current.currentTime
                 }
             }
+            */
         }
     }
 
@@ -388,11 +403,16 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
         setIsPlaying(false)
         stopProgressTracking()
 
+        const currentT = currentTimeRef.current
+        const currentD = durationRef.current
+
         // Mark as complete if threshold reached
-        const watchPercentage = (currentTime / duration) * 100
-        if (watchPercentage >= settings.autoMarkCompleteAt) {
-            markVideoComplete(video.id, true)
-            onComplete?.(video.id)
+        if (currentD > 0) {
+            const watchPercentage = (currentT / currentD) * 100
+            if (watchPercentage >= settings.autoMarkCompleteAt) {
+                markVideoComplete(video.id, true)
+                onComplete?.(video.id)
+            }
         }
 
         // Auto-play next if enabled - show countdown
@@ -452,17 +472,26 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
         if (!videoRef.current || !video) return
 
         try {
+            const isEmbedded = video?.youtubeId || video?.driveFileId || 
+                (video?.url && (video.url.includes('youtube.com') || video.url.includes('youtu.be') || video.url.includes('drive.google.com')))
+            const currentT = isEmbedded ? currentTimeRef.current : videoRef.current.currentTime
+            const currentD = isEmbedded ? durationRef.current : videoRef.current.duration
+
+            if (currentT === undefined || currentD === undefined) return
+
             await updateVideoProgress(
                 video.id,
-                videoRef.current.currentTime,
-                videoRef.current.duration
+                currentT,
+                currentD
             )
 
             // Check if should auto-complete
-            const watchPercentage = (videoRef.current.currentTime / videoRef.current.duration) * 100
-            if (watchPercentage >= settings.autoMarkCompleteAt && !video.isCompleted) {
-                await markVideoComplete(video.id, true)
-                onComplete?.(video.id)
+            if (currentD > 0) {
+                const watchPercentage = (currentT / currentD) * 100
+                if (watchPercentage >= settings.autoMarkCompleteAt && !video.isCompleted) {
+                    await markVideoComplete(video.id, true)
+                    onComplete?.(video.id)
+                }
             }
         } catch (err) {
             console.error('Failed to save progress:', err)
@@ -838,17 +867,18 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
     // Update volume when it changes
     useEffect(() => {
         if (videoRef.current) {
+            /* [DUB FEATURE HIDDEN] — simplified volume logic (no dub branch)
             if (selectedDubLang !== 'none') {
                 videoRef.current.muted = true
                 if (dubAudioRef.current) {
                     dubAudioRef.current.volume = isMuted ? 0 : volume
                 }
-            } else {
+            } else { */
                 videoRef.current.muted = isMuted
                 videoRef.current.volume = isMuted ? 0 : volume
-            }
+            /* } */
         }
-    }, [volume, isMuted, selectedDubLang])
+    }, [volume, isMuted])
 
     // Sync internal video state with props/state
     useEffect(() => {
@@ -869,14 +899,16 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
                     }
                 })
             }
+            /* [DUB FEATURE HIDDEN]
             if (selectedDubLang !== 'none' && dubAudioRef.current) {
                 dubAudioRef.current.play().catch(e => console.error("Dub play err:", e))
             }
+            */
         } else {
             videoRef.current.pause()
-            if (dubAudioRef.current) dubAudioRef.current.pause()
+            // [DUB FEATURE HIDDEN] if (dubAudioRef.current) dubAudioRef.current.pause()
         }
-    }, [isPlaying, videoUrl, selectedDubLang])
+    }, [isPlaying, videoUrl])
 
     // Sync playback speed with video element
     useEffect(() => {
@@ -884,7 +916,7 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
         if (!isYt) {
             const rate = isSpeedBoosting ? 2 : playbackSpeed
             if (videoRef.current) videoRef.current.playbackRate = rate
-            if (dubAudioRef.current) dubAudioRef.current.playbackRate = rate
+            // [DUB FEATURE HIDDEN] if (dubAudioRef.current) dubAudioRef.current.playbackRate = rate
         }
     }, [playbackSpeed, isSpeedBoosting, videoUrl])
 
@@ -900,11 +932,13 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
             .then(data => setCaptionLanguages(data))
             .catch(err => console.error('Failed to fetch caption languages:', err))
             
+        /* [DUB FEATURE HIDDEN] — dub language fetch disabled
         // Fetch dub languages
         fetch(`${SERVER_URL}/api/dub/video/${video.id}/languages`)
             .then(res => res.json())
             .then(data => setDubLanguages(data || []))
             .catch(err => console.error('Failed to fetch dub languages:', err))
+        */
             
     }, [video?.id, showCCMenu, showAudioMenu]) // Re-fetch when menus open
 
@@ -1421,7 +1455,7 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
                                                     </span>
                                                 </button>
 
-                                                {/* Audio Track */}
+                                                {/* [DUB FEATURE HIDDEN] — Audio Track menu button hidden
                                                 <button
                                                     onClick={() => setSettingsSubMenu('audio')}
                                                     className="w-full px-4 py-2.5 flex items-center justify-between hover:bg-white/10 transition-colors"
@@ -1434,6 +1468,7 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
                                                         <ChevronRight className="w-3 h-3 opacity-55" />
                                                     </span>
                                                 </button>
+                                                */}
 
                                                 {/* Auto-play */}
                                                 <div className="w-full px-4 py-2.5 flex items-center justify-between border-t border-white/5 mt-1 pt-2">
@@ -1480,6 +1515,7 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
                                             </div>
                                         )}
 
+                                        {/* [DUB FEATURE HIDDEN] — Audio submenu hidden
                                         {settingsSubMenu === 'audio' && (
                                             <div className="flex flex-col">
                                                 <button
@@ -1527,6 +1563,7 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
                                                 </div>
                                             </div>
                                         )}
+                                        */}
                                     </div>
                                 )}
                             </div>
@@ -1635,6 +1672,7 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
                 }}
             />
 
+            {/* [DUB FEATURE HIDDEN] — DubModal and dub audio element hidden
             <DubModal
                 isOpen={showDubModal}
                 onClose={() => setShowDubModal(false)}
@@ -1645,8 +1683,9 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
                 }}
             />
 
-            {/* Hidden audio element for dubbed audio playback */}
+            // Hidden audio element for dubbed audio playback
             <audio ref={dubAudioRef} preload="auto" />
+            */}
         </div>
     )
 })

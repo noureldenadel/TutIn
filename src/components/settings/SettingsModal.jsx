@@ -1,7 +1,7 @@
 import { useState, useRef } from 'react'
 import {
-    X, Sun, Moon, Monitor, Palette, Layout, Type,
-    Play, SkipForward, FastForward, Check, Download, Upload, Database, AlertTriangle, KeyRound, Eye, EyeOff, ExternalLink, Sparkles, Clock, PictureInPicture
+    X, Sun, Moon, Monitor, Palette, Layout, Type, Settings,
+    Play, SkipForward, FastForward, Check, Download, Upload, Database, AlertTriangle, KeyRound, Eye, EyeOff, ExternalLink, Sparkles, Clock, PictureInPicture, MessageSquare, Send, Bug, Lightbulb, MessageCircle
 } from 'lucide-react'
 import { useSettings } from '../../contexts/SettingsContext'
 import { useTheme } from '../../contexts/ThemeContext'
@@ -30,20 +30,25 @@ const completionThresholds = [
 function SettingsModal({ isOpen, onClose }) {
     const { settings, updateSettings, resetSettings } = useSettings()
     const { theme, setTheme } = useTheme()
-    const [activeTab, setActiveTab] = useState('appearance')
+    const [activeTab, setActiveTab] = useState('general')
     const [showApiKeys, setShowApiKeys] = useState({ youtube: false, openRouter: false, googleDrive: false })
     const [detectingDurations, setDetectingDurations] = useState(false)
     const [durationResult, setDurationResult] = useState(null)
+    const [feedbackCategory, setFeedbackCategory] = useState('General')
+    const [feedbackMessage, setFeedbackMessage] = useState('')
+    const [feedbackEmail, setFeedbackEmail] = useState('')
+    const [sendingFeedback, setSendingFeedback] = useState(false)
+    const [feedbackSent, setFeedbackSent] = useState(false)
     const { showNotification } = useNotification()
 
     if (!isOpen) return null
 
     const tabs = [
-        { id: 'appearance', label: 'Appearance', icon: Palette },
-        { id: 'playback', label: 'Playback', icon: Play },
+        { id: 'general', label: 'General', icon: Settings },
         { id: 'shortcuts', label: 'Shortcuts', icon: FastForward },
         { id: 'ai_keys', label: 'AI & API Keys', icon: Sparkles },
-        { id: 'data', label: 'Data', icon: Database }
+        { id: 'data', label: 'Data', icon: Database },
+        { id: 'feedback', label: 'Feedback', icon: MessageSquare }
     ]
 
     return (
@@ -97,165 +102,133 @@ function SettingsModal({ isOpen, onClose }) {
 
                     {/* Content */}
                     <div className="flex-1 overflow-y-auto p-6">
-                        {/* Appearance Tab */}
-                        {activeTab === 'appearance' && (
-                            <div className="space-y-6">
-                                {/* Theme */}
+                        {/* General Tab */}
+                        {activeTab === 'general' && (
+                            <div className="space-y-8">
                                 <div>
-                                    <label className="block text-sm font-medium mb-3">Theme</label>
-                                    <div className="flex gap-3">
-                                        {[
-                                            { value: 'light', label: 'Light', icon: Sun },
-                                            { value: 'dark', label: 'Dark', icon: Moon },
-                                            { value: 'auto', label: 'System', icon: Monitor }
-                                        ].map(option => {
-                                            const Icon = option.icon
-                                            const isSelected = theme === option.value ||
-                                                (option.value === 'auto' && settings.theme === 'auto')
-                                            return (
-                                                <button
-                                                    key={option.value}
-                                                    onClick={() => {
-                                                        if (option.value === 'auto') {
-                                                            updateSettings({ theme: 'auto' })
-                                                            // Let system preference take over
-                                                            const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches
-                                                            setTheme(prefersDark ? 'dark' : 'light')
-                                                        } else {
-                                                            updateSettings({ theme: option.value })
-                                                            setTheme(option.value)
-                                                        }
-                                                    }}
-                                                    className={`
-                             flex-1 flex flex-col items-center gap-2 p-3 rounded-lg border-2 transition-all
-                             ${isSelected
-                                                             ? 'border-primary-fg/40 bg-primary-fg/5'
-                                                             : 'border-light-border dark:border-dark-border hover:border-primary-fg/30'
-                                                         }
-                           `}
-                                                >
-                                                    <Icon className={`w-5 h-5 ${isSelected ? 'text-primary-fg' : ''}`} />
-                                                    <span className="text-sm">{option.label}</span>
-                                                </button>
-                                            )
-                                        })}
-                                    </div>
-                                </div>
+                                    <div className="space-y-6">
+                                        {/* Theme */}
+                                        <div>
+                                            <label className="block text-sm font-medium mb-3">Theme</label>
+                                            <div className="flex gap-3">
+                                                {[
+                                                    { value: 'light', label: 'Light', icon: Sun },
+                                                    { value: 'dark', label: 'Dark', icon: Moon },
+                                                    { value: 'auto', label: 'System', icon: Monitor }
+                                                ].map(option => {
+                                                    const Icon = option.icon
+                                                    const isSelected = theme === option.value ||
+                                                        (option.value === 'auto' && settings.theme === 'auto')
+                                                    return (
+                                                        <button
+                                                            key={option.value}
+                                                            onClick={() => {
+                                                                if (option.value === 'auto') {
+                                                                    updateSettings({ theme: 'auto' })
+                                                                    const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches
+                                                                    setTheme(prefersDark ? 'dark' : 'light')
+                                                                } else {
+                                                                    updateSettings({ theme: option.value })
+                                                                    setTheme(option.value)
+                                                                }
+                                                            }}
+                                                            className={`flex-1 flex flex-col items-center gap-2 p-3 rounded-lg border-2 transition-all ${isSelected ? 'border-primary-fg/40 bg-primary-fg/5' : 'border-light-border dark:border-dark-border hover:border-primary-fg/30'}`}
+                                                        >
+                                                            <Icon className={`w-5 h-5 ${isSelected ? 'text-primary-fg' : ''}`} />
+                                                            <span className="text-sm">{option.label}</span>
+                                                        </button>
+                                                    )
+                                                })}
+                                            </div>
+                                        </div>
 
-                                {/* Accent Color */}
-                                <div>
-                                    <label className="block text-sm font-medium mb-3">Accent Color</label>
-                                    <div className="flex flex-wrap gap-2">
-                                        {accentColors.map(color => (
-                                            <button
-                                                key={color.value}
-                                                onClick={() => updateSettings({ accentColor: color.value })}
-                                                className={`
-                           w-10 h-10 rounded-full transition-all flex items-center justify-center
-                           ${settings.accentColor === color.value
-                                                         ? 'ring-2 ring-offset-2 ring-gray-400 dark:ring-offset-dark-surface'
-                                                         : 'hover:scale-110'
-                                                     }
-                         `}
-                                                style={{ backgroundColor: color.value === 'classic' ? '#374151' : color.value }}
-                                                title={color.name}
-                                            >
-                                                {settings.accentColor === color.value && (
-                                                    <Check className="w-5 h-5 text-white" />
-                                                )}
-                                            </button>
-                                        ))}
-                                    </div>
-                                </div>
-                            </div>
-                        )}
-
-                        {/* Playback Tab */}
-                        {activeTab === 'playback' && (
-                            <div className="space-y-6">
-
-                                {/* Resume Playback */}
-                                <div className="flex items-center justify-between">
-                                    <div>
-                                        <div className="font-medium text-sm">Resume Playback</div>
-                                        <div className="text-xs text-light-text-secondary dark:text-dark-text-secondary">
-                                            Continue from where you left off
+                                        {/* Accent Color */}
+                                        <div>
+                                            <label className="block text-sm font-medium mb-3">Accent Color</label>
+                                            <div className="flex flex-wrap gap-2">
+                                                {accentColors.map(color => (
+                                                    <button
+                                                        key={color.value}
+                                                        onClick={() => updateSettings({ accentColor: color.value })}
+                                                        className={`w-10 h-10 rounded-full transition-all flex items-center justify-center ${settings.accentColor === color.value ? 'ring-2 ring-offset-2 ring-gray-400 dark:ring-offset-dark-surface' : 'hover:scale-110'}`}
+                                                        style={{ backgroundColor: color.value === 'classic' ? '#374151' : color.value }}
+                                                        title={color.name}
+                                                    >
+                                                        {settings.accentColor === color.value && <Check className="w-5 h-5 text-white" />}
+                                                    </button>
+                                                ))}
+                                            </div>
                                         </div>
                                     </div>
-                                    <button
-                                        onClick={() => updateSettings({ resumePlayback: !settings.resumePlayback })}
-                                        className={`
-                       w-12 h-6 rounded-full transition-colors relative
-                       ${settings.resumePlayback ? 'bg-primary dark:bg-primary-fg/30 text-primary-content' : 'bg-gray-300 dark:bg-gray-600'}
-                     `}
-                                    >
-                                        <div className={`
-                       absolute top-1 w-4 h-4 rounded-full bg-white transition-transform
-                       ${settings.resumePlayback ? 'translate-x-7' : 'translate-x-1'}
-                     `} />
-                                    </button>
                                 </div>
 
-                                {/* Auto-mark Complete Threshold */}
                                 <div>
-                                    <label className="block text-sm font-medium mb-3">
-                                        Mark Complete When Watched
-                                    </label>
-                                    <div className="flex gap-3">
-                                        {completionThresholds.map(option => (
-                                            <button
-                                                key={option.value}
-                                                onClick={() => updateSettings({ autoMarkCompleteAt: option.value })}
-                                                className={`
-                           flex-1 p-3 rounded-lg border-2 transition-all text-center
-                           ${settings.autoMarkCompleteAt === option.value
-                                                         ? 'border-primary-fg/40 bg-primary-fg/5'
-                                                         : 'border-light-border dark:border-dark-border hover:border-primary-fg/30'
-                                                     }
-                         `}
-                                            >
-                                                <span className="text-sm font-medium">{option.label}</span>
-                                            </button>
-                                        ))}
-                                    </div>
-                                </div>
-
-                                {/* Progress Calculation Mode */}
-                                <div>
-                                    <label className="block text-sm font-medium mb-3">
-                                        Progress Calculation
-                                    </label>
-                                    <div className="space-y-2">
-                                        {[
-                                            { value: 'videos', label: 'By Videos Completed', description: 'Count of completed videos ÷ total videos' },
-                                            { value: 'duration', label: 'By Time Watched', description: 'Total time watched ÷ total course duration' }
-                                        ].map(option => (
-                                            <button
-                                                key={option.value}
-                                                onClick={async () => {
-                                                    updateSettings({ progressCalculationMode: option.value })
-                                                    // Recalculate all courses with the new mode
-                                                    await recalculateAllCoursesProgress(option.value)
-                                                }}
-                                                className={`
-                           w-full flex items-center justify-between p-3 rounded-lg border-2 transition-all text-left
-                           ${settings.progressCalculationMode === option.value
-                                                         ? 'border-primary-fg/40 bg-primary-fg/5'
-                                                         : 'border-light-border dark:border-dark-border hover:border-primary-fg/30'
-                                                     }
-                         `}
-                                            >
-                                                <div>
-                                                    <div className="font-medium text-sm">{option.label}</div>
-                                                    <div className="text-xs text-light-text-secondary dark:text-dark-text-secondary">
-                                                        {option.description}
-                                                    </div>
+                                    <div className="space-y-6">
+                                        {/* Resume Playback */}
+                                        <div className="flex items-center justify-between">
+                                            <div>
+                                                <div className="font-medium text-sm">Resume Playback</div>
+                                                <div className="text-xs text-light-text-secondary dark:text-dark-text-secondary">
+                                                    Continue from where you left off
                                                 </div>
-                                                {settings.progressCalculationMode === option.value && (
-                                                    <Check className="w-5 h-5 text-primary-fg" />
-                                                )}
+                                            </div>
+                                            <button
+                                                onClick={() => updateSettings({ resumePlayback: !settings.resumePlayback })}
+                                                className={`w-12 h-6 rounded-full transition-colors relative ${settings.resumePlayback ? 'bg-primary dark:bg-primary-fg/30 text-primary-content' : 'bg-gray-300 dark:bg-gray-600'}`}
+                                            >
+                                                <div className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-transform ${settings.resumePlayback ? 'translate-x-7' : 'translate-x-1'}`} />
                                             </button>
-                                        ))}
+                                        </div>
+
+                                        {/* Auto-mark Complete Threshold */}
+                                        <div>
+                                            <label className="block text-sm font-medium mb-3">
+                                                Mark Complete When Watched
+                                            </label>
+                                            <div className="flex gap-3">
+                                                {completionThresholds.map(option => (
+                                                    <button
+                                                        key={option.value}
+                                                        onClick={() => updateSettings({ autoMarkCompleteAt: option.value })}
+                                                        className={`flex-1 p-3 rounded-lg border-2 transition-all text-center ${settings.autoMarkCompleteAt === option.value ? 'border-primary-fg/40 bg-primary-fg/5' : 'border-light-border dark:border-dark-border hover:border-primary-fg/30'}`}
+                                                    >
+                                                        <span className="text-sm font-medium">{option.label}</span>
+                                                    </button>
+                                                ))}
+                                            </div>
+                                        </div>
+
+                                        {/* Progress Calculation Mode */}
+                                        <div>
+                                            <label className="block text-sm font-medium mb-3">
+                                                Progress Calculation
+                                            </label>
+                                            <div className="space-y-2">
+                                                {[
+                                                    { value: 'videos', label: 'By Videos Completed', description: 'Count of completed videos ÷ total videos' },
+                                                    { value: 'duration', label: 'By Time Watched', description: 'Total time watched ÷ total course duration' }
+                                                ].map(option => (
+                                                    <button
+                                                        key={option.value}
+                                                        onClick={async () => {
+                                                            updateSettings({ progressCalculationMode: option.value })
+                                                            await recalculateAllCoursesProgress(option.value)
+                                                        }}
+                                                        className={`w-full flex items-center justify-between p-3 rounded-lg border-2 transition-all text-left ${settings.progressCalculationMode === option.value ? 'border-primary-fg/40 bg-primary-fg/5' : 'border-light-border dark:border-dark-border hover:border-primary-fg/30'}`}
+                                                    >
+                                                        <div>
+                                                            <div className="font-medium text-sm">{option.label}</div>
+                                                            <div className="text-xs text-light-text-secondary dark:text-dark-text-secondary">
+                                                                {option.description}
+                                                            </div>
+                                                        </div>
+                                                        {settings.progressCalculationMode === option.value && (
+                                                            <Check className="w-5 h-5 text-primary-fg" />
+                                                        )}
+                                                    </button>
+                                                ))}
+                                            </div>
+                                        </div>
                                     </div>
                                 </div>
                             </div>
@@ -594,49 +567,6 @@ function SettingsModal({ isOpen, onClose }) {
                                 </div>
 
 
-
-                                {/* Detect Durations */}
-                                <div className="p-4 rounded-lg border border-light-border dark:border-dark-border bg-light-surface dark:bg-dark-bg">
-                                    <div className="flex items-center justify-between gap-4">
-                                        <div className="flex items-center gap-3">
-                                            <div className="w-8 h-8 rounded-lg bg-primary-fg/10 flex items-center justify-center flex-shrink-0">
-                                                <Clock className="w-4 h-4 text-primary-fg" />
-                                            </div>
-                                            <div>
-                                                <div className="text-sm font-semibold">Detect Video Durations</div>
-                                                <div className="text-xs text-light-text-secondary dark:text-dark-text-secondary">
-                                                    {durationResult
-                                                        ? `Updated ${durationResult.updated} of ${durationResult.total} videos`
-                                                        : 'Fix 0:00 durations by scanning video file headers'
-                                                    }
-                                                </div>
-                                            </div>
-                                        </div>
-                                        <button
-                                            disabled={detectingDurations}
-                                            onClick={async () => {
-                                                try {
-                                                    setDetectingDurations(true)
-                                                    setDurationResult(null)
-                                                    const result = await detectAllDurations()
-                                                    setDurationResult(result)
-                                                    if (result.updated > 0) {
-                                                        setTimeout(() => window.location.reload(), 1500)
-                                                    }
-                                                } catch (err) {
-                                                    showNotification('Failed to detect durations: ' + err.message, 'error')
-                                                } finally {
-                                                    setDetectingDurations(false)
-                                                }
-                                            }}
-                                            className="flex-shrink-0 text-xs px-3 py-1.5 border border-light-border dark:border-dark-border rounded-lg hover:bg-light-surface dark:hover:bg-dark-bg transition-colors font-medium flex items-center gap-1.5 disabled:opacity-50"
-                                        >
-                                            <Clock className={`w-3.5 h-3.5 ${detectingDurations ? 'animate-spin' : ''}`} />
-                                            {detectingDurations ? 'Scanning...' : 'Detect'}
-                                        </button>
-                                    </div>
-                                </div>
-
                                 {/* Danger Zone */}
                                 <div className="p-4 rounded-xl border border-error/20 bg-error/5">
                                     <div className="flex items-center justify-between gap-4">
@@ -669,6 +599,123 @@ function SettingsModal({ isOpen, onClose }) {
                                         </button>
                                     </div>
                                 </div>
+                            </div>
+                        )}
+
+                        {/* Feedback Tab */}
+                        {activeTab === 'feedback' && (
+                            <div className="space-y-6">
+                                {feedbackSent ? (
+                                    <div className="flex flex-col items-center justify-center py-12 text-center">
+                                        <div className="w-16 h-16 rounded-full bg-green-500/10 flex items-center justify-center mb-4">
+                                            <Check className="w-8 h-8 text-green-500" />
+                                        </div>
+                                        <h3 className="text-lg font-semibold mb-2">Thank you!</h3>
+                                        <p className="text-sm text-light-text-secondary dark:text-dark-text-secondary mb-6 max-w-xs">
+                                            Your feedback has been submitted successfully. We really appreciate you taking the time!
+                                        </p>
+                                        <button
+                                            onClick={() => { setFeedbackSent(false); setFeedbackMessage(''); setFeedbackEmail(''); }}
+                                            className="text-sm text-primary-fg hover:underline"
+                                        >
+                                            Send more feedback
+                                        </button>
+                                    </div>
+                                ) : (
+                                    <>
+                                        <div>
+                                            <p className="text-sm text-light-text-secondary dark:text-dark-text-secondary mb-5">
+                                                Help us improve TutIn! Your feedback goes directly to the development team.
+                                            </p>
+
+                                            {/* Category */}
+                                            <label className="block text-sm font-medium mb-3">Category</label>
+                                            <div className="flex gap-2">
+                                                {[
+                                                    { value: 'Bug', icon: Bug, color: 'text-red-500 bg-red-500/10' },
+                                                    { value: 'Feature', icon: Lightbulb, color: 'text-amber-500 bg-amber-500/10' },
+                                                    { value: 'General', icon: MessageCircle, color: 'text-blue-500 bg-blue-500/10' }
+                                                ].map(cat => {
+                                                    const CatIcon = cat.icon
+                                                    const isSelected = feedbackCategory === cat.value
+                                                    return (
+                                                        <button
+                                                            key={cat.value}
+                                                            onClick={() => setFeedbackCategory(cat.value)}
+                                                            className={`flex-1 flex items-center justify-center gap-2 p-3 rounded-lg border-2 transition-all text-sm font-medium ${
+                                                                isSelected
+                                                                    ? 'border-primary-fg/40 bg-primary-fg/5'
+                                                                    : 'border-light-border dark:border-dark-border hover:border-primary-fg/30'
+                                                            }`}
+                                                        >
+                                                            <div className={`w-6 h-6 rounded-md flex items-center justify-center ${cat.color}`}>
+                                                                <CatIcon className="w-3.5 h-3.5" />
+                                                            </div>
+                                                            {cat.value}
+                                                        </button>
+                                                    )
+                                                })}
+                                            </div>
+                                        </div>
+
+                                        {/* Message */}
+                                        <div>
+                                            <label className="block text-sm font-medium mb-2">Message</label>
+                                            <textarea
+                                                value={feedbackMessage}
+                                                onChange={e => setFeedbackMessage(e.target.value)}
+                                                placeholder={feedbackCategory === 'Bug' ? 'Describe the bug — what happened and what did you expect?' : feedbackCategory === 'Feature' ? 'What feature would you like to see?' : 'Tell us what\'s on your mind...'}
+                                                rows={5}
+                                                className="w-full px-3 py-2.5 rounded-lg border border-light-border dark:border-dark-border bg-white dark:bg-dark-surface focus:border-primary-fg outline-none text-sm resize-none transition-colors"
+                                            />
+                                        </div>
+
+                                        {/* Email (optional) */}
+                                        <div>
+                                            <label className="block text-sm font-medium mb-2">
+                                                Email <span className="text-xs text-light-text-secondary dark:text-dark-text-secondary font-normal">(optional — if you'd like a reply)</span>
+                                            </label>
+                                            <input
+                                                type="email"
+                                                value={feedbackEmail}
+                                                onChange={e => setFeedbackEmail(e.target.value)}
+                                                placeholder="you@example.com"
+                                                className="w-full px-3 py-2.5 rounded-lg border border-light-border dark:border-dark-border bg-white dark:bg-dark-surface focus:border-primary-fg outline-none text-sm transition-colors"
+                                            />
+                                        </div>
+
+                                        {/* Send */}
+                                        <button
+                                            disabled={!feedbackMessage.trim() || sendingFeedback}
+                                            onClick={async () => {
+                                                try {
+                                                    setSendingFeedback(true)
+                                                    const res = await fetch('/api/feedback', {
+                                                        method: 'POST',
+                                                        headers: { 'Content-Type': 'application/json' },
+                                                        body: JSON.stringify({
+                                                            category: feedbackCategory,
+                                                            message: feedbackMessage,
+                                                            email: feedbackEmail || undefined,
+                                                        }),
+                                                    })
+                                                    const data = await res.json()
+                                                    if (!res.ok) throw new Error(data.error || 'Failed to send')
+                                                    setFeedbackSent(true)
+                                                    showNotification('Feedback sent! Thank you 🎉', 'success')
+                                                } catch (err) {
+                                                    showNotification('Failed to send feedback: ' + err.message, 'error')
+                                                } finally {
+                                                    setSendingFeedback(false)
+                                                }
+                                            }}
+                                            className="w-full flex items-center justify-center gap-2 py-2.5 rounded-lg bg-primary text-primary-content hover:bg-primary-hover transition-all text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                                        >
+                                            <Send className="w-4 h-4" />
+                                            {sendingFeedback ? 'Sending...' : 'Send Feedback'}
+                                        </button>
+                                    </>
+                                )}
                             </div>
                         )}
                     </div>

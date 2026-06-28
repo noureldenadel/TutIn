@@ -144,8 +144,9 @@ stateDiagram-v2
 - **Visual Roadmap**: An infinite canvas (node-based) editor to map out course prerequisites and learning paths.
 
 ### 🎬 Advanced Video Player
+- **Cinematic Ambient Mode**: Local videos feature a dynamic, glowing ambient blur that extends the video's colors into the background for a more immersive viewing experience.
 - **Resume Playback**: Remembers your exact timestamp when you close the app.
-- **Dynamic Subtitles**: Support for WebVTT/SRT with drag-and-drop repositioning.
+- **Dynamic Subtitles**: Support for WebVTT/SRT with drag-and-drop repositioning and smart language detection from filenames (e.g. automatically categorizes `video_eng.srt` as English).
 - **Speed & PiP**: Quick speed toggles, hold-to-fast-forward, and Picture-in-Picture mode.
 
 ### 🧠 AI Toolkit
@@ -156,6 +157,7 @@ stateDiagram-v2
 ### 📝 Notes & Annotations
 - **Timestamped Notes**: Take rich-text notes that lock to the current video timestamp. 
 - **Image Support**: Paste or drag screenshots directly into notes (auto-compressed and stored locally as Base64).
+- **Persistent UI State**: The sidebar intelligently preserves your scroll position, active tabs, and unsaved note drafts when switching between the Playlist, AI, and Notes panels.
 
 ---
 
