@@ -9,15 +9,33 @@
  * The React web app talks to this server via fetch().
  * The server is required — the React app cannot function without it.
  */
-
 import express from 'express'
 import cors from 'cors'
+import path from 'path'
+import fs from 'fs'
+import { fileURLToPath } from 'url'
 import { initDatabase, closeDatabase, getDb, getDataDir, getAll, getOne, run, transaction, saveDatabase } from './database.js'
 import { streamVideo, setAllowedRoots, addAllowedRoot } from './services/videoStreamer.js'
 import { repairPaths } from './services/pathRepair.js'
 import { parseMp4Duration } from './utils/mp4Parser.js'
-import path from 'path'
-import fs from 'fs'
+import coursesRouter from './routes/courses.js'
+import modulesRouter from './routes/modules.js'
+import videosRouter from './routes/videos.js'
+import notesRouter from './routes/notes.js'
+import analyticsRouter from './routes/analytics.js'
+import instructorsRouter from './routes/instructors.js'
+import roadmapsRouter from './routes/roadmaps.js'
+import settingsRouter from './routes/settings.js'
+import transcriptsRouter from './routes/transcripts.js'
+import summariesRouter from './routes/summaries.js'
+import searchRouter from './routes/search.js'
+import dataRouter from './routes/data.js'
+import fsRouter from './routes/filesystem.js'
+import dubbingRouter from './routes/dubbing.js'
+import youtubeRouter from './routes/youtube.js'
+
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = path.dirname(__filename)
 
 const app = express()
 const DEFAULT_PORT = 9474
@@ -63,22 +81,6 @@ app.get('/api/health', (req, res) => {
 
 app.get('/video/*filePath', streamVideo)
 
-import coursesRouter from './routes/courses.js'
-import modulesRouter from './routes/modules.js'
-import videosRouter from './routes/videos.js'
-import notesRouter from './routes/notes.js'
-import analyticsRouter from './routes/analytics.js'
-import instructorsRouter from './routes/instructors.js'
-import roadmapsRouter from './routes/roadmaps.js'
-import settingsRouter from './routes/settings.js'
-import transcriptsRouter from './routes/transcripts.js'
-import summariesRouter from './routes/summaries.js'
-import searchRouter from './routes/search.js'
-import dataRouter from './routes/data.js'
-import fsRouter from './routes/filesystem.js'
-import dubbingRouter from './routes/dubbing.js'
-import youtubeRouter from './routes/youtube.js'
-
 // ============================================
 // MOUNT ROUTES
 // ============================================
@@ -102,9 +104,6 @@ app.use('/api/youtube', youtubeRouter)
 // ============================================
 // STATIC FILE SERVING (PRODUCTION)
 // ============================================
-import { fileURLToPath } from 'url'
-const __filename = fileURLToPath(import.meta.url)
-const __dirname = path.dirname(__filename)
 
 if (process.env.NODE_ENV === 'production') {
     const distPath = path.join(__dirname, '../dist')
@@ -232,19 +231,14 @@ function findAvailablePort(startPort) {
 }
 
 // Graceful shutdown
-process.on('SIGINT', () => {
+function shutdown() {
     console.log('\n[Server] Shutting down...')
     closeDatabase()
     server?.close()
     process.exit(0)
-})
-
-process.on('SIGTERM', () => {
-    console.log('\n[Server] Shutting down...')
-    closeDatabase()
-    server?.close()
-    process.exit(0)
-})
+}
+process.on('SIGINT', shutdown)
+process.on('SIGTERM', shutdown)
 
 start().catch(err => {
     console.error('Failed to start server:', err)

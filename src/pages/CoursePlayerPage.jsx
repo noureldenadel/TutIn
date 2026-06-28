@@ -23,6 +23,34 @@ function findModulePath(modules, targetModuleId) {
     return []
 }
 
+/**
+ * Flatten all videos from a nested module tree into a single ordered list.
+ */
+function getAllVideosFlat(mods) {
+    const list = []
+    for (const mod of mods) {
+        list.push(...(mod.videos || []))
+        if (mod.subModules?.length > 0) {
+            list.push(...getAllVideosFlat(mod.subModules))
+        }
+    }
+    return list
+}
+
+/**
+ * Fetch all modules for a course with their videos attached, and build the tree.
+ */
+async function fetchModulesWithVideos(courseId) {
+    const modulesData = await getModulesByCourse(courseId)
+    const modulesWithVideos = await Promise.all(
+        modulesData.map(async (module) => {
+            const videos = await getVideosByModule(module.id)
+            return { ...module, videos }
+        })
+    )
+    return { flat: modulesWithVideos, tree: buildModuleTree(modulesWithVideos) }
+}
+
 function CoursePlayerPage() {
     const { courseId } = useParams()
     const navigate = useNavigate()
@@ -88,7 +116,6 @@ function CoursePlayerPage() {
         return Math.min(natural, windowHeight - 136)
     }, [playerWrapperWidth, windowHeight, videoAspect, sidebarCollapsed, sidebarWidth])
 
-    const sidebarOnLeft = false // Default to right side for video playlist
 
     // Load course data (reload when progress calculation mode changes)
     useEffect(() => {
@@ -157,14 +184,8 @@ function CoursePlayerPage() {
             await updateCourse(courseId, { lastAccessed: new Date().toISOString() })
 
             // Get modules with videos
-            const modulesData = await getModulesByCourse(courseId)
-            const modulesWithVideos = await Promise.all(
-                modulesData.map(async (module) => {
-                    const videos = await getVideosByModule(module.id)
-                    return { ...module, videos }
-                })
-            )
-            setModules(buildModuleTree(modulesWithVideos))
+            const { flat: modulesWithVideos, tree: moduleTree } = await fetchModulesWithVideos(courseId)
+            setModules(moduleTree)
 
             // Only set first video if no video is currently selected
             if (!currentVideo && modulesWithVideos.length > 0) {
@@ -235,14 +256,8 @@ function CoursePlayerPage() {
     async function refreshModulesOnly() {
         try {
             // Get updated modules with videos
-            const modulesData = await getModulesByCourse(courseId)
-            const modulesWithVideos = await Promise.all(
-                modulesData.map(async (module) => {
-                    const videos = await getVideosByModule(module.id)
-                    return { ...module, videos }
-                })
-            )
-            setModules(buildModuleTree(modulesWithVideos))
+            const { flat: modulesWithVideos, tree: moduleTree } = await fetchModulesWithVideos(courseId)
+            setModules(moduleTree)
 
             // Update course data (for progress stats) without affecting loading state
             const courseData = await getCourse(courseId)
@@ -308,18 +323,6 @@ function CoursePlayerPage() {
     function handleNextVideo() {
         if (!currentVideo || modules.length === 0) return
 
-        // Get a flat list of all videos in the course for easy navigation
-        function getAllVideosFlat(mods) {
-            const list = []
-            for (const mod of mods) {
-                list.push(...(mod.videos || []))
-                if (mod.subModules?.length > 0) {
-                    list.push(...getAllVideosFlat(mod.subModules))
-                }
-            }
-            return list
-        }
-
         const allVideos = getAllVideosFlat(modules)
         const currentIndex = allVideos.findIndex(v => v.id === currentVideo.id)
 
@@ -331,17 +334,6 @@ function CoursePlayerPage() {
 
     function handlePreviousVideo() {
         if (!currentVideo || modules.length === 0) return
-
-        function getAllVideosFlat(mods) {
-            const list = []
-            for (const mod of mods) {
-                list.push(...(mod.videos || []))
-                if (mod.subModules?.length > 0) {
-                    list.push(...getAllVideosFlat(mod.subModules))
-                }
-            }
-            return list
-        }
 
         const allVideos = getAllVideosFlat(modules)
         const currentIndex = allVideos.findIndex(v => v.id === currentVideo.id)
@@ -445,7 +437,7 @@ function CoursePlayerPage() {
             </div>
 
             {/* Main Content */}
-            <div className={`relative z-10 flex h-[calc(100vh-64px)] ${sidebarOnLeft ? 'flex-row-reverse' : ''}`}>
+            <div className={`relative z-10 flex h-[calc(100vh-64px)]`}>
                 {/* Video Player Area — padding-right tracks sidebar width exactly */}
                 <div
                     className="flex-1 flex flex-col overflow-y-auto min-w-0"

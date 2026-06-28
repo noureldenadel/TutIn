@@ -3,39 +3,45 @@ import { getAll, getOne, run, transaction } from '../database.js'
 
 const router = express.Router()
 
+/**
+ * Map a raw SQLite video row (snake_case) to a camelCase API response object.
+ */
+function mapVideoRow(video) {
+    return {
+        id: video.id,
+        courseId: video.course_id,
+        moduleId: video.module_id,
+        title: video.title,
+        originalTitle: video.original_title,
+        description: video.description,
+        fileName: video.file_name,
+        filePath: video.file_path,
+        fileSize: video.file_size,
+        duration: video.duration,
+        thumbnailData: video.thumbnail_data,
+        order: video.order,
+        isRequired: video.is_required === 1,
+        isCompleted: video.is_completed === 1,
+        isFavorite: video.is_favorite === 1,
+        watchProgress: video.watch_progress,
+        lastWatchedPosition: video.last_watched_position,
+        lastWatchedAt: video.last_watched_at,
+        completedAt: video.completed_at,
+        watchCount: video.watch_count,
+        tags: JSON.parse(video.tags || '[]'),
+        bookmarks: JSON.parse(video.bookmarks || '[]'),
+        youtubeId: video.youtube_id,
+        url: video.url,
+        hasTranscript: video.has_transcript === 1,
+        subtitleSources: JSON.parse(video.subtitle_sources || '[]')
+    }
+}
+
 // GET /api/videos/by-course/:courseId
 router.get('/by-course/:courseId', (req, res) => {
     try {
         const videos = getAll('SELECT * FROM videos WHERE course_id = ? ORDER BY "order" ASC', [req.params.courseId])
-        const mappedVideos = videos.map(video => ({
-            id: video.id,
-            courseId: video.course_id,
-            moduleId: video.module_id,
-            title: video.title,
-            originalTitle: video.original_title,
-            description: video.description,
-            fileName: video.file_name,
-            filePath: video.file_path,
-            fileSize: video.file_size,
-            duration: video.duration,
-            thumbnailData: video.thumbnail_data,
-            order: video.order,
-            isRequired: video.is_required === 1,
-            isCompleted: video.is_completed === 1,
-            isFavorite: video.is_favorite === 1,
-            watchProgress: video.watch_progress,
-            lastWatchedPosition: video.last_watched_position,
-            lastWatchedAt: video.last_watched_at,
-            completedAt: video.completed_at,
-            watchCount: video.watch_count,
-            tags: JSON.parse(video.tags || '[]'),
-            bookmarks: JSON.parse(video.bookmarks || '[]'),
-            youtubeId: video.youtube_id,
-            url: video.url,
-            hasTranscript: video.has_transcript === 1,
-            subtitleSources: JSON.parse(video.subtitle_sources || '[]')
-        }))
-        res.json(mappedVideos)
+        res.json(videos.map(mapVideoRow))
     } catch (err) {
         res.status(500).json({ error: err.message })
     }
@@ -45,35 +51,7 @@ router.get('/by-course/:courseId', (req, res) => {
 router.get('/by-module/:moduleId', (req, res) => {
     try {
         const videos = getAll('SELECT * FROM videos WHERE module_id = ? ORDER BY "order" ASC', [req.params.moduleId])
-        const mappedVideos = videos.map(video => ({
-            id: video.id,
-            courseId: video.course_id,
-            moduleId: video.module_id,
-            title: video.title,
-            originalTitle: video.original_title,
-            description: video.description,
-            fileName: video.file_name,
-            filePath: video.file_path,
-            fileSize: video.file_size,
-            duration: video.duration,
-            thumbnailData: video.thumbnail_data,
-            order: video.order,
-            isRequired: video.is_required === 1,
-            isCompleted: video.is_completed === 1,
-            isFavorite: video.is_favorite === 1,
-            watchProgress: video.watch_progress,
-            lastWatchedPosition: video.last_watched_position,
-            lastWatchedAt: video.last_watched_at,
-            completedAt: video.completed_at,
-            watchCount: video.watch_count,
-            tags: JSON.parse(video.tags || '[]'),
-            bookmarks: JSON.parse(video.bookmarks || '[]'),
-            youtubeId: video.youtube_id,
-            url: video.url,
-            hasTranscript: video.has_transcript === 1,
-            subtitleSources: JSON.parse(video.subtitle_sources || '[]')
-        }))
-        res.json(mappedVideos)
+        res.json(videos.map(mapVideoRow))
     } catch (err) {
         res.status(500).json({ error: err.message })
     }
@@ -116,34 +94,7 @@ router.get('/:id', (req, res) => {
         const video = getOne('SELECT * FROM videos WHERE id = ?', [req.params.id])
         if (!video) return res.status(404).json({ error: 'Video not found' })
 
-        res.json({
-            id: video.id,
-            courseId: video.course_id,
-            moduleId: video.module_id,
-            title: video.title,
-            originalTitle: video.original_title,
-            description: video.description,
-            fileName: video.file_name,
-            filePath: video.file_path,
-            fileSize: video.file_size,
-            duration: video.duration,
-            thumbnailData: video.thumbnail_data,
-            order: video.order,
-            isRequired: video.is_required === 1,
-            isCompleted: video.is_completed === 1,
-            isFavorite: video.is_favorite === 1,
-            watchProgress: video.watch_progress,
-            lastWatchedPosition: video.last_watched_position,
-            lastWatchedAt: video.last_watched_at,
-            completedAt: video.completed_at,
-            watchCount: video.watch_count,
-            tags: JSON.parse(video.tags || '[]'),
-            bookmarks: JSON.parse(video.bookmarks || '[]'),
-            youtubeId: video.youtube_id,
-            url: video.url,
-            hasTranscript: video.has_transcript === 1,
-            subtitleSources: JSON.parse(video.subtitle_sources || '[]')
-        })
+        res.json(mapVideoRow(video))
     } catch (err) {
         res.status(500).json({ error: err.message })
     }

@@ -57,6 +57,15 @@ function ensureDirectories() {
 }
 
 /**
+ * Write the in-memory database to disk
+ */
+function writeToDisk() {
+    const data = db.export()
+    const buffer = Buffer.from(data)
+    fs.writeFileSync(dbPath, buffer)
+}
+
+/**
  * Save database to disk (debounced)
  */
 export function saveDatabase() {
@@ -66,9 +75,7 @@ export function saveDatabase() {
     if (saveTimer) clearTimeout(saveTimer)
     saveTimer = setTimeout(() => {
         try {
-            const data = db.export()
-            const buffer = Buffer.from(data)
-            fs.writeFileSync(dbPath, buffer)
+            writeToDisk()
         } catch (err) {
             console.error('[Database] Save failed:', err.message)
         }
@@ -82,9 +89,7 @@ export function saveDatabaseSync() {
     if (!db || !dbPath) return
     if (saveTimer) clearTimeout(saveTimer)
     try {
-        const data = db.export()
-        const buffer = Buffer.from(data)
-        fs.writeFileSync(dbPath, buffer)
+        writeToDisk()
     } catch (err) {
         console.error('[Database] Save failed:', err.message)
     }

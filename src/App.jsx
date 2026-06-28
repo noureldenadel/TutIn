@@ -8,6 +8,7 @@ import WelcomeGuide from './components/common/WelcomeGuide'
 import { SidebarProvider, useSidebar } from './contexts/SidebarContext'
 import { SearchProvider } from './contexts/SearchContext'
 import { NotificationProvider } from './contexts/NotificationContext'
+import { ImportProvider } from './contexts/ImportContext'
 
 // Lazy load pages for better performance
 const HomePage = lazy(() => import('./pages/HomePage'))
@@ -60,11 +61,13 @@ function App() {
     return (
         <ErrorBoundary>
             <NotificationProvider>
-                <SidebarProvider>
-                    <SearchProvider>
-                        <AppContent />
-                    </SearchProvider>
-                </SidebarProvider>
+                <ImportProvider>
+                    <SidebarProvider>
+                        <SearchProvider>
+                            <AppContent />
+                        </SearchProvider>
+                    </SidebarProvider>
+                </ImportProvider>
             </NotificationProvider>
         </ErrorBoundary>
     )

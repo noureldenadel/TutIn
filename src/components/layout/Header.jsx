@@ -11,9 +11,11 @@ import ExternalLinkImportModal from '../course/ExternalLinkImportModal'
 import { scanCourseFolder, pickFolder } from '../../utils/fileSystem'
 import { useSettings } from '../../contexts/SettingsContext'
 import { useNotification } from '../../contexts/NotificationContext'
+import { useImport } from '../../contexts/ImportContext'
 
-function Header({ onImportData, onYouTubeImport, onGoogleDriveImport }) {
+function Header() {
     const { settings } = useSettings()
+    const { dispatchImport, dispatchYouTube, dispatchGoogleDrive, dispatchExternalLink } = useImport()
     const { theme, toggleTheme, isDark } = useTheme()
     const { toggleSidebar } = useSidebar()
     const { searchQuery, setSearchQuery } = useSearch()
@@ -34,7 +36,7 @@ function Header({ onImportData, onYouTubeImport, onGoogleDriveImport }) {
             if (handle) {
                 const courseData = await scanCourseFolder(handle, settings.autoDetectThumbnails)
                 if (courseData) {
-                    window.__homePageHandlers?.handleImportData?.(courseData)
+                    dispatchImport(courseData)
                 }
             }
         } catch (err) {
@@ -207,7 +209,7 @@ function Header({ onImportData, onYouTubeImport, onGoogleDriveImport }) {
                 onClose={() => setShowYouTubeModal(false)}
                 onImport={(data) => {
                     setShowYouTubeModal(false)
-                    window.__homePageHandlers?.handleYouTubeImport?.(data)
+                    dispatchYouTube(data)
                 }}
             />
 
@@ -217,7 +219,7 @@ function Header({ onImportData, onYouTubeImport, onGoogleDriveImport }) {
                 onClose={() => setShowGoogleDriveModal(false)}
                 onImport={(data) => {
                     setShowGoogleDriveModal(false)
-                    window.__homePageHandlers?.handleGoogleDriveImport?.(data)
+                    dispatchGoogleDrive(data)
                 }}
             />
 
@@ -227,7 +229,7 @@ function Header({ onImportData, onYouTubeImport, onGoogleDriveImport }) {
                 onClose={() => setShowExternalLinkModal(false)}
                 onImport={(data) => {
                     setShowExternalLinkModal(false)
-                    window.__homePageHandlers?.handleExternalLinkImport?.(data)
+                    dispatchExternalLink(data)
                 }}
             />
         </>
