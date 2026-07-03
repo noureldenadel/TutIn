@@ -1,5 +1,6 @@
 import express from 'express'
 import { getAll, getOne, run, transaction } from '../database.js'
+import { recalculateCourseProgress } from './courses.js'
 
 const router = express.Router()
 
@@ -180,6 +181,13 @@ router.put('/:id/progress', (req, res) => {
             SET watch_progress = ?, last_watched_position = ?, last_watched_at = ?
             WHERE id = ?
         `, [watchProgress || 0, lastWatchedPosition || 0, new Date().toISOString(), req.params.id])
+        
+        // Recalculate course progress using the user's setting
+        const video = getOne('SELECT course_id FROM videos WHERE id = ?', [req.params.id])
+        if (video) {
+            recalculateCourseProgress(video.course_id)
+        }
+        
         res.json({ success: true })
     } catch (err) {
         res.status(500).json({ error: err.message })
@@ -200,14 +208,8 @@ router.post('/:id/complete', (req, res) => {
             WHERE id = ?
         `, [isCompleted ? 1 : 0, completedAt, req.params.id])
 
-        // Recalculate course progress
-        const allVideos = getAll('SELECT is_completed FROM videos WHERE course_id = ?', [video.course_id])
-        const totalVideos = allVideos.length
-        const completedVideos = allVideos.filter(v => v.is_completed === 1).length
-        const completionPercentage = totalVideos > 0 ? (completedVideos / totalVideos) * 100 : 0
-        run(`
-            UPDATE courses SET completed_videos = ?, completion_percentage = ? WHERE id = ?
-        `, [completedVideos, completionPercentage, video.course_id])
+        // Recalculate course progress using the unified function
+        const { completedVideos, totalVideos, completionPercentage } = recalculateCourseProgress(video.course_id)
 
         res.json({ success: true, completedVideos, totalVideos, completionPercentage })
     } catch (err) {

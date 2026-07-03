@@ -94,6 +94,51 @@ router.post('/', (req, res) => {
     }
 })
 
+// Exportable function to recalculate a single course's progress
+export function recalculateCourseProgress(courseId, dbMode = null) {
+    let mode = dbMode
+    if (!mode) {
+        const modeRow = getOne("SELECT value FROM settings WHERE key = 'progressCalculationMode'")
+        try {
+             mode = modeRow ? JSON.parse(modeRow.value) : 'videos'
+        } catch {
+             mode = 'videos'
+        }
+    }
+    
+    const videos = getAll(
+        'SELECT is_completed, duration, watch_progress FROM videos WHERE course_id = ?',
+        [courseId]
+    )
+    const totalVideos = videos.length
+    if (totalVideos === 0) return { completedVideos: 0, completionPercentage: 0 }
+
+    let completedVideos, completionPercentage
+
+    if (mode === 'duration') {
+        // Progress based on total watch time
+        const totalDuration = videos.reduce((s, v) => s + (v.duration || 0), 0)
+        // Fix: If a video is manually marked complete, treat its watch_progress as 1 (100%)
+        const watchedDuration = videos.reduce((s, v) => {
+            const progress = v.is_completed === 1 ? 1 : (v.watch_progress || 0)
+            return s + ((v.duration || 0) * progress)
+        }, 0)
+        completedVideos = videos.filter(v => v.is_completed === 1).length
+        completionPercentage = totalDuration > 0 ? (watchedDuration / totalDuration) * 100 : 0
+    } else {
+        // Default: progress based on completed video count
+        completedVideos = videos.filter(v => v.is_completed === 1).length
+        completionPercentage = (completedVideos / totalVideos) * 100
+    }
+
+    run(
+        'UPDATE courses SET completed_videos = ?, completion_percentage = ? WHERE id = ?',
+        [completedVideos, completionPercentage, courseId]
+    )
+    
+    return { completedVideos, completionPercentage, totalVideos }
+}
+
 // POST /api/courses/recalculate-progress — MUST be before PUT /:id
 router.post('/recalculate-progress', (req, res) => {
     const { mode } = req.body // 'videos' | 'duration'
@@ -103,31 +148,7 @@ router.post('/recalculate-progress', (req, res) => {
 
         transaction(() => {
             for (const course of courses) {
-                const videos = getAll(
-                    'SELECT is_completed, duration, watch_progress FROM videos WHERE course_id = ?',
-                    [course.id]
-                )
-                const totalVideos = videos.length
-                if (totalVideos === 0) continue
-
-                let completedVideos, completionPercentage
-
-                if (mode === 'duration') {
-                    // Progress based on total watch time
-                    const totalDuration = videos.reduce((s, v) => s + (v.duration || 0), 0)
-                    const watchedDuration = videos.reduce((s, v) => s + ((v.duration || 0) * (v.watch_progress || 0)), 0)
-                    completedVideos = videos.filter(v => v.is_completed === 1).length
-                    completionPercentage = totalDuration > 0 ? (watchedDuration / totalDuration) * 100 : 0
-                } else {
-                    // Default: progress based on completed video count
-                    completedVideos = videos.filter(v => v.is_completed === 1).length
-                    completionPercentage = (completedVideos / totalVideos) * 100
-                }
-
-                run(
-                    'UPDATE courses SET completed_videos = ?, completion_percentage = ? WHERE id = ?',
-                    [completedVideos, completionPercentage, course.id]
-                )
+                recalculateCourseProgress(course.id, mode)
             }
         })
 

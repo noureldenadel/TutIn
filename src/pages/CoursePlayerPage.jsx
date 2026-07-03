@@ -128,12 +128,8 @@ function CoursePlayerPage() {
         // Skip on initial mount, only respond to actual changes
         if (prevProgressModeRef.current !== settings.progressCalculationMode) {
             prevProgressModeRef.current = settings.progressCalculationMode
-            // Wait for recalculation to complete in Settings, then refresh
-            // Small delay ensures SQLite has been updated by recalculateAllCoursesProgress
-            const timer = setTimeout(() => {
-                refreshCourseProgressOnly()
-            }, 500)
-            return () => clearTimeout(timer)
+            // Recalculation is already awaited by SettingsModal before this state changes
+            refreshCourseProgressOnly()
         }
     }, [settings.progressCalculationMode])
 

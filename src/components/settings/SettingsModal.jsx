@@ -211,8 +211,8 @@ function SettingsModal({ isOpen, onClose }) {
                                                     <button
                                                         key={option.value}
                                                         onClick={async () => {
-                                                            updateSettings({ progressCalculationMode: option.value })
                                                             await recalculateAllCoursesProgress(option.value)
+                                                            updateSettings({ progressCalculationMode: option.value })
                                                         }}
                                                         className={`w-full flex items-center justify-between p-3 rounded-lg border-2 transition-all text-left ${settings.progressCalculationMode === option.value ? 'border-primary-fg/40 bg-primary-fg/5' : 'border-light-border dark:border-dark-border hover:border-primary-fg/30'}`}
                                                     >
