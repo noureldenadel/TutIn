@@ -113,13 +113,6 @@ function NoteEditor({ content, onChange, onImageInsert, placeholder = 'Write you
         }
     }, [])
 
-    // Reset when content changes externally (e.g. editing a different note)
-    useEffect(() => {
-        if (editorRef.current) {
-            editorRef.current.innerHTML = content || ''
-        }
-    }, [content])
-
     const handleInput = useCallback(() => {
         if (editorRef.current) {
             onChange(editorRef.current.innerHTML)
