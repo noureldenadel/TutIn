@@ -110,10 +110,16 @@ export function loadCaptionChunks(videoId, lang, subtitleSources = []) {
     }
 
     // 2. Try subtitle_sources — find a matching lang entry
-    const sourceEntry = subtitleSources.find(s =>
+    let sourceEntry = subtitleSources.find(s =>
         (lang === 'source' && (!s.lang || s.lang === 'source')) ||
         s.lang === lang
     )
+
+    // Fallback: if specific lang not found, or lang is 'source' and only translated/uploaded files exist
+    if (!sourceEntry && subtitleSources.length > 0) {
+        sourceEntry = subtitleSources[0]
+    }
+
     if (sourceEntry?.filePath && fs.existsSync(sourceEntry.filePath)) {
         const text = fs.readFileSync(sourceEntry.filePath, 'utf8')
         const chunks = readCaptionFile(text, sourceEntry.filePath)
@@ -122,6 +128,19 @@ export function loadCaptionChunks(videoId, lang, subtitleSources = []) {
             try { fs.writeFileSync(cachePath, JSON.stringify(chunks, null, 2)) } catch { }
         }
         return chunks
+    }
+
+    // 3. Try fallback cache files for this video
+    const transcriptsDir = path.join(getDataDir(), 'transcripts')
+    if (fs.existsSync(transcriptsDir)) {
+        try {
+            const files = fs.readdirSync(transcriptsDir)
+            const prefix = `${videoId}`
+            const match = files.find(f => (f === `${prefix}.json` || f.startsWith(`${prefix}.`)) && f.endsWith('.json'))
+            if (match) {
+                return JSON.parse(fs.readFileSync(path.join(transcriptsDir, match), 'utf8'))
+            }
+        } catch {}
     }
 
     return []

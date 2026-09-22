@@ -11,11 +11,12 @@ import { useSettings } from '../../contexts/SettingsContext'
 import { SERVER_URL } from '../../utils/api'
 import CaptionOverlay from './CaptionOverlay'
 import TranslateModal from './TranslateModal'
+import SmartCaptionsModal from './SmartCaptionsModal'
 // [DUB FEATURE HIDDEN] import DubModal from './DubModal'
 import mpegts from 'mpegts.js'
 
 
-const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext, onPrevious, courseId, onTimeUpdate, autoPlay, onAspectRatioChange }, ref) {
+const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext, onPrevious, courseId, onTimeUpdate, autoPlay, onAspectRatioChange, onVideoDataChange }, ref) {
     const { settings, updateSettings } = useSettings()
     const videoRef = useRef(null)
     const containerRef = useRef(null)
@@ -28,8 +29,10 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
     // Refs for accessing latest state in closures (e.g. interval timers and YouTube message handlers)
     const currentTimeRef = useRef(currentTime)
     const durationRef = useRef(duration)
+    const isPlayingRef = useRef(isPlaying)
     useEffect(() => { currentTimeRef.current = currentTime }, [currentTime])
     useEffect(() => { durationRef.current = duration }, [duration])
+    useEffect(() => { isPlayingRef.current = isPlaying }, [isPlaying])
     const [volume, setVolume] = useState(() => settings.volume)
     const [isMuted, setIsMuted] = useState(false)
     const [isFullscreen, setIsFullscreen] = useState(false)
@@ -56,6 +59,7 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
     const wasSpeedBoostingRef = useRef(false)
     const pendingAutoPlayRef = useRef(false) // Track autoplay intent during video transitions
     const [showTranslateModal, setShowTranslateModal] = useState(false)
+    const [smartCaptionData, setSmartCaptionData] = useState(null)
     // [DUB FEATURE HIDDEN] — state kept but hardcoded to disabled
     const dubAudioRef = useRef(null)
     const dubLanguages = [] // was: useState([])
@@ -335,6 +339,14 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
             if (pendingAutoPlayRef.current) {
                 pendingAutoPlayRef.current = false
                 setIsPlaying(true)
+                if (videoRef.current.paused) {
+                    videoRef.current.play().catch(err => {
+                        if (err.name !== 'AbortError') {
+                            console.log('[VideoPlayer] Autoplay prevented:', err)
+                            setIsPlaying(false)
+                        }
+                    })
+                }
             }
         }
     }
@@ -357,8 +369,65 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
         }
     }
 
-    // Expose seekTo method via ref
+    // Expose seekTo, getCurrentTime, getInternalVideo, captureFrame, play, pause, and getPlaybackState methods via ref
     useImperativeHandle(ref, () => ({
+        play: () => {
+            console.log('[VideoPlayer] imperative ref.play() called')
+            const isYt = video?.youtubeId || (video?.url && (video.url.includes('youtube.com') || video.url.includes('youtu.be')))
+            if (isYt && videoRef.current?.contentWindow) {
+                videoRef.current.contentWindow.postMessage(JSON.stringify({
+                    event: 'command',
+                    func: 'playVideo',
+                    args: []
+                }), '*')
+            } else if (videoRef.current && typeof videoRef.current.play === 'function') {
+                videoRef.current.play().catch(err => {
+                    console.log('[VideoPlayer] Video play catch:', err)
+                })
+            }
+            isPlayingRef.current = true
+            setIsPlaying(true)
+        },
+        pause: () => {
+            console.log('[VideoPlayer] imperative ref.pause() called')
+            const isYt = video?.youtubeId || (video?.url && (video.url.includes('youtube.com') || video.url.includes('youtu.be')))
+            if (isYt && videoRef.current?.contentWindow) {
+                videoRef.current.contentWindow.postMessage(JSON.stringify({
+                    event: 'command',
+                    func: 'pauseVideo',
+                    args: []
+                }), '*')
+            } else if (videoRef.current && typeof videoRef.current.pause === 'function') {
+                videoRef.current.pause()
+            }
+            isPlayingRef.current = false
+            setIsPlaying(false)
+        },
+        togglePlay: () => {
+            console.log('[VideoPlayer] imperative ref.togglePlay() called')
+            togglePlay()
+        },
+        getPlaybackState: () => {
+            const isYt = video?.youtubeId || (video?.url && (video.url.includes('youtube.com') || video.url.includes('youtu.be')))
+            let actuallyPlaying = isPlayingRef.current
+            let currTime = currentTimeRef.current
+            if (!isYt && videoRef.current && videoRef.current.nodeName === 'VIDEO') {
+                actuallyPlaying = !videoRef.current.paused
+                currTime = videoRef.current.currentTime || currTime
+            }
+            const state = {
+                isPlaying: actuallyPlaying,
+                currentTime: currTime,
+                duration: durationRef.current
+            }
+            console.log('[VideoPlayer] imperative ref.getPlaybackState() returning:', state, {
+                isYt: !!isYt,
+                domPaused: videoRef.current?.paused,
+                isPlayingRef: isPlayingRef.current,
+                stateIsPlaying: isPlaying
+            })
+            return state
+        },
         seekTo: (time) => {
             if (videoRef.current) {
                 const isYt = video?.youtubeId || video?.url?.includes('youtube.com') || video?.url?.includes('youtu.be')
@@ -383,18 +452,76 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
         },
         getInternalVideo: () => {
             return videoRef.current
+        },
+        captureFrame: ({ maxWidth = 1280, maxHeight = 720, quality = 0.85 } = {}) => {
+            const videoEl = videoRef.current
+            if (!videoEl || videoEl.nodeName !== 'VIDEO') {
+                throw new Error('Screenshot capture is only supported for local and streamed video files.')
+            }
+            if (videoEl.readyState < 2) {
+                throw new Error('Video frame is not ready to capture.')
+            }
+            const vw = videoEl.videoWidth
+            const vh = videoEl.videoHeight
+            if (!vw || !vh) {
+                throw new Error('Video dimensions unavailable.')
+            }
+
+            // Calculate optimized dimensions:
+            // For 4K (3840x2160), 2K, or 1080p videos, downscale proportionally to maxWidth x maxHeight
+            // so text/code remains crisp while file size stays lightweight (~60-150KB)
+            const scale = Math.min(1, maxWidth / vw, maxHeight / vh)
+            const targetW = Math.max(1, Math.round(vw * scale))
+            const targetH = Math.max(1, Math.round(vh * scale))
+
+            const canvas = document.createElement('canvas')
+            canvas.width = targetW
+            canvas.height = targetH
+            const ctx = canvas.getContext('2d')
+            ctx.imageSmoothingEnabled = true
+            ctx.imageSmoothingQuality = 'high'
+            ctx.drawImage(videoEl, 0, 0, targetW, targetH)
+
+            let currentQuality = quality
+            let dataUrl
+            try {
+                dataUrl = canvas.toDataURL('image/jpeg', currentQuality)
+                const MAX_LEN = 1.2 * 1024 * 1024
+                while (dataUrl.length > MAX_LEN && currentQuality > 0.35) {
+                    currentQuality -= 0.1
+                    dataUrl = canvas.toDataURL('image/jpeg', currentQuality)
+                }
+            } catch (err) {
+                console.error('Canvas export error:', err)
+                throw new Error('Could not export screenshot from video frame: ' + err.message)
+            }
+
+            return {
+                dataUrl,
+                timestamp: videoEl.currentTime,
+                width: targetW,
+                height: targetH,
+                originalWidth: vw,
+                originalHeight: vh
+            }
         }
-    }), [])
+    }), [video?.id, video?.youtubeId, video?.url, video?.driveFileId])
 
     function handlePlay() {
-        if (videoRef.current && videoRef.current.paused) return // Ignore if not actually playing
+        console.log('[VideoPlayer] <video> onPlay event fired (video started playing)')
         setIsPlaying(true)
+        isPlayingRef.current = true
         startProgressTracking()
     }
 
     function handlePause() {
-        if (videoRef.current && !videoRef.current.paused) return // Ignore if not actually paused
+        // Ignore transient pause events when the video element is seeking (e.g. initial resume position jump or user scrub)
+        if (videoRef.current?.seeking) {
+            return
+        }
+        console.log('[VideoPlayer] <video> onPause event fired (video paused)')
         setIsPlaying(false)
+        isPlayingRef.current = false
         stopProgressTracking()
         saveProgress()
     }
@@ -500,15 +627,33 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
 
     // Controls
     function togglePlay() {
-        const isYt = video?.youtubeId || video?.url?.startsWith('http')
+        const isYt = video?.youtubeId || (video?.url && (video.url.includes('youtube.com') || video.url.includes('youtu.be')))
+        console.log('[VideoPlayer] togglePlay called, currently isPlaying:', isPlaying, 'isYt:', !!isYt)
 
-        if (isYt) {
-            setIsPlaying(prev => !prev)
+        if (isYt && videoRef.current?.contentWindow) {
+            const next = !isPlayingRef.current
+            videoRef.current.contentWindow.postMessage(JSON.stringify({
+                event: 'command',
+                func: next ? 'playVideo' : 'pauseVideo',
+                args: []
+            }), '*')
+            setIsPlaying(next)
+            isPlayingRef.current = next
             return
         }
 
         if (videoRef.current) {
-            setIsPlaying(prev => !prev)
+            if (videoRef.current.paused) {
+                videoRef.current.play().catch(err => {
+                    if (err.name !== 'AbortError') console.log('[VideoPlayer] play catch:', err)
+                })
+                setIsPlaying(true)
+                isPlayingRef.current = true
+            } else {
+                videoRef.current.pause()
+                setIsPlaying(false)
+                isPlayingRef.current = false
+            }
         }
     }
 
@@ -636,8 +781,24 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
                             setCurrentTime(t)
                             onTimeUpdate?.(t)
                         }
-                        if (data.info?.playerState === 0) {
-                            handleEnded()
+                        // Sync playing state from YouTube's playerState:
+                        // 1 = playing, 2 = paused, 0 = ended, 3 = buffering, 5 = cued
+                        if (data.info?.playerState != null) {
+                            const ps = data.info.playerState
+                            if (ps === 1 || ps === 3) {
+                                // Playing or buffering — mark as playing
+                                isPlayingRef.current = true
+                                setIsPlaying(true)
+                                startProgressTracking()
+                            } else if (ps === 2) {
+                                // Paused
+                                isPlayingRef.current = false
+                                setIsPlaying(false)
+                                stopProgressTracking()
+                                saveProgress()
+                            } else if (ps === 0) {
+                                handleEnded()
+                            }
                         }
                     }
                 } catch { /* non-JSON messages — ignore */ }
@@ -678,16 +839,50 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
         }
     }, [video?.id])
 
-    // Keyboard shortcuts
+    // Keyboard shortcuts & Space-hold 2x speed boost
+    const isHoldingSpaceRef = useRef(false)
+    const spaceHoldTimerRef = useRef(null)
+    const speedBeforeBoostRef = useRef(1)
+
     useEffect(() => {
+        function isInputTarget(el) {
+            if (!el) return false
+            const tag = el.tagName?.toUpperCase()
+            if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true
+            if (el.isContentEditable || el.contentEditable === 'true') return true
+            if (el.closest && (el.closest('[contenteditable="true"]') || el.closest('.note-editor') || el.closest('input, textarea'))) return true
+            return false
+        }
+
         function handleKeyDown(e) {
-            if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable) return
+            if (isInputTarget(e.target)) return
             if (!settings.keyboardShortcuts) return
             // Don't intercept browser shortcuts (Ctrl+F, Ctrl+C, Cmd+A, Alt+…, etc.)
             if (e.ctrlKey || e.metaKey || e.altKey) return
 
             const key = e.key.toLowerCase()
             const speedOptions = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2]
+
+            // Handle space holding for 2x speed boost (like YouTube)
+            if (key === ' ' || e.code === 'Space') {
+                e.preventDefault()
+                if (e.repeat) return
+
+                if (spaceHoldTimerRef.current) clearTimeout(spaceHoldTimerRef.current)
+                spaceHoldTimerRef.current = setTimeout(() => {
+                    isHoldingSpaceRef.current = true
+                    const isYt = video?.youtubeId || video?.url?.startsWith('http')
+                    if (videoRef.current && !isYt) {
+                        speedBeforeBoostRef.current = videoRef.current.playbackRate || playbackSpeed || 1
+                        videoRef.current.playbackRate = 2
+                        setIsSpeedBoosting(true)
+                        if (videoRef.current.paused) {
+                            videoRef.current.play().catch(() => {})
+                        }
+                    }
+                }, 280)
+                return
+            }
 
             // Handle number keys 0-9 for percentage jump
             if (!e.shiftKey && !e.ctrlKey && key >= '0' && key <= '9') {
@@ -700,7 +895,6 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
             }
 
             switch (key) {
-                case ' ':
                 case 'k':
                     e.preventDefault()
                     togglePlay()
@@ -790,9 +984,41 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
             }
         }
 
+        function handleKeyUp(e) {
+            if (isInputTarget(e.target)) return
+            if (!settings.keyboardShortcuts) return
+
+            const key = e.key.toLowerCase()
+            if (key === ' ' || e.code === 'Space') {
+                e.preventDefault()
+                if (spaceHoldTimerRef.current) {
+                    clearTimeout(spaceHoldTimerRef.current)
+                    spaceHoldTimerRef.current = null
+                }
+
+                if (isHoldingSpaceRef.current) {
+                    // Was holding space for 2x boost -> restore original speed
+                    isHoldingSpaceRef.current = false
+                    setIsSpeedBoosting(false)
+                    const isYt = video?.youtubeId || video?.url?.startsWith('http')
+                    if (videoRef.current && !isYt) {
+                        videoRef.current.playbackRate = speedBeforeBoostRef.current || playbackSpeed || 1
+                    }
+                } else {
+                    // Short tap -> toggle play/pause
+                    togglePlay()
+                }
+            }
+        }
+
         window.addEventListener('keydown', handleKeyDown)
-        return () => window.removeEventListener('keydown', handleKeyDown)
-    }, [currentTime, duration, settings.keyboardShortcuts])
+        window.addEventListener('keyup', handleKeyUp)
+        return () => {
+            window.removeEventListener('keydown', handleKeyDown)
+            window.removeEventListener('keyup', handleKeyUp)
+            if (spaceHoldTimerRef.current) clearTimeout(spaceHoldTimerRef.current)
+        }
+    }, [currentTime, duration, settings.keyboardShortcuts, playbackSpeed, video?.youtubeId, video?.url])
 
     // Auto-hide controls
     const hasOpenMenu = showSettingsMenu || showCCMenu || showSpeedMenu || showAudioMenu
@@ -880,35 +1106,31 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
         }
     }, [volume, isMuted])
 
-    // Sync internal video state with props/state
+    // Sync internal video state with props/state (only when DOM state is mismatched)
     useEffect(() => {
         if (!videoRef.current || !videoUrl) return
         
-        // Skip for YouTube/Drive (they handle autoplay via URL params)
+        // Skip for YouTube/Drive (they handle autoplay via URL params or postMessage)
         const isYt = video?.youtubeId || (video?.url && (video.url.includes('youtube.com') || video.url.includes('youtu.be')))
         const isDrive = video?.driveFileId || video?.url?.includes('drive.google.com')
         if (isYt || isDrive) return
 
-        if (isPlaying) {
+        const isDomPaused = videoRef.current.paused
+        if (isPlaying && isDomPaused) {
             const playPromise = videoRef.current.play()
             if (playPromise !== undefined) {
                 playPromise.catch(error => {
                     if (error.name !== 'AbortError') {
-                        console.log('Auto-play was prevented:', error)
+                        console.log('[VideoPlayer] Auto-play was prevented:', error)
                         setIsPlaying(false)
+                        isPlayingRef.current = false
                     }
                 })
             }
-            /* [DUB FEATURE HIDDEN]
-            if (selectedDubLang !== 'none' && dubAudioRef.current) {
-                dubAudioRef.current.play().catch(e => console.error("Dub play err:", e))
-            }
-            */
-        } else {
+        } else if (!isPlaying && !isDomPaused) {
             videoRef.current.pause()
-            // [DUB FEATURE HIDDEN] if (dubAudioRef.current) dubAudioRef.current.pause()
         }
-    }, [isPlaying, videoUrl])
+    }, [isPlaying])
 
     // Sync playback speed with video element
     useEffect(() => {
@@ -920,46 +1142,23 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
         }
     }, [playbackSpeed, isSpeedBoosting, videoUrl])
 
-    // Fetch caption languages
-    useEffect(() => {
-        if (!video?.id) return
-        
-        // Skip for external links for now
-        if (video.youtubeId || video.url?.startsWith('http')) return
+    // Helper to fetch caption languages
+    const fetchCaptionLanguages = useCallback((videoId = video?.id) => {
+        if (!videoId) return
+        if (video?.youtubeId || video?.url?.startsWith('http')) return
 
-        fetch(`${SERVER_URL}/api/transcripts/${video.id}/languages`)
+        fetch(`${SERVER_URL}/api/transcripts/${videoId}/languages`)
             .then(res => res.json())
-            .then(data => setCaptionLanguages(data))
+            .then(data => setCaptionLanguages(data || { sourceExists: false, translatedLangs: [], existingLangs: [] }))
             .catch(err => console.error('Failed to fetch caption languages:', err))
-            
-        /* [DUB FEATURE HIDDEN] — dub language fetch disabled
-        // Fetch dub languages
-        fetch(`${SERVER_URL}/api/dub/video/${video.id}/languages`)
-            .then(res => res.json())
-            .then(data => setDubLanguages(data || []))
-            .catch(err => console.error('Failed to fetch dub languages:', err))
-        */
-            
-    }, [video?.id, showCCMenu, showAudioMenu]) // Re-fetch when menus open
+    }, [video?.id, video?.youtubeId, video?.url])
 
-    // Sync selected language with settings
-    useEffect(() => {
-        if (settings.captionLanguage && settings.captionLanguage !== selectedCaptionLang) {
-            setSelectedCaptionLang(settings.captionLanguage)
-            setCaptionsEnabled(true)
-        }
-    }, [settings.captionLanguage])
+    // Helper to fetch caption chunks
+    const fetchCaptionChunks = useCallback((videoId = video?.id, lang = selectedCaptionLang) => {
+        if (!videoId) return
+        if (video?.youtubeId || video?.url?.startsWith('http')) return
 
-    // Fetch caption chunks
-    useEffect(() => {
-        if (!video?.id) return
-        
-        // Skip for external links
-        if (video.youtubeId || video.url?.startsWith('http')) return
-
-        if (!captionsEnabled) return
-
-        fetch(`${SERVER_URL}/api/transcripts/${video.id}/chunks?lang=${selectedCaptionLang}`)
+        fetch(`${SERVER_URL}/api/transcripts/${videoId}/chunks?lang=${lang}`)
             .then(res => {
                 if (!res.ok) {
                     console.warn(`Caption chunks fetch failed: ${res.status} ${res.statusText}`)
@@ -969,9 +1168,52 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
             })
             .then(data => setCaptionChunks(Array.isArray(data) ? data : []))
             .catch(err => console.error('Failed to fetch caption chunks:', err))
-            
+    }, [video?.id, video?.youtubeId, video?.url, selectedCaptionLang])
+
+    // Fetch caption languages when video changes or menus open
+    useEffect(() => {
+        fetchCaptionLanguages()
+    }, [video?.id, showCCMenu, showAudioMenu, fetchCaptionLanguages])
+
+    // Fetch caption chunks when language or enabled state changes
+    useEffect(() => {
+        if (!video?.id || !captionsEnabled) return
+        fetchCaptionChunks(video.id, selectedCaptionLang)
         updateSettings({ captionLanguage: selectedCaptionLang })
-    }, [video?.id, selectedCaptionLang, captionsEnabled])
+    }, [video?.id, selectedCaptionLang, captionsEnabled, fetchCaptionChunks])
+
+    // Listen for global transcript updates
+    useEffect(() => {
+        function handleTranscriptUpdated(e) {
+            const { videoId, lang, updatedVideoIds } = e?.detail || {}
+            if (!video?.id) return
+
+            const isTargetVideo = !videoId && !updatedVideoIds 
+                ? true 
+                : (videoId === video.id || (updatedVideoIds && updatedVideoIds.includes(video.id)))
+
+            if (isTargetVideo) {
+                fetchCaptionLanguages(video.id)
+                if (lang) {
+                    setSelectedCaptionLang(lang)
+                    setCaptionsEnabled(true)
+                    fetchCaptionChunks(video.id, lang)
+                } else if (captionsEnabled) {
+                    fetchCaptionChunks(video.id, selectedCaptionLang)
+                }
+            }
+        }
+        window.addEventListener('tutin:transcript-updated', handleTranscriptUpdated)
+        return () => window.removeEventListener('tutin:transcript-updated', handleTranscriptUpdated)
+    }, [video?.id, captionsEnabled, selectedCaptionLang, fetchCaptionLanguages, fetchCaptionChunks])
+
+    // Sync selected language with settings
+    useEffect(() => {
+        if (settings.captionLanguage && settings.captionLanguage !== selectedCaptionLang) {
+            setSelectedCaptionLang(settings.captionLanguage)
+            setCaptionsEnabled(true)
+        }
+    }, [settings.captionLanguage])
 
     // Handle caption upload
     const fileInputRef = useRef(null)
@@ -979,22 +1221,43 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
         const file = e.target.files?.[0]
         if (!file || !video?.id) return
 
+        const currentVideoId = video.id
         const formData = new FormData()
         formData.append('file', file)
 
-        fetch(`${SERVER_URL}/api/transcripts/${video.id}/upload`, {
+        fetch(`${SERVER_URL}/api/transcripts/${currentVideoId}/upload`, {
             method: 'POST',
             body: formData
         })
             .then(res => res.json())
             .then(data => {
                 if (data.success) {
-                    setSelectedCaptionLang(data.language)
+                    const lang = data.language || 'source'
+                    setSelectedCaptionLang(lang)
+                    updateSettings({ captionLanguage: lang })
                     setCaptionsEnabled(true)
                     setShowCCMenu(false)
+                    fetchCaptionLanguages(currentVideoId)
+                    fetchCaptionChunks(currentVideoId, lang)
+                    onVideoDataChange?.()
+                    window.dispatchEvent(new CustomEvent('tutin:transcript-updated', {
+                        detail: { videoId: currentVideoId, lang }
+                    }))
+
+                    // If same-language matching captions detected for other videos in course, show prompt
+                    if (data.detectedMatches && data.detectedMatches.length > 0) {
+                        setSmartCaptionData({
+                            language: data.language,
+                            languageName: data.languageName,
+                            matches: data.detectedMatches
+                        })
+                    }
                 }
             })
             .catch(err => console.error('Failed to upload captions:', err))
+            .finally(() => {
+                if (e.target) e.target.value = ''
+            })
     }
 
     function toggleCaptions() {
@@ -1131,6 +1394,7 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
                 <video
                     ref={videoRef}
                     src={isTs ? undefined : videoUrl}
+                    crossOrigin="anonymous"
                     className="w-full h-full bg-transparent"
                     style={{ backgroundColor: 'transparent' }}
                     onLoadedMetadata={handleLoadedMetadata}
@@ -1668,7 +1932,28 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
                     // Update state to select new language and force refresh
                     setSelectedCaptionLang(lang)
                     setCaptionsEnabled(true)
-                    // The effect will trigger a fetch for the new chunks
+                    updateSettings({ captionLanguage: lang })
+                    fetchCaptionLanguages(video?.id)
+                    fetchCaptionChunks(video?.id, lang)
+                    onVideoDataChange?.()
+                    window.dispatchEvent(new CustomEvent('tutin:transcript-updated', {
+                        detail: { videoId: video?.id, lang }
+                    }))
+                }}
+            />
+
+            <SmartCaptionsModal
+                isOpen={!!smartCaptionData}
+                onClose={() => setSmartCaptionData(null)}
+                language={smartCaptionData?.language}
+                languageName={smartCaptionData?.languageName}
+                matches={smartCaptionData?.matches}
+                onBatchImported={() => {
+                    if (video?.id) {
+                        fetchCaptionLanguages(video.id)
+                        fetchCaptionChunks(video.id, selectedCaptionLang)
+                    }
+                    onVideoDataChange?.()
                 }}
             />
 

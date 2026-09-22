@@ -290,6 +290,16 @@ function CoursePlayerPage() {
         }
     }
 
+    // Listen for global transcript update events
+    useEffect(() => {
+        function handleTranscriptUpdated() {
+            refreshCurrentVideoOnly()
+            refreshModulesOnly()
+        }
+        window.addEventListener('tutin:transcript-updated', handleTranscriptUpdated)
+        return () => window.removeEventListener('tutin:transcript-updated', handleTranscriptUpdated)
+    }, [currentVideo?.id, courseId])
+
     // Auto-fetch YouTube transcripts
     useEffect(() => {
         if (!currentVideo) return
@@ -397,6 +407,12 @@ function CoursePlayerPage() {
         }
     }, [])
 
+    const handleSeek = useCallback((time) => videoRef.current?.seekTo?.(time), [])
+    const handleCaptureFrame = useCallback(() => videoRef.current?.captureFrame?.(), [])
+    const handlePlay = useCallback(() => videoRef.current?.play?.(), [])
+    const handlePause = useCallback(() => videoRef.current?.pause?.(), [])
+    const getPlaybackState = useCallback(() => videoRef.current?.getPlaybackState?.(), [])
+
     if (isLoading) {
         return <LoadingSpinner message="Loading course..." />
     }
@@ -474,6 +490,7 @@ function CoursePlayerPage() {
                                         autoPlay={autoPlay}
                                         onTimeUpdate={setCurrentTime}
                                         onAspectRatioChange={(w, h) => setVideoAspect({ w, h })}
+                                        onVideoDataChange={refreshCurrentVideoOnly}
                                     />
                                 </div>
                             </div>
@@ -546,7 +563,11 @@ function CoursePlayerPage() {
                     onVideoDataChange={refreshCurrentVideoOnly}
                     courseId={courseId}
                     currentTime={currentTime}
-                    onSeek={(time) => videoRef.current?.seekTo?.(time)}
+                    onSeek={handleSeek}
+                    onCaptureFrame={handleCaptureFrame}
+                    onPlay={handlePlay}
+                    onPause={handlePause}
+                    getPlaybackState={getPlaybackState}
                     onWidthChange={handleSidebarWidthChange}
                 />
             </div>

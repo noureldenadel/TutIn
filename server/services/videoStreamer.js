@@ -65,6 +65,16 @@ function isPathAllowed(filePath) {
  * Usage: app.get('/video/*', streamVideo)
  */
 export function streamVideo(req, res) {
+    // Set CORS headers early
+    res.setHeader('Access-Control-Allow-Origin', '*')
+    res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS')
+    res.setHeader('Access-Control-Allow-Headers', 'Range, Origin, Content-Type, Accept')
+    res.setHeader('Access-Control-Expose-Headers', 'Content-Range, Content-Length, Accept-Ranges')
+
+    if (req.method === 'OPTIONS') {
+        return res.status(204).end()
+    }
+
     // Express 5 named wildcard param
     let rawPath = req.params.filePath
     if (!rawPath) {
@@ -113,7 +123,11 @@ export function streamVideo(req, res) {
         // Validate range
         if (start >= fileSize || end >= fileSize || start > end) {
             res.writeHead(416, {
-                'Content-Range': `bytes */${fileSize}`
+                'Content-Range': `bytes */${fileSize}`,
+                'Access-Control-Allow-Origin': '*',
+                'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
+                'Access-Control-Allow-Headers': 'Range, Origin, Content-Type, Accept',
+                'Access-Control-Expose-Headers': 'Content-Range, Content-Length, Accept-Ranges',
             })
             return res.end()
         }
@@ -126,6 +140,10 @@ export function streamVideo(req, res) {
             'Content-Length': chunkSize,
             'Content-Type': contentType,
             'Cache-Control': 'no-cache',
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
+            'Access-Control-Allow-Headers': 'Range, Origin, Content-Type, Accept',
+            'Access-Control-Expose-Headers': 'Content-Range, Content-Length, Accept-Ranges',
         })
 
         const stream = fs.createReadStream(filePath, { start, end })
@@ -143,6 +161,10 @@ export function streamVideo(req, res) {
             'Content-Type': contentType,
             'Accept-Ranges': 'bytes',
             'Cache-Control': 'no-cache',
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
+            'Access-Control-Allow-Headers': 'Range, Origin, Content-Type, Accept',
+            'Access-Control-Expose-Headers': 'Content-Range, Content-Length, Accept-Ranges',
         })
 
         const stream = fs.createReadStream(filePath)

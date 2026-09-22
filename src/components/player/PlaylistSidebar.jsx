@@ -51,6 +51,10 @@ function PlaylistSidebar({
     courseId,
     currentTime,
     onSeek,
+    onCaptureFrame,
+    onPlay,
+    onPause,
+    getPlaybackState,
     onWidthChange
 }) {
     const [expandedModules, setExpandedModules] = useState(() => {
@@ -425,6 +429,10 @@ function PlaylistSidebar({
                                 courseId={courseId}
                                 currentTime={currentTime}
                                 onSeek={onSeek}
+                                onCaptureFrame={onCaptureFrame}
+                                onPlay={onPlay}
+                                onPause={onPause}
+                                getPlaybackState={getPlaybackState}
                                 isCollapsed={false}
                                 hideHeader={true}
                             />

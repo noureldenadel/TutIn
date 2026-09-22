@@ -106,6 +106,9 @@ export default function TranslateModal({ isOpen, onClose, video, onSuccess, chun
                                 setStatusText(data.message)
                                 setIsDone(true)
                                 setTimeout(() => {
+                                    window.dispatchEvent(new CustomEvent('tutin:transcript-updated', {
+                                        detail: { videoId: video?.id, lang: data.lang }
+                                    }))
                                     onSuccess?.(data.lang)
                                     onClose()
                                 }, 1500)

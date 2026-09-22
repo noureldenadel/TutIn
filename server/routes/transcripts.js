@@ -41,6 +41,135 @@ function getVideoMeta(videoId) {
     }
 }
 
+const LANG_DISPLAY_MAP = {
+    ar: 'Arabic', en: 'English', es: 'Spanish', fr: 'French', de: 'German', it: 'Italian',
+    pt: 'Portuguese', ru: 'Russian', ja: 'Japanese', ko: 'Korean', zh: 'Chinese',
+    hi: 'Hindi', tr: 'Turkish', nl: 'Dutch', pl: 'Polish', id: 'Indonesian',
+    vi: 'Vietnamese', he: 'Hebrew', el: 'Greek', sv: 'Swedish', da: 'Danish',
+    no: 'Norwegian', fi: 'Finnish', cs: 'Czech', hu: 'Hungarian', ro: 'Romanian',
+    th: 'Thai', uk: 'Ukrainian', source: 'Source / Original'
+}
+
+const SUBTITLE_EXTS = new Set(['.srt', '.vtt', '.ass', '.ssa', '.lrc'])
+
+function findSubtitleFilesRecursive(dir, maxDepth = 4, currentDepth = 0) {
+    if (currentDepth > maxDepth || !dir || !fs.existsSync(dir)) return []
+    let results = []
+    try {
+        const entries = fs.readdirSync(dir, { withFileTypes: true })
+        for (const entry of entries) {
+            const fullPath = path.join(dir, entry.name)
+            if (entry.isFile()) {
+                const ext = path.extname(entry.name).toLowerCase()
+                if (SUBTITLE_EXTS.has(ext)) {
+                    results.push({ name: entry.name, fullPath, ext })
+                }
+            } else if (entry.isDirectory()) {
+                if (!['.git', 'node_modules', '$RECYCLE.BIN'].includes(entry.name)) {
+                    results = results.concat(findSubtitleFilesRecursive(fullPath, maxDepth, currentDepth + 1))
+                }
+            }
+        }
+    } catch (e) {}
+    return results
+}
+
+function isSubtitleMatchForVideo(subFileName, videoBaseName, targetLang) {
+    const subExt = path.extname(subFileName).toLowerCase()
+    if (!SUBTITLE_EXTS.has(subExt)) return false
+
+    const extractedLang = extractLangCode(subFileName, videoBaseName) || 'source'
+    // Strict language match
+    if (extractedLang !== targetLang) return false
+
+    const subNameWithoutExt = subFileName.replace(/\.[a-z0-9]+$/i, '')
+    const baseLower = videoBaseName.toLowerCase()
+    const subLower = subNameWithoutExt.toLowerCase()
+
+    // 1. Direct prefix match
+    if (subLower.startsWith(baseLower)) return true
+
+    // 2. Normalized punctuation match (e.g. "02 - Intro" vs "02. Intro" vs "02_Intro")
+    const normalize = str => str.replace(/[\s._\-\u2013\u2014]+/g, ' ').toLowerCase().trim()
+    const normBase = normalize(videoBaseName)
+    const normSub = normalize(subNameWithoutExt)
+    if (normSub.startsWith(normBase)) return true
+
+    // 3. Numbered prefix match (e.g. "02 - Title" vs "02 Title [spa]")
+    const baseNum = videoBaseName.match(/^0*(\d+)/)
+    const subNum = subFileName.match(/^0*(\d+)/)
+    if (baseNum && subNum && baseNum[1] === subNum[1]) {
+        const baseWords = normBase.split(' ').filter(w => w.length > 2)
+        const subWords = normSub.split(' ').filter(w => w.length > 2)
+        const hasCommonWord = baseWords.some(w => subWords.includes(w))
+        if (hasCommonWord || baseWords.length === 0) return true
+    }
+
+    return false
+}
+
+/**
+ * Scan course for other videos that have subtitle files for the EXACT same language.
+ * Ensures multi-language folders (e.g. .en.vtt and .ar.vtt) only match the target language.
+ */
+function detectCourseSiblingCaptions(videoId, targetLang) {
+    const matches = []
+    try {
+        const video = getOne('SELECT * FROM videos WHERE id = ?', [videoId])
+        if (!video || !video.course_id) return matches
+
+        const otherVideos = getAll('SELECT * FROM videos WHERE course_id = ? AND id != ?', [video.course_id, videoId])
+        const courseRecord = getOne('SELECT folder_path FROM courses WHERE id = ?', [video.course_id])
+
+        // Collect all candidate directories to scan
+        const candidateDirs = new Set()
+        if (courseRecord?.folder_path && fs.existsSync(courseRecord.folder_path)) {
+            candidateDirs.add(courseRecord.folder_path)
+        }
+        if (video.file_path && fs.existsSync(video.file_path)) {
+            candidateDirs.add(path.dirname(video.file_path))
+            const parentDir = path.dirname(path.dirname(video.file_path))
+            if (fs.existsSync(parentDir)) candidateDirs.add(parentDir)
+        }
+
+        // Collect all subtitle files from candidate directories recursively
+        const allSubs = []
+        const seenSubs = new Set()
+        for (const dir of candidateDirs) {
+            for (const s of findSubtitleFilesRecursive(dir)) {
+                if (!seenSubs.has(s.fullPath)) {
+                    seenSubs.add(s.fullPath)
+                    allSubs.push(s)
+                }
+            }
+        }
+
+        for (const otherVideo of otherVideos) {
+            const currentSources = JSON.parse(otherVideo.subtitle_sources || '[]')
+            // If already has this language registered, skip
+            if (currentSources.some(s => s.lang === targetLang)) continue
+
+            const baseName = path.basename(otherVideo.file_name, path.extname(otherVideo.file_name))
+            for (const sub of allSubs) {
+                if (isSubtitleMatchForVideo(sub.name, baseName, targetLang)) {
+                    matches.push({
+                        videoId: otherVideo.id,
+                        videoTitle: otherVideo.title || baseName,
+                        fileName: sub.name,
+                        filePath: sub.fullPath,
+                        lang: targetLang,
+                        format: sub.ext.slice(1).replace('ssa', 'ass')
+                    })
+                    break
+                }
+            }
+        }
+    } catch (err) {
+        console.error('Error detecting sibling captions:', err)
+    }
+    return matches
+}
+
 // ── Routes ────────────────────────────────────────────────────
 
 // POST /api/transcripts/:videoId/upload
@@ -78,7 +207,17 @@ router.post('/:videoId/upload', upload.single('file'), (req, res) => {
             req.params.videoId
         ])
 
-        res.json({ success: true, chunkCount: chunks.length, format, language: reqLang })
+        // Smart detect same-language captions for the rest of the course
+        const detectedMatches = detectCourseSiblingCaptions(req.params.videoId, reqLang)
+
+        res.json({
+            success: true,
+            chunkCount: chunks.length,
+            format,
+            language: reqLang,
+            languageName: LANG_DISPLAY_MAP[reqLang] || reqLang,
+            detectedMatches
+        })
     } catch (err) {
         res.status(500).json({ error: err.message })
     }
@@ -294,6 +433,70 @@ router.delete('/:videoId', (req, res) => {
         ])
         
         res.json({ success: true })
+    } catch (err) {
+        res.status(500).json({ error: err.message })
+    }
+})
+
+// GET /api/transcripts/:videoId/detect-sibling-captions
+router.get('/:videoId/detect-sibling-captions', (req, res) => {
+    try {
+        const lang = req.query.lang || 'source'
+        const matches = detectCourseSiblingCaptions(req.params.videoId, lang)
+        res.json({
+            language: lang,
+            languageName: LANG_DISPLAY_MAP[lang] || lang,
+            matches
+        })
+    } catch (err) {
+        res.status(500).json({ error: err.message })
+    }
+})
+
+// POST /api/transcripts/batch-apply
+router.post('/batch-apply', (req, res) => {
+    try {
+        const { matches } = req.body
+        if (!Array.isArray(matches) || matches.length === 0) {
+            return res.status(400).json({ error: 'Matches array required' })
+        }
+
+        let appliedCount = 0
+        const updatedVideoIds = []
+
+        for (const match of matches) {
+            try {
+                if (!match.videoId || !match.filePath || !fs.existsSync(match.filePath)) continue
+                const content = fs.readFileSync(match.filePath, 'utf8')
+                const fileName = match.fileName || path.basename(match.filePath)
+                const chunks = parseSubtitleFile(content, fileName)
+                if (!chunks || !chunks.length) continue
+
+                const lang = match.lang || 'source'
+                const videoMeta = getVideoMeta(match.videoId)
+                const filePath = saveCaptionFile(videoMeta, lang, chunks)
+
+                const currentSources = videoMeta.subtitleSources.filter(s => !(s.lang === lang && s.origin === 'uploaded'))
+                currentSources.push({
+                    lang,
+                    filePath,
+                    origin: 'uploaded',
+                    format: 'vtt'
+                })
+
+                run(`UPDATE videos SET has_transcript = 1, subtitle_sources = ? WHERE id = ?`, [
+                    JSON.stringify(currentSources),
+                    match.videoId
+                ])
+
+                appliedCount++
+                updatedVideoIds.push(match.videoId)
+            } catch (err) {
+                console.error(`Failed to batch apply caption for video ${match.videoId}:`, err)
+            }
+        }
+
+        res.json({ success: true, count: appliedCount, updatedVideoIds })
     } catch (err) {
         res.status(500).json({ error: err.message })
     }

@@ -7,6 +7,7 @@ import { processVideoForSummary, isAIAvailable, regenerateSummaryOnly } from '..
 import { verifyPermission } from '../../utils/fileSystem'
 import { useSettings } from '../../contexts/SettingsContext'
 import TranslateModal from './TranslateModal'
+import SmartCaptionsModal from './SmartCaptionsModal'
 
 // Format seconds to MM:SS or HH:MM:SS
 function formatTime(seconds) {
@@ -32,8 +33,24 @@ function AISummaryPanel({ video, courseId, onSeek, onVideoDataChange, currentTim
     const [missingCaptions, setMissingCaptions] = useState(false)
     const [languages, setLanguages] = useState({ sourceExists: false, translatedLangs: [], existingLangs: [] })
     const [showTranslateModal, setShowTranslateModal] = useState(false)
+    const [smartCaptionData, setSmartCaptionData] = useState(null)
     const fileInputRef = useRef(null)
     const activeVideoIdRef = useRef(video?.id)
+
+    // Listen for global transcript updates (from player, translation, batch import, etc.)
+    useEffect(() => {
+        function handleTranscriptUpdated(e) {
+            const { videoId, updatedVideoIds } = e?.detail || {}
+            if (!video?.id) return
+            if (!videoId && !updatedVideoIds) {
+                loadExistingData()
+            } else if (videoId === video.id || (updatedVideoIds && updatedVideoIds.includes(video.id))) {
+                loadExistingData()
+            }
+        }
+        window.addEventListener('tutin:transcript-updated', handleTranscriptUpdated)
+        return () => window.removeEventListener('tutin:transcript-updated', handleTranscriptUpdated)
+    }, [video?.id])
 
     // Load existing data when video changes
     useEffect(() => {
@@ -82,12 +99,15 @@ function AISummaryPanel({ video, courseId, onSeek, onVideoDataChange, currentTim
             if (serverAvailable) {
                 try {
                     const videoData = await getVideo(video.id)
-                    // In server mode, videoData just has flags, we must fetch the content
-                    if (videoData.has_transcript) {
-                        const transcriptText = await fetch(`${SERVER_URL}/api/transcripts/${video.id}/text`).then(r => r.text())
+                    const hasTranscript = videoData?.hasTranscript || videoData?.has_transcript || (videoData?.subtitleSources && videoData.subtitleSources.length > 0)
+                    const hasSummary = videoData?.hasSummary || videoData?.has_summary
+
+                    // In server mode, videoData has flags, we fetch the content
+                    if (hasTranscript) {
+                        const lang = forceLang || settings.captionLanguage || 'source'
+                        const transcriptText = await fetch(`${SERVER_URL}/api/transcripts/${video.id}/text?lang=${lang}`).then(r => r.text())
                         setTranscript(transcriptText || null)
                         
-                        const lang = forceLang || settings.captionLanguage || 'source'
                         const chunks = await get(`/api/transcripts/${video.id}/chunks?lang=${lang}`)
                         setCaptionChunks(chunks || [])
                         setMissingCaptions(!chunks || chunks.length === 0)
@@ -100,7 +120,7 @@ function AISummaryPanel({ video, courseId, onSeek, onVideoDataChange, currentTim
                         setMissingCaptions(false)
                     }
                     
-                    if (videoData.has_summary) {
+                    if (hasSummary) {
                         const summaryData = await get(`/api/summaries/${video.id}`)
                         setSummary(summaryData?.content || null)
                     } else {
@@ -174,8 +194,11 @@ function AISummaryPanel({ video, courseId, onSeek, onVideoDataChange, currentTim
             setCaptionChunks(result.captionChunks || [])
             setMissingCaptions(false) // Captions now available
 
-            // Notify parent that video data has changed (for CC icon update)
+            // Notify parent and global listeners
             onVideoDataChange?.()
+            window.dispatchEvent(new CustomEvent('tutin:transcript-updated', {
+                detail: { videoId: targetVideoId, lang: 'source' }
+            }))
         } catch (err) {
             if (activeVideoIdRef.current !== targetVideoId) return
             console.error('AI processing failed:', err)
@@ -193,10 +216,11 @@ function AISummaryPanel({ video, courseId, onSeek, onVideoDataChange, currentTim
         const file = e.target.files?.[0]
         if (!file || !video?.id) return
 
+        const currentVideoId = video.id
         const formData = new FormData()
         formData.append('file', file)
 
-        fetch(`${SERVER_URL}/api/transcripts/${video.id}/upload`, {
+        fetch(`${SERVER_URL}/api/transcripts/${currentVideoId}/upload`, {
             method: 'POST',
             body: formData
         })
@@ -208,18 +232,37 @@ function AISummaryPanel({ video, courseId, onSeek, onVideoDataChange, currentTim
                     }
                     loadExistingData(data.language || 'source')
                     onVideoDataChange?.()
+                    window.dispatchEvent(new CustomEvent('tutin:transcript-updated', {
+                        detail: { videoId: currentVideoId, lang: data.language }
+                    }))
+
+                    // If same-language matching captions detected for other videos, show prompt
+                    if (data.detectedMatches && data.detectedMatches.length > 0) {
+                        setSmartCaptionData({
+                            language: data.language,
+                            languageName: data.languageName,
+                            matches: data.detectedMatches
+                        })
+                    }
                 }
             })
             .catch(err => console.error('Failed to upload captions:', err))
+            .finally(() => {
+                if (e.target) e.target.value = ''
+            })
     }
 
     function handleDeleteCaption(lang) {
         if (!confirm(`Delete caption for language: ${lang}?`)) return
-        fetch(`${SERVER_URL}/api/transcripts/${video.id}?lang=${lang}`, { method: 'DELETE' })
+        const currentVideoId = video.id
+        fetch(`${SERVER_URL}/api/transcripts/${currentVideoId}?lang=${lang}`, { method: 'DELETE' })
             .then(res => res.json())
             .then(() => {
                 loadExistingData()
                 onVideoDataChange?.()
+                window.dispatchEvent(new CustomEvent('tutin:transcript-updated', {
+                    detail: { videoId: currentVideoId, lang }
+                }))
             })
     }
 
@@ -620,6 +663,21 @@ function AISummaryPanel({ video, courseId, onSeek, onVideoDataChange, currentTim
                 onSuccess={(lang) => {
                     loadExistingData()
                     updateSettings({ captionLanguage: lang })
+                    onVideoDataChange?.()
+                    window.dispatchEvent(new CustomEvent('tutin:transcript-updated', {
+                        detail: { videoId: video?.id, lang }
+                    }))
+                }}
+            />
+
+            <SmartCaptionsModal
+                isOpen={!!smartCaptionData}
+                onClose={() => setSmartCaptionData(null)}
+                language={smartCaptionData?.language}
+                languageName={smartCaptionData?.languageName}
+                matches={smartCaptionData?.matches}
+                onBatchImported={() => {
+                    loadExistingData()
                     onVideoDataChange?.()
                 }}
             />
