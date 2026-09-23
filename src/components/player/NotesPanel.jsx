@@ -1,10 +1,11 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
+import { Link } from 'react-router-dom'
 import {
     ChevronDown, ChevronUp, Plus, Minus, Pencil, Trash2,
     Clock, Copy, Download, Bold, Italic, Strikethrough,
     List, ImagePlus, Camera, Crop, X, ZoomIn, ExternalLink,
     Zap, Settings2, RotateCcw, Sparkles, Search, FileText, Check, MoreVertical,
-    ArrowUpNarrowWide, ArrowDownWideNarrow
+    ArrowUpNarrowWide, ArrowDownWideNarrow, LayoutGrid
 } from 'lucide-react'
 import {
     addNote, getNotesByVideo, updateNote, deleteNote, formatDuration, getVideo
@@ -207,6 +208,197 @@ function NoteEditor({
             onChangeRef.current?.(html)
         }
     }, [])
+
+    const getClosestBlock = useCallback((node) => {
+        let curr = node
+        while (curr && curr !== editorRef.current) {
+            if (curr.nodeType === Node.ELEMENT_NODE) {
+                const tag = curr.tagName.toLowerCase()
+                if (['p', 'div', 'h1', 'h2', 'h3', 'blockquote', 'li', 'pre'].includes(tag)) {
+                    return curr
+                }
+            }
+            curr = curr.parentNode
+        }
+        return null
+    }, [])
+
+    const setCaretInside = useCallback((el) => {
+        try {
+            const range = document.createRange()
+            const sel = window.getSelection()
+            if (el.firstChild) {
+                if (el.firstChild.nodeType === Node.TEXT_NODE) {
+                    range.setStart(el.firstChild, 0)
+                } else {
+                    range.setStart(el, 0)
+                }
+            } else {
+                range.selectNodeContents(el)
+            }
+            range.collapse(true)
+            sel.removeAllRanges()
+            sel.addRange(range)
+            el.focus?.()
+        } catch { /* ignore */ }
+    }, [])
+
+    const setCaretToEnd = useCallback((el) => {
+        try {
+            const range = document.createRange()
+            const sel = window.getSelection()
+            range.selectNodeContents(el)
+            range.collapse(false)
+            sel.removeAllRanges()
+            sel.addRange(range)
+        } catch { /* ignore */ }
+    }, [])
+
+    // Get the current block's text content, ignoring ghost spans
+    const getCurrentBlockText = useCallback((block) => {
+        if (!block) return ''
+        const clone = block.cloneNode(true)
+        clone.querySelectorAll('[data-ghost]').forEach(s => s.remove())
+        return clone.textContent || ''
+    }, [])
+
+    // Wrap a bare text/inline node that is a direct child of the editor into a <p>
+    const ensureBlockWrapper = useCallback((node) => {
+        if (!editorRef.current) return null
+        let directChild = node
+        while (directChild && directChild.parentNode !== editorRef.current) {
+            directChild = directChild.parentNode
+        }
+        if (!directChild || directChild === editorRef.current) return null
+        // Already a recognised block
+        if (directChild.nodeType === Node.ELEMENT_NODE) {
+            const t = directChild.tagName.toLowerCase()
+            if (['p', 'div', 'h1', 'h2', 'h3', 'blockquote', 'li', 'pre', 'ul', 'ol'].includes(t)) {
+                return directChild
+            }
+        }
+        // Bare text node — wrap in <p>
+        if (directChild.nodeType === Node.TEXT_NODE) {
+            const p = document.createElement('p')
+            editorRef.current.insertBefore(p, directChild)
+            p.appendChild(directChild)
+            return p
+        }
+        return null
+    }, [])
+
+    // Called on Space keydown — converts markdown prefixes (#, ##, ###, >, -, *, 1.)
+    const applyMarkdownOnSpace = useCallback(() => {
+        const sel = window.getSelection()
+        if (!sel || sel.rangeCount === 0 || !editorRef.current) return false
+        const range = sel.getRangeAt(0)
+        if (!range.collapsed) return false
+
+        const node = range.startContainer
+        let block = getClosestBlock(node)
+        if (!block || !editorRef.current.contains(block)) {
+            block = ensureBlockWrapper(node)
+        }
+        if (!block || !editorRef.current.contains(block)) return false
+
+        const tag = block.tagName.toLowerCase()
+        const rawText = getCurrentBlockText(block)
+        const text = rawText.trim()
+
+        const replaceBlockWith = (newEl, targetInside = null) => {
+            const parent = block.parentNode || editorRef.current
+            if (parent.contains(block)) {
+                parent.replaceChild(newEl, block)
+            } else {
+                editorRef.current.appendChild(newEl)
+            }
+            setCaretInside(targetInside || newEl)
+            handleInput()
+            return true
+        }
+
+        // Headings: # → h1, ## → h2, ### → h3
+        if (!['h1', 'h2', 'h3'].includes(tag)) {
+            if (text === '###') {
+                const h = document.createElement('h3')
+                h.innerHTML = '<br>'
+                return replaceBlockWith(h)
+            }
+            if (text === '##') {
+                const h = document.createElement('h2')
+                h.innerHTML = '<br>'
+                return replaceBlockWith(h)
+            }
+            if (text === '#') {
+                const h = document.createElement('h1')
+                h.innerHTML = '<br>'
+                return replaceBlockWith(h)
+            }
+        }
+
+        // Blockquote: >
+        if (tag !== 'blockquote' && text === '>') {
+            const bq = document.createElement('blockquote')
+            bq.innerHTML = '<br>'
+            return replaceBlockWith(bq)
+        }
+
+        // Unordered list: - or *
+        if (tag !== 'li' && (text === '-' || text === '*')) {
+            const ul = document.createElement('ul')
+            const li = document.createElement('li')
+            li.innerHTML = '<br>'
+            ul.appendChild(li)
+            return replaceBlockWith(ul, li)
+        }
+
+        // Ordered list: 1. or 1
+        if (tag !== 'li' && (text === '1.' || text === '1')) {
+            const ol = document.createElement('ol')
+            const li = document.createElement('li')
+            li.innerHTML = '<br>'
+            ol.appendChild(li)
+            return replaceBlockWith(ol, li)
+        }
+
+        return false
+    }, [getClosestBlock, ensureBlockWrapper, getCurrentBlockText, setCaretInside, handleInput])
+
+    // Inline code (`text`) — runs on onInput after the closing backtick is typed
+    const processInlineCode = useCallback(() => {
+        const sel = window.getSelection()
+        if (!sel || sel.rangeCount === 0 || !editorRef.current) return
+        const range = sel.getRangeAt(0)
+        const node = range.startContainer
+        if (node.nodeType !== Node.TEXT_NODE) return
+
+        const val = node.nodeValue || ''
+        const codeMatch = /`([^`\n]+)`/.exec(val)
+        if (codeMatch && range.startOffset >= codeMatch.index + codeMatch[0].length) {
+            const codeText = codeMatch[1]
+            const startIdx = codeMatch.index
+            const endIdx = startIdx + codeMatch[0].length
+            const beforeText = val.slice(0, startIdx)
+            const afterText = val.slice(endIdx)
+
+            const codeEl = document.createElement('code')
+            codeEl.textContent = codeText
+            const parent = node.parentNode
+            if (parent) {
+                if (beforeText) parent.insertBefore(document.createTextNode(beforeText), node)
+                parent.insertBefore(codeEl, node)
+                const afterNode = document.createTextNode(afterText || '\u00A0')
+                parent.insertBefore(afterNode, node)
+                parent.removeChild(node)
+                const newRange = document.createRange()
+                newRange.setStart(afterNode, afterText ? 0 : 1)
+                newRange.collapse(true)
+                sel.removeAllRanges()
+                sel.addRange(newRange)
+                handleInput()
+            }
+        }
+    }, [handleInput])
 
     // Remove the inline ghost <span> from the DOM if present
     const removeGhostSpan = useCallback(() => {
@@ -488,10 +680,7 @@ function NoteEditor({
                 const sel = window.getSelection()
                 if (sel && sel.rangeCount > 0) {
                     const r = sel.getRangeAt(0)
-                    // Only accept at end of the text node (before ghost span)
-                    if (r.startOffset < r.startContainer.textContent.length) {
-                        return
-                    }
+                    if (r.startOffset < r.startContainer.textContent.length) return
                 }
             }
             e.preventDefault()
@@ -505,6 +694,141 @@ function NoteEditor({
             removeGhostSpan()
             setGhostSuggestion(null)
             triggerWritingActivity()
+        }
+
+        // ── Backspace: reduce heading level (Obsidian-style h3→h2→h1→p), exit list/quote ──
+        if (e.key === 'Backspace') {
+            const sel = window.getSelection()
+            if (sel && sel.rangeCount > 0 && sel.isCollapsed) {
+                const range = sel.getRangeAt(0)
+                const node = range.startContainer
+                let block = getClosestBlock(node)
+                if (!block) block = ensureBlockWrapper(node)
+                const tag = block?.tagName?.toLowerCase()
+
+                // 1. Heading downgrade: h3 → h2 → h1 → p
+                if (block && ['h1', 'h2', 'h3'].includes(tag)) {
+                    const isAtStart =
+                        (range.startOffset === 0 && node === block) ||
+                        (range.startOffset === 0 && node === block.firstChild) ||
+                        (node.nodeType === Node.TEXT_NODE && range.startOffset === 0 && !node.previousSibling)
+
+                    if (isAtStart) {
+                        e.preventDefault()
+                        const newTag = tag === 'h3' ? 'h2' : tag === 'h2' ? 'h1' : 'p'
+                        const newEl = document.createElement(newTag)
+                        newEl.innerHTML = block.innerHTML || '<br>'
+                        block.parentNode.replaceChild(newEl, block)
+                        setCaretInside(newEl)
+                        handleInput()
+                        return
+                    }
+                }
+
+                // 2. Empty list item backspace: exit list to paragraph
+                if (tag === 'li') {
+                    const blockText = getCurrentBlockText(block).trim()
+                    if (!blockText) {
+                        e.preventDefault()
+                        const listParent = block.closest('ul, ol')
+                        const newP = document.createElement('p')
+                        newP.innerHTML = '<br>'
+                        if (listParent && listParent.children.length === 1) {
+                            listParent.parentNode.replaceChild(newP, listParent)
+                        } else if (block.parentNode) {
+                            block.remove()
+                            if (listParent) listParent.parentNode.insertBefore(newP, listParent.nextSibling)
+                        }
+                        setCaretInside(newP)
+                        handleInput()
+                        return
+                    }
+                }
+
+                // 3. Empty blockquote backspace: turn into paragraph
+                if (tag === 'blockquote') {
+                    const blockText = getCurrentBlockText(block).trim()
+                    if (!blockText) {
+                        e.preventDefault()
+                        const newP = document.createElement('p')
+                        newP.innerHTML = '<br>'
+                        block.parentNode.replaceChild(newP, block)
+                        setCaretInside(newP)
+                        handleInput()
+                        return
+                    }
+                }
+            }
+        }
+
+        // ── Space key: try markdown block transform (intercept BEFORE browser inserts space) ──
+        if (e.key === ' ' && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
+            const transformed = applyMarkdownOnSpace()
+            if (transformed) {
+                e.preventDefault()
+                return
+            }
+        }
+
+        // ── Enter key: exit heading to paragraph, empty list exit, or markdown divider (---) ──
+        if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
+            const sel = window.getSelection()
+            if (sel && sel.rangeCount > 0 && editorRef.current) {
+                const node = sel.getRangeAt(0).startContainer
+                let block = getClosestBlock(node)
+                if (!block) block = ensureBlockWrapper(node)
+                const tag = block?.tagName?.toLowerCase()
+
+                // Divider line: ---
+                if (block && getCurrentBlockText(block).trim() === '---') {
+                    e.preventDefault()
+                    const hr = document.createElement('hr')
+                    const newP = document.createElement('p')
+                    newP.innerHTML = '<br>'
+                    if (block.parentNode) {
+                        block.parentNode.insertBefore(hr, block)
+                        block.parentNode.replaceChild(newP, block)
+                        setCaretInside(newP)
+                        handleInput()
+                        triggerWritingActivity()
+                    }
+                    return
+                }
+
+                // Empty list item enter: exit list
+                if (tag === 'li' && !getCurrentBlockText(block).trim()) {
+                    e.preventDefault()
+                    const listParent = block.closest('ul, ol')
+                    const newP = document.createElement('p')
+                    newP.innerHTML = '<br>'
+                    if (listParent && listParent.children.length === 1) {
+                        listParent.parentNode.replaceChild(newP, listParent)
+                    } else if (block.parentNode) {
+                        block.remove()
+                        if (listParent) listParent.parentNode.insertBefore(newP, listParent.nextSibling)
+                    }
+                    setCaretInside(newP)
+                    handleInput()
+                    triggerWritingActivity()
+                    return
+                }
+
+                // Heading Enter at end: next line is normal paragraph
+                if (block && ['h1', 'h2', 'h3'].includes(tag)) {
+                    const range = sel.getRangeAt(0)
+                    const isAtEnd = range.startOffset >= (node.textContent?.length || 0)
+                    if (isAtEnd) {
+                        e.preventDefault()
+                        const newP = document.createElement('p')
+                        newP.innerHTML = '<br>'
+                        block.parentNode.insertBefore(newP, block.nextSibling)
+                        setCaretInside(newP)
+                        handleInput()
+                        triggerWritingActivity()
+                        return
+                    }
+                }
+            }
         }
     }
 
@@ -706,6 +1030,7 @@ function NoteEditor({
                         // Remove ghost before reading innerHTML so span isn't serialised
                         removeGhostSpan()
                         setGhostSuggestion(null)
+                        processInlineCode()   // only inline-code transform runs on input
                         handleInput()
                         triggerWritingActivity()
                         // Suggest after DOM settles
@@ -1162,6 +1487,17 @@ function NotesPanel({
                         >
                             <Download className="w-4 h-4" />
                         </button>
+
+                        {/* 4b. Course Canvas Whiteboard Button */}
+                        {courseId && (
+                            <Link
+                                to={`/course/${courseId}/canvas`}
+                                className="h-9 w-9 flex items-center justify-center border border-light-border dark:border-dark-border rounded-lg bg-light-surface dark:bg-dark-bg hover:bg-gray-100 dark:hover:bg-dark-surface/80 text-light-text-secondary dark:text-dark-text-secondary hover:text-primary-fg dark:hover:text-primary-fg transition-colors cursor-pointer shrink-0 shadow-sm active:scale-[0.98]"
+                                title="Open Course Canvas Whiteboard"
+                            >
+                                <LayoutGrid className="w-4 h-4 text-primary-fg" />
+                            </Link>
+                        )}
 
                         {/* 5. Reverse / Sort Order Toggle Button */}
                         <button
@@ -1693,4 +2029,5 @@ function NotesPanel({
     )
 }
 
+export { NoteEditor }
 export default NotesPanel

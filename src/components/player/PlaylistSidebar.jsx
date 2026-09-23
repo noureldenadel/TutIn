@@ -1,7 +1,8 @@
 import { useState, useMemo, useRef, useEffect, useCallback } from 'react'
+import { Link } from 'react-router-dom'
 import {
     ChevronDown, ChevronRight, ChevronLeft, Check,
-    Pencil, GripVertical, Folder, FolderOpen
+    Pencil, GripVertical, Folder, FolderOpen, LayoutGrid
 } from 'lucide-react'
 import { formatDuration, markVideoComplete, updateModule, updateVideo } from '../../utils/db'
 import EditModuleModal from './EditModuleModal'
@@ -389,6 +390,16 @@ function PlaylistSidebar({
                         >
                             AI
                         </button>
+                        {courseId && (
+                            <Link
+                                to={`/course/${courseId}/canvas`}
+                                className="px-2 py-1.5 flex items-center gap-1 text-xs font-medium text-light-text-secondary dark:text-dark-text-secondary hover:text-primary-fg dark:hover:text-white hover:bg-gray-100 dark:hover:bg-dark-bg rounded-lg transition-colors ml-1"
+                                title="Open Course Canvas Whiteboard"
+                            >
+                                <LayoutGrid className="w-3.5 h-3.5 text-primary-fg" />
+                                <span className="hidden sm:inline">Canvas</span>
+                            </Link>
+                        )}
                     </div>
 
                     {/* Playlist Toolbar */}

@@ -33,6 +33,7 @@ import dataRouter from './routes/data.js'
 import fsRouter from './routes/filesystem.js'
 import dubbingRouter from './routes/dubbing.js'
 import youtubeRouter from './routes/youtube.js'
+import canvasRouter from './routes/canvas.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -100,6 +101,7 @@ app.use('/api/data', dataRouter)
 app.use('/api/fs', fsRouter)
 app.use('/api/dub', dubbingRouter)
 app.use('/api/youtube', youtubeRouter)
+app.use('/api/canvas', canvasRouter)
 
 // ============================================
 // STATIC FILE SERVING (PRODUCTION)

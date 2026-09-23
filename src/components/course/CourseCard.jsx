@@ -1,5 +1,5 @@
 import { Link, useNavigate } from 'react-router-dom'
-import { Play, Clock, Video, MoreVertical, Pencil, Trash2, RefreshCw, Link2 } from 'lucide-react'
+import { Play, Clock, Video, MoreVertical, Pencil, Trash2, Link2, LayoutGrid } from 'lucide-react'
 import { formatDuration, deleteCourse, getInstructorAvatarAsync, updateCourse } from '../../utils/db'
 import { useState, useEffect } from 'react'
 import { useNotification } from '../../contexts/NotificationContext'
@@ -8,7 +8,6 @@ function CourseCard({ course, viewMode = 'grid', onRefresh, onEdit, onSync }) {
     const navigate = useNavigate()
     const [showMenu, setShowMenu] = useState(false)
     const [isDeleting, setIsDeleting] = useState(false)
-    const [isSyncing, setIsSyncing] = useState(false)
     const [instructorAvatar, setInstructorAvatar] = useState(null)
     const { showNotification } = useNotification()
 
@@ -73,20 +72,6 @@ function CourseCard({ course, viewMode = 'grid', onRefresh, onEdit, onSync }) {
         e.stopPropagation()
         setShowMenu(false)
         onEdit?.(course)
-    }
-
-    async function handleSync(e) {
-        e.preventDefault()
-        e.stopPropagation()
-        setShowMenu(false)
-        if (onSync) {
-            setIsSyncing(true)
-            try {
-                await onSync(course)
-            } finally {
-                setIsSyncing(false)
-            }
-        }
     }
 
     const isLocalCourse = !!(course.folderHandle || (course.originalTitle && !course.youtubePlaylistId && !course.driveFileId && course.sourceType !== 'external-link'))
@@ -243,21 +228,23 @@ function CourseCard({ course, viewMode = 'grid', onRefresh, onEdit, onSync }) {
                                 >
                                     <button
                                         className="w-full px-3 py-2 text-left text-sm text-gray-700 dark:text-neutral-300 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-white/10 flex items-center gap-2"
+                                        onClick={(e) => {
+                                            e.preventDefault()
+                                            e.stopPropagation()
+                                            setShowMenu(false)
+                                            navigate(`/course/${course.id}/canvas`)
+                                        }}
+                                    >
+                                        <LayoutGrid className="w-3 h-3 text-primary-fg" />
+                                        Course Canvas
+                                    </button>
+                                    <button
+                                        className="w-full px-3 py-2 text-left text-sm text-gray-700 dark:text-neutral-300 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-white/10 flex items-center gap-2"
                                         onClick={handleEdit}
                                     >
                                         <Pencil className="w-3 h-3" />
                                         Edit
                                     </button>
-                                    {isLocalCourse && (
-                                        <button
-                                            className="w-full px-3 py-2 text-left text-sm text-gray-700 dark:text-neutral-300 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-white/10 flex items-center gap-2"
-                                            onClick={handleSync}
-                                            disabled={isSyncing}
-                                        >
-                                            <RefreshCw className={`w-3 h-3 ${isSyncing ? 'animate-spin' : ''}`} />
-                                            {isSyncing ? 'Scanning...' : 'Sync'}
-                                        </button>
-                                    )}
                                     <button
                                         className="w-full px-3 py-2 text-left text-sm text-red-500 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-500/10 flex items-center gap-2"
                                         onClick={handleDelete}

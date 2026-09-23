@@ -434,7 +434,7 @@ a:focus:not(:focus-visible) {
 }
 
 .note-editor ul {
-  list-style-type: disc;
+  list-style-type: none; /* custom bullet */
 }
 
 .note-editor ol {
@@ -443,63 +443,171 @@ a:focus:not(:focus-visible) {
 
 .note-editor li {
   margin: 2px 0;
+  position: relative;
 }
 
-/* ── Rendered Note Content ── */
-.note-content {
-  word-wrap: break-word;
-  overflow-wrap: break-word;
-  line-height: 1.6;
+/* Obsidian-style: dimmed syntax prefix markers on converted elements */
+/* Matching font-size to the heading — grayer muted shade on light and dark mode */
+
+/* Heading prefixes */
+.note-editor h1::before {
+  content: "# ";
+  font-size: 1em;
+  font-weight: 400;
+  color: #9ca3af;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
 }
 
-.note-content b,
-.note-content strong {
+.note-editor h2::before {
+  content: "## ";
+  font-size: 1em;
+  font-weight: 400;
+  color: #9ca3af;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
+}
+
+.note-editor h3::before {
+  content: "### ";
+  font-size: 1em;
+  font-weight: 400;
+  color: #9ca3af;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
+}
+
+/* Blockquote ">" prefix */
+.note-editor blockquote::before {
+  content: "> ";
+  font-size: 1em;
+  font-weight: 400;
+  color: #9ca3af;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
+  font-style: normal;
+}
+
+/* Bullet list prefix */
+.note-editor ul > li::before {
+  content: "•";
+  position: absolute;
+  left: -1.1em;
+  color: #9ca3af;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
+  font-size: 1.1em;
   font-weight: 600;
 }
 
-.note-content i,
-.note-content em {
+/* Ordered list number styling */
+.note-editor ol > li::marker {
+  color: #9ca3af;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
+  font-weight: 500;
+}
+
+/* Dark mode: slightly muted slate-gray */
+.dark .note-editor h1::before,
+.dark .note-editor h2::before,
+.dark .note-editor h3::before {
+  color: #6b7280;
+}
+
+.dark .note-editor blockquote::before {
+  color: #6b7280;
+}
+
+.dark .note-editor ul > li::before {
+  color: #6b7280;
+}
+
+.dark .note-editor ol > li::marker {
+  color: #6b7280;
+}
+
+.note-editor h1,
+.note-content h1 {
+  font-size: 1.35rem;
+  font-weight: 700;
+  margin: 0.6rem 0 0.3rem 0;
+  line-height: 1.3;
+}
+
+.note-editor h2,
+.note-content h2 {
+  font-size: 1.15rem;
+  font-weight: 600;
+  margin: 0.5rem 0 0.25rem 0;
+  line-height: 1.35;
+}
+
+.note-editor h3,
+.note-content h3 {
+  font-size: 1rem;
+  font-weight: 600;
+  margin: 0.4rem 0 0.2rem 0;
+  line-height: 1.4;
+}
+
+.note-editor blockquote,
+.note-content blockquote {
+  border-left: 3px solid #9ca3af;
+  padding-left: 0.75rem;
+  margin: 0.5rem 0;
   font-style: italic;
+  opacity: 0.88;
 }
 
-.note-content s,
-.note-content strike,
-.note-content del {
-  text-decoration: line-through;
-  opacity: 0.7;
+.dark .note-editor blockquote,
+.dark .note-content blockquote {
+  border-left-color: #4b5563;
 }
 
-.note-content ul,
-.note-content ol {
-  padding-left: 1.5em;
-  margin: 4px 0;
+.note-editor hr,
+.note-content hr {
+  border: none;
+  border-top: 1px solid var(--border, rgba(255, 255, 255, 0.15));
+  margin: 0.75rem 0;
 }
 
-.note-content ul {
-  list-style-type: disc;
+.note-editor code,
+.note-content code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.85em;
+  background: rgba(125, 125, 125, 0.15);
+  padding: 0.15em 0.35em;
+  border-radius: 4px;
+  color: #e11d48;
 }
 
-.note-content ol {
-  list-style-type: decimal;
+.dark .note-editor code,
+.dark .note-content code {
+  color: #fb7185;
 }
 
-.note-content li {
-  margin: 2px 0;
+/* ── Course Canvas Whiteboard ── */
+.canvas-dot-grid {
+  background-size: 24px 24px;
+  background-image: radial-gradient(circle, rgba(0, 0, 0, 0.12) 1.2px, transparent 1.2px);
 }
 
-.note-content img {
-  max-width: 100%;
-  height: auto;
-  border-radius: 6px;
-  margin: 8px 0;
-  border: 1px solid var(--border);
-  cursor: pointer;
-  transition: transform 0.2s ease, box-shadow 0.2s ease;
+.dark .canvas-dot-grid {
+  background-image: radial-gradient(circle, rgba(255, 255, 255, 0.12) 1.2px, transparent 1.2px);
 }
 
-.note-content img:hover {
-  transform: scale(1.01);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+.canvas-selection-box {
+  border: 1px dashed rgba(59, 130, 246, 0.6);
+  background: rgba(59, 130, 246, 0.08);
+  pointer-events: none;
+}
+
+.canvas-port {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #3b82f6;
+  border: 2px solid white;
+  transition: transform 0.15s ease, background 0.15s ease;
+}
+
+.canvas-port:hover {
+  transform: scale(1.4);
 }
 
 /* Reduce motion for users who prefer it */
@@ -518,10 +626,12 @@ a:focus:not(:focus-visible) {
 .no-spinner::-webkit-inner-spin-button,
 .no-spinner::-webkit-outer-spin-button {
   -webkit-appearance: none;
+  appearance: none;
   margin: 0;
 }
 
 .no-spinner {
   -moz-appearance: textfield;
+  appearance: textfield;
   /* Firefox */
 }

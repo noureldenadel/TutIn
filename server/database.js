@@ -230,6 +230,7 @@ function runMigrations() {
     const migrations = [
         { name: '001_initial_schema', fn: migration001 },
         { name: '002_subtitles_dubbing_schema', fn: migration002 },
+        { name: '003_canvas_whiteboard_schema', fn: migration003 },
     ]
 
     for (const migration of migrations) {
@@ -447,5 +448,56 @@ function migration002() {
     const hasSubtitleSources = columns.some(col => col.name === 'subtitle_sources')
     if (!hasSubtitleSources) {
         db.run("ALTER TABLE videos ADD COLUMN subtitle_sources TEXT DEFAULT '[]'")
+    }
+}
+
+/**
+ * Migration 003: Course Canvas Whiteboard Schema
+ */
+function migration003() {
+    const statements = [
+        `CREATE TABLE IF NOT EXISTS canvas_nodes (
+            id TEXT PRIMARY KEY,
+            course_id TEXT NOT NULL,
+            note_id TEXT,
+            type TEXT DEFAULT 'note',
+            content TEXT DEFAULT '',
+            title TEXT DEFAULT '',
+            x REAL DEFAULT 0,
+            y REAL DEFAULT 0,
+            width REAL DEFAULT 280,
+            height REAL DEFAULT 180,
+            color TEXT DEFAULT '',
+            parent_group_id TEXT,
+            collapsed INTEGER DEFAULT 0,
+            created_at TEXT,
+            updated_at TEXT,
+            FOREIGN KEY (course_id) REFERENCES courses(id) ON DELETE CASCADE,
+            FOREIGN KEY (note_id) REFERENCES notes(id) ON DELETE SET NULL
+        )`,
+        `CREATE INDEX IF NOT EXISTS idx_canvas_nodes_course ON canvas_nodes(course_id)`,
+        `CREATE TABLE IF NOT EXISTS canvas_edges (
+            id TEXT PRIMARY KEY,
+            course_id TEXT NOT NULL,
+            from_node_id TEXT NOT NULL,
+            to_node_id TEXT NOT NULL,
+            created_at TEXT,
+            FOREIGN KEY (course_id) REFERENCES courses(id) ON DELETE CASCADE,
+            FOREIGN KEY (from_node_id) REFERENCES canvas_nodes(id) ON DELETE CASCADE,
+            FOREIGN KEY (to_node_id) REFERENCES canvas_nodes(id) ON DELETE CASCADE
+        )`,
+        `CREATE INDEX IF NOT EXISTS idx_canvas_edges_course ON canvas_edges(course_id)`,
+        `CREATE TABLE IF NOT EXISTS canvas_viewports (
+            course_id TEXT PRIMARY KEY,
+            pan_x REAL DEFAULT 0,
+            pan_y REAL DEFAULT 0,
+            zoom REAL DEFAULT 1,
+            updated_at TEXT,
+            FOREIGN KEY (course_id) REFERENCES courses(id) ON DELETE CASCADE
+        )`
+    ]
+
+    for (const stmt of statements) {
+        db.run(stmt)
     }
 }

@@ -147,6 +147,36 @@ export async function deleteNotesByVideo(videoId) {
     }
 }
 
+// ============= CANVAS WHITEBOARD OPERATIONS =============
+
+export async function getCanvasData(courseId) {
+    return api.get(`/api/canvas/${courseId}`)
+}
+
+export async function saveCanvasData(courseId, data) {
+    return api.put(`/api/canvas/${courseId}`, data)
+}
+
+export async function addCanvasNode(courseId, nodeData) {
+    return api.post(`/api/canvas/${courseId}/nodes`, { id: generateId('cnode_'), ...nodeData })
+}
+
+export async function updateCanvasNode(courseId, nodeId, updates) {
+    return api.put(`/api/canvas/${courseId}/nodes/${nodeId}`, updates)
+}
+
+export async function deleteCanvasNode(courseId, nodeId) {
+    return api.del(`/api/canvas/${courseId}/nodes/${nodeId}`)
+}
+
+export async function addCanvasEdge(courseId, edgeData) {
+    return api.post(`/api/canvas/${courseId}/edges`, { id: generateId('cedge_'), ...edgeData })
+}
+
+export async function deleteCanvasEdge(courseId, edgeId) {
+    return api.del(`/api/canvas/${courseId}/edges/${edgeId}`)
+}
+
 // ============= INSTRUCTOR OPERATIONS =============
 
 function normalizeInstructorName(name) {

@@ -1,13 +1,12 @@
 import { useState, useRef, useEffect } from 'react'
-import { X, Upload, Image, BookOpen, User, FileText, Trash2, Tag, Folder, Video, Clock } from 'lucide-react'
+import { X, Upload, Image, BookOpen, User, FileText, Trash2, Tag, Folder, Video, Clock, RefreshCw } from 'lucide-react'
 import { updateCourse, formatDuration } from '../../utils/db'
 
 import { validateCourseTitle, sanitizeHTML } from '../../utils/validation'
 
-function EditCourseModal({ course, isOpen, onClose, onSave }) {
+function EditCourseModal({ course, isOpen, onClose, onSave, onSync }) {
     const [formData, setFormData] = useState({
         title: '',
-        description: '',
         instructor: '',
         tags: [],
         thumbnailData: null,
@@ -20,6 +19,7 @@ function EditCourseModal({ course, isOpen, onClose, onSave }) {
     })
     const [newTag, setNewTag] = useState('')
     const [isSaving, setIsSaving] = useState(false)
+    const [isSyncing, setIsSyncing] = useState(false)
     const [errors, setErrors] = useState({})
     const [isDragging, setIsDragging] = useState(false)
     const fileInputRef = useRef(null)
@@ -28,7 +28,6 @@ function EditCourseModal({ course, isOpen, onClose, onSave }) {
         if (course && isOpen) {
             setFormData({
                 title: course.title || '',
-                description: course.description || '',
                 instructor: course.instructor || '',
                 tags: course.tags || [],
                 thumbnailData: course.thumbnailData || null,
@@ -175,7 +174,7 @@ function EditCourseModal({ course, isOpen, onClose, onSave }) {
             
             const updateData = {
                 title: titleValidation.sanitized,
-                description: sanitizeHTML(formData.description),
+                description: course.description || '',
                 instructor: sanitizeHTML(formData.instructor),
                 tags: formData.tags,
                 thumbnailData: formData.thumbnailData,
@@ -300,21 +299,6 @@ function EditCourseModal({ course, isOpen, onClose, onSave }) {
                             className="w-full px-3 py-2 rounded-lg border border-light-border dark:border-dark-border bg-white dark:bg-dark-bg focus:border-primary dark:focus:border-blue-400 outline-none focus:outline-none ring-0 focus:ring-0"
                             placeholder="Instructor name"
                             maxLength={100}
-                        />
-                    </div>
-
-                    {/* Description */}
-                    <div>
-                        <label className="block text-sm font-medium mb-2">
-                            Description
-                        </label>
-                        <textarea
-                            value={formData.description}
-                            onChange={(e) => handleChange('description', e.target.value)}
-                            className="w-full px-3 py-2 rounded-lg border border-light-border dark:border-dark-border bg-white dark:bg-dark-bg focus:border-primary dark:focus:border-blue-400 outline-none focus:outline-none ring-0 focus:ring-0 resize-none"
-                            placeholder="Course description, notes, URLs..."
-                            rows={4}
-                            maxLength={2000}
                         />
                     </div>
 
@@ -470,13 +454,47 @@ function EditCourseModal({ course, isOpen, onClose, onSave }) {
                 </div>
 
                 {/* Footer */}
-                <div className="flex justify-end gap-3 p-4 border-t border-light-border dark:border-dark-border">
-                    <button onClick={onClose} className="px-4 py-2 text-sm border border-light-border dark:border-dark-border rounded-lg hover:bg-light-surface dark:hover:bg-dark-bg" disabled={isSaving}>
-                        Cancel
-                    </button>
-                    <button onClick={handleSave} disabled={isSaving || !formData.title.trim()} className="px-4 py-2 text-sm bg-primary text-primary-content hover:bg-primary-hover rounded-lg hover:bg-gray-800 dark:hover:bg-white/20 disabled:opacity-50 flex items-center gap-2">
-                        {isSaving ? <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />Saving...</> : 'Save Changes'}
-                    </button>
+                <div className="flex items-center justify-between p-4 border-t border-light-border dark:border-dark-border">
+                    <div>
+                        {!isExternalCourse && onSync && (
+                            <button
+                                type="button"
+                                onClick={async () => {
+                                    setIsSyncing(true)
+                                    try {
+                                        await onSync(course)
+                                        onClose()
+                                    } finally {
+                                        setIsSyncing(false)
+                                    }
+                                }}
+                                disabled={isSyncing || isSaving}
+                                className="px-4 py-2 text-sm border border-light-border dark:border-dark-border rounded-lg hover:bg-light-surface dark:hover:bg-dark-bg flex items-center gap-2 text-gray-700 dark:text-neutral-300 transition-colors disabled:opacity-50 cursor-pointer"
+                                title="Scan and sync folder changes"
+                            >
+                                <RefreshCw className={`w-4 h-4 ${isSyncing ? 'animate-spin' : ''}`} />
+                                <span>{isSyncing ? 'Scanning...' : 'Sync Course'}</span>
+                            </button>
+                        )}
+                    </div>
+                    <div className="flex items-center gap-3">
+                        <button
+                            type="button"
+                            onClick={onClose}
+                            className="px-4 py-2 text-sm border border-light-border dark:border-dark-border rounded-lg hover:bg-light-surface dark:hover:bg-dark-bg transition-colors"
+                            disabled={isSaving || isSyncing}
+                        >
+                            Cancel
+                        </button>
+                        <button
+                            type="button"
+                            onClick={handleSave}
+                            disabled={isSaving || isSyncing || !formData.title.trim()}
+                            className="px-4 py-2 text-sm bg-primary text-primary-content hover:bg-primary-hover rounded-lg hover:bg-gray-800 dark:hover:bg-white/20 disabled:opacity-50 flex items-center gap-2 transition-colors cursor-pointer"
+                        >
+                            {isSaving ? <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />Saving...</> : 'Save Changes'}
+                        </button>
+                    </div>
                 </div>
             </div>
         </div>

@@ -605,6 +605,7 @@ function HomePage() {
                 isOpen={!!editingCourse}
                 onClose={() => setEditingCourse(null)}
                 onSave={loadCourses}
+                onSync={handleSyncCourse}
             />
 
             {/* Sync Preview Modal */}

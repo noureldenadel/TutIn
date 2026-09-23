@@ -13,6 +13,7 @@ import { ImportProvider } from './contexts/ImportContext'
 // Lazy load pages for better performance
 const HomePage = lazy(() => import('./pages/HomePage'))
 const CoursePlayerPage = lazy(() => import('./pages/CoursePlayerPage'))
+const CourseCanvasPage = lazy(() => import('./pages/CourseCanvasPage'))
 const InstructorsPage = lazy(() => import('./pages/InstructorsPage'))
 const HistoryPage = lazy(() => import('./pages/HistoryPage'))
 const StatisticsPage = lazy(() => import('./pages/StatisticsPage'))
@@ -40,6 +41,7 @@ function AppContent() {
                     <Routes>
                         <Route path="/" element={<div className="max-w-7xl mx-auto w-full"><HomePage /></div>} />
                         <Route path="/course/:courseId" element={<CoursePlayerPage />} />
+                        <Route path="/course/:courseId/canvas" element={<CourseCanvasPage />} />
                         <Route path="/instructors" element={<div className="max-w-7xl mx-auto w-full"><InstructorsPage /></div>} />
                         <Route path="/history" element={<div className="max-w-7xl mx-auto w-full"><HistoryPage /></div>} />
                         <Route path="/statistics" element={<div className="max-w-7xl mx-auto w-full"><StatisticsPage /></div>} />
