@@ -2,42 +2,54 @@
  * Whisper Transcription Web Worker
  * 
  * Runs Whisper AI transcription off the main thread to prevent UI freezing.
+ * Dynamically supports English-optimized and Multilingual Whisper models based on course spoken language.
  */
 
 let transcriptionPipeline = null
+let currentModelLoaded = null
 let isLoadingPipeline = false
 
 // Handle messages from main thread
 self.onmessage = async function (e) {
     console.log('[Worker] Received message:', e.data?.type, 'buffer size:', e.data?.audioBuffer?.byteLength)
-    const { type, audioBuffer, id } = e.data
+    const { type, audioBuffer, id, language = 'en', device = 'auto' } = e.data
 
     if (type === 'transcribe') {
         try {
-            // Load pipeline if not loaded
-            const { device } = e.data
-            if (!transcriptionPipeline) {
-                console.log(`[Worker] Loading pipeline (device: ${device})...`)
-                await loadTranscriptionPipeline(device)
+            const cleanLang = (language || 'en').toLowerCase().trim()
+            const targetModel = cleanLang === 'en' ? 'Xenova/whisper-tiny.en' : 'Xenova/whisper-tiny'
+
+            // Load pipeline if not loaded or if model mismatch (e.g. switched between English-only and Multilingual)
+            if (!transcriptionPipeline || currentModelLoaded !== targetModel) {
+                console.log(`[Worker] Loading pipeline for ${targetModel} (lang: ${cleanLang}, device: ${device})...`)
+                await loadTranscriptionPipeline(device, targetModel)
                 console.log('[Worker] Pipeline loaded!')
             }
 
             // Report progress
-            self.postMessage({ type: 'progress', id, stage: 'transcribing', progress: 0, message: 'Transcribing audio (this may take a minute)…' })
+            self.postMessage({ type: 'progress', id, stage: 'transcribing', progress: 0, message: `Transcribing audio (${cleanLang.toUpperCase()})…` })
 
             // Convert ArrayBuffer to Float32Array
             console.log('[Worker] Converting buffer to Float32Array...')
             const audioFloat32 = new Float32Array(audioBuffer)
             console.log('[Worker] Audio samples:', audioFloat32.length)
 
-            // Run transcription with timestamps
+            // Run transcription with timestamps & explicit language
             console.log('[Worker] Starting transcription...')
-            const result = await transcriptionPipeline(audioFloat32, {
+            const options = {
                 chunk_length_s: 30,
                 stride_length_s: 5,
                 return_timestamps: 'word',
                 force_full_sequences: false
-            })
+            }
+
+            // For multilingual model, specify language and task
+            if (targetModel !== 'Xenova/whisper-tiny.en') {
+                options.language = cleanLang
+                options.task = 'transcribe'
+            }
+
+            const result = await transcriptionPipeline(audioFloat32, options)
             console.log('[Worker] Transcription complete!')
 
             self.postMessage({ type: 'progress', id, stage: 'transcribing', progress: 1, message: 'Transcription complete!' })
@@ -60,19 +72,19 @@ self.onmessage = async function (e) {
     }
 }
 
-async function loadTranscriptionPipeline(device = 'auto') {
-    if (transcriptionPipeline) return transcriptionPipeline
+async function loadTranscriptionPipeline(device = 'auto', modelName = 'Xenova/whisper-tiny.en') {
+    if (transcriptionPipeline && currentModelLoaded === modelName) return transcriptionPipeline
     if (isLoadingPipeline) {
         while (isLoadingPipeline) {
             await new Promise(resolve => setTimeout(resolve, 100))
         }
-        return transcriptionPipeline
+        if (transcriptionPipeline && currentModelLoaded === modelName) return transcriptionPipeline
     }
 
     isLoadingPipeline = true
 
     try {
-        self.postMessage({ type: 'progress', stage: 'loading_model', progress: 0, message: 'Loading Whisper model...' })
+        self.postMessage({ type: 'progress', stage: 'loading_model', progress: 0, message: `Loading Whisper AI model (${modelName})...` })
 
         console.log('[Worker] Importing transformers from CDN...')
 
@@ -87,11 +99,11 @@ async function loadTranscriptionPipeline(device = 'auto') {
         env.allowLocalModels = false
         env.useBrowserCache = true
 
-        console.log('[Worker] Loading Whisper model...')
+        console.log(`[Worker] Loading Whisper model: ${modelName}...`)
         // Load Whisper model
         transcriptionPipeline = await pipeline(
             'automatic-speech-recognition',
-            'Xenova/whisper-tiny.en',
+            modelName,
             {
                 device: device === 'auto' ? (('gpu' in navigator) ? 'webgpu' : 'wasm') : (device === 'gpu' ? 'webgpu' : 'wasm'),
                 revision: 'main',
@@ -107,6 +119,7 @@ async function loadTranscriptionPipeline(device = 'auto') {
                 }
             }
         )
+        currentModelLoaded = modelName
         console.log('[Worker] Whisper model loaded!')
 
         self.postMessage({ type: 'progress', stage: 'loading_model', progress: 1, message: 'Model loaded!' })

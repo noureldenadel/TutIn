@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react'
-import { X, HardDrive, Save, AlertTriangle, Folder, Video, Loader, ExternalLink } from 'lucide-react'
+import { X, HardDrive, Save, AlertTriangle, Folder, Video, Loader, ExternalLink, Languages } from 'lucide-react'
 import { parseGoogleDriveUrl, scanDriveFolder, getDriveThumbnailUrl } from '../../utils/googleDrive'
 import { formatDuration } from '../../utils/db'
 import { useSettings } from '../../contexts/SettingsContext'
+import { SUPPORTED_LANGUAGES } from '../../utils/languages'
 
 function GoogleDriveImportModal({ isOpen, onClose, onImport }) {
     const { settings } = useSettings()
@@ -11,6 +12,7 @@ function GoogleDriveImportModal({ isOpen, onClose, onImport }) {
     const [error, setError] = useState(null)
     const [previewData, setPreviewData] = useState(null)
     const [folderName, setFolderName] = useState('')
+    const [language, setLanguage] = useState('en')
 
     const apiKey = settings.googleApiKey
 
@@ -21,6 +23,7 @@ function GoogleDriveImportModal({ isOpen, onClose, onImport }) {
             setError(null)
             setPreviewData(null)
             setFolderName('')
+            setLanguage('en')
         }
     }, [isOpen])
 
@@ -89,6 +92,7 @@ function GoogleDriveImportModal({ isOpen, onClose, onImport }) {
             title: folderName || 'Google Drive Course',
             instructor: '',
             thumbnailData: thumbnail,
+            language: language || 'en',
             description: 'Imported from Google Drive',
             totalDuration: previewData.totalDuration,
             totalVideos: previewData.totalVideos,
@@ -171,15 +175,39 @@ function GoogleDriveImportModal({ isOpen, onClose, onImport }) {
                     {previewData && (
                         <div className="border border-light-border dark:border-dark-border rounded-lg overflow-hidden">
                             {/* Course Header */}
-                            <div className="p-4 bg-light-surface dark:bg-dark-bg">
-                                <input
-                                    type="text"
-                                    value={folderName}
-                                    onChange={(e) => setFolderName(e.target.value)}
-                                    className="text-lg font-semibold bg-transparent border-b border-transparent hover:border-light-border dark:hover:border-dark-border focus:border-primary outline-none w-full"
-                                    placeholder="Course Title"
-                                />
-                                <div className="flex items-center gap-4 text-sm text-light-text-secondary dark:text-dark-text-secondary mt-2">
+                            <div className="p-4 bg-light-surface dark:bg-dark-bg space-y-3">
+                                <div>
+                                    <label className="block text-xs text-light-text-secondary dark:text-dark-text-secondary mb-1">
+                                        Course Title
+                                    </label>
+                                    <input
+                                        type="text"
+                                        value={folderName}
+                                        onChange={(e) => setFolderName(e.target.value)}
+                                        className="text-lg font-semibold bg-white dark:bg-dark-surface px-2.5 py-1 rounded border border-light-border dark:border-dark-border focus:border-primary outline-none w-full"
+                                        placeholder="Course Title"
+                                    />
+                                </div>
+
+                                <div>
+                                    <label className="block text-xs text-light-text-secondary dark:text-dark-text-secondary mb-1 flex items-center gap-1.5 font-medium">
+                                        <Languages className="w-3.5 h-3.5 text-primary" />
+                                        Language
+                                    </label>
+                                    <select
+                                        value={language}
+                                        onChange={(e) => setLanguage(e.target.value)}
+                                        className="w-full px-2.5 py-1.5 text-sm rounded border border-light-border dark:border-dark-border bg-white dark:bg-dark-surface focus:ring-2 focus:ring-primary outline-none"
+                                    >
+                                        {SUPPORTED_LANGUAGES.map((lang) => (
+                                            <option key={lang.code} value={lang.code}>
+                                                {lang.flag} {lang.name} ({lang.native})
+                                            </option>
+                                        ))}
+                                    </select>
+                                </div>
+
+                                <div className="flex items-center gap-4 text-sm text-light-text-secondary dark:text-dark-text-secondary pt-1">
                                     <span className="flex items-center gap-1">
                                         <Video className="w-4 h-4" />
                                         {previewData.totalVideos} videos

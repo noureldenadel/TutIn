@@ -11,6 +11,7 @@ import { execFile } from 'child_process'
 import { parseMp4Duration } from '../utils/mp4Parser.js'
 import { extractLangCode } from '../utils/captionParser.js'
 import { parseTsDuration } from '../utils/tsParser.js'
+import { loadFullVaultData } from '../utils/courseAssets.js'
 
 /**
  * Supported video file extensions
@@ -22,7 +23,7 @@ const VIDEO_EXTENSIONS = new Set([
 const SUBTITLE_EXTENSIONS = new Set(['.srt', '.vtt', '.ass', '.ssa'])
 
 // Folder names managed by TutIn — skip during module scanning
-const MANAGED_FOLDERS = new Set(['Captions', 'Dubs'])
+const MANAGED_FOLDERS = new Set(['Captions', 'Dubs', '.tutin'])
 
 /**
  * Check if a filename is a video file
@@ -473,13 +474,22 @@ export async function scanCourseFolder(folderPath, onProgress, autoDetectThumbna
 
     const totalDuration = modules.reduce((sum, m) => sum + m.totalDuration, 0)
 
+    // Check for existing portable .tutin vault
+    const vaultData = loadFullVaultData(folderPath)
+    const finalTitle = vaultData?.metadata?.title || cleanCourseTitle(courseName)
+    const finalInstructor = vaultData?.metadata?.instructor || ''
+    const finalLanguage = vaultData?.metadata?.language || 'en'
+
     return {
-        title: cleanCourseTitle(courseName),
+        title: finalTitle,
         originalTitle: courseName,
         folderPath,
+        instructor: finalInstructor,
+        language: finalLanguage,
         totalDuration,
         totalVideos,
         thumbnailData: thumbnailBase64,
         modules,
+        vaultData
     }
 }

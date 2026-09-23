@@ -723,7 +723,7 @@ function CourseCanvasPage() {
     if (isLoading) {
         return (
             <div className="h-[calc(100vh-4rem)] flex items-center justify-center">
-                <LoadingSpinner message="Opening Course Canvas..." />
+                <LoadingSpinner message="Opening Canvas..." />
             </div>
         )
     }
@@ -750,7 +750,7 @@ function CourseCanvasPage() {
                     <Link
                         to={`/course/${courseId}`}
                         className="p-1.5 rounded-lg hover:bg-neutral-100 dark:hover:bg-neutral-800 text-neutral-600 dark:text-neutral-300 hover:text-neutral-900 dark:hover:text-white transition-colors"
-                        title="Back to Course Player"
+                        title="Back to Player"
                     >
                         <ChevronLeft className="w-5 h-5" />
                     </Link>
@@ -761,7 +761,7 @@ function CourseCanvasPage() {
                         </div>
                         <div className="min-w-0">
                             <h1 className="text-sm font-semibold truncate leading-tight">
-                                {course?.title || 'Course Canvas'}
+                                {course?.title || 'Canvas'}
                             </h1>
                             <div className="flex items-center gap-2 text-[11px] text-neutral-500 dark:text-neutral-400">
                                 <span>{nodes.length} cards</span>

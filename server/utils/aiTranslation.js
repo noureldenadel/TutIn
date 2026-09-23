@@ -15,6 +15,7 @@ env.allowLocalModels = true
  */
 
 const NLLB_LANG_MAP = {
+    'en': 'eng_Latn',
     'ar': 'arb_Arab',
     'es': 'spa_Latn',
     'fr': 'fra_Latn',
@@ -30,12 +31,23 @@ const NLLB_LANG_MAP = {
     'nl': 'nld_Latn',
     'pl': 'pol_Latn',
     'vi': 'vie_Latn',
-    'th': 'tha_Thai'
+    'th': 'tha_Thai',
+    'cs': 'ces_Latn',
+    'hu': 'hun_Latn',
+    'uk': 'ukr_Cyrl',
+    'id': 'ind_Latn',
+    'sv': 'swe_Latn',
+    'da': 'dan_Latn',
+    'no': 'nob_Latn',
+    'fi': 'fin_Latn',
+    'el': 'ell_Grek',
+    'he': 'heb_Hebr'
 }
 
-export async function translateChunks(chunks, targetLanguage, apiKey, modelParams, onProgress, req) {
+export async function translateChunks(chunks, targetLanguage, apiKey, modelParams, onProgress, req, sourceLanguage = 'en') {
     const modelId = `Xenova/nllb-200-distilled-600M`
     const tgt_lang = NLLB_LANG_MAP[targetLanguage]
+    const src_lang = NLLB_LANG_MAP[sourceLanguage] || 'eng_Latn'
     
     if (!tgt_lang) {
         throw new Error(`Unsupported language code: ${targetLanguage}`)
@@ -95,7 +107,7 @@ export async function translateChunks(chunks, targetLanguage, apiKey, modelParam
         try {
             // Local translation using NLLB
             const output = await translator(batchTexts, {
-                src_lang: 'eng_Latn',
+                src_lang: src_lang,
                 tgt_lang: tgt_lang
             })
 

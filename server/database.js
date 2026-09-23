@@ -43,6 +43,7 @@ function ensureDirectories() {
         dataDir,
         path.join(dataDir, 'transcripts'),
         path.join(dataDir, 'summaries'),
+        path.join(dataDir, 'dubs'),
         path.join(dataDir, 'backups', 'auto'),
         path.join(dataDir, 'backups', 'manual'),
     ]
@@ -231,6 +232,8 @@ function runMigrations() {
         { name: '001_initial_schema', fn: migration001 },
         { name: '002_subtitles_dubbing_schema', fn: migration002 },
         { name: '003_canvas_whiteboard_schema', fn: migration003 },
+        { name: '004_dubbed_tracks_schema', fn: migration004 },
+        { name: '005_course_language', fn: migration005 },
     ]
 
     for (const migration of migrations) {
@@ -263,6 +266,7 @@ function migration001() {
             folder_path TEXT,
             source_type TEXT DEFAULT 'local',
             course_url TEXT,
+            language TEXT DEFAULT 'en',
             date_added TEXT,
             date_modified TEXT,
             last_accessed TEXT,
@@ -501,3 +505,26 @@ function migration003() {
         db.run(stmt)
     }
 }
+
+/**
+ * Migration 004: Dubbed Audio Tracks Schema
+ */
+function migration004() {
+    const columns = getAll("PRAGMA table_info(videos)")
+    const hasDubbedTracks = columns.some(col => col.name === 'dubbed_tracks')
+    if (!hasDubbedTracks) {
+        db.run("ALTER TABLE videos ADD COLUMN dubbed_tracks TEXT DEFAULT '[]'")
+    }
+}
+
+/**
+ * Migration 005: Course Spoken Language Schema
+ */
+function migration005() {
+    const columns = getAll("PRAGMA table_info(courses)")
+    const hasLanguage = columns.some(col => col.name === 'language')
+    if (!hasLanguage) {
+        db.run("ALTER TABLE courses ADD COLUMN language TEXT DEFAULT 'en'")
+    }
+}
+

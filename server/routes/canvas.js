@@ -1,7 +1,59 @@
 import express from 'express'
+import fs from 'fs'
 import { getAll, getOne, run, transaction } from '../database.js'
+import { saveVaultCanvas } from '../utils/courseAssets.js'
 
 const router = express.Router()
+
+/**
+ * Synchronize canvas whiteboard data to <courseFolder>/.tutin/canvas.json
+ */
+function syncCourseCanvasToVault(courseId) {
+    if (!courseId) return
+    try {
+        const course = getOne('SELECT folder_path FROM courses WHERE id = ?', [courseId])
+        if (!course || !course.folder_path || !fs.existsSync(course.folder_path)) return
+
+        const rawNodes = getAll('SELECT * FROM canvas_nodes WHERE course_id = ?', [courseId])
+        const rawEdges = getAll('SELECT * FROM canvas_edges WHERE course_id = ?', [courseId])
+        const vp = getAll('SELECT * FROM canvas_viewports WHERE course_id = ?', [courseId])
+
+        const viewport = vp[0] ? {
+            pan: { x: Number(vp[0].pan_x) || 0, y: Number(vp[0].pan_y) || 0 },
+            zoom: Number(vp[0].zoom) || 1
+        } : { pan: { x: 0, y: 0 }, zoom: 1 }
+
+        const canvasData = {
+            nodes: rawNodes.map(n => ({
+                id: n.id,
+                noteId: n.note_id,
+                type: n.type || 'note',
+                content: n.content,
+                title: n.title,
+                x: Number(n.x) || 0,
+                y: Number(n.y) || 0,
+                width: Number(n.width) || 280,
+                height: Number(n.height) || 180,
+                color: n.color || '',
+                parentGroupId: n.parent_group_id || null,
+                collapsed: Boolean(n.collapsed),
+                createdAt: n.created_at,
+                updatedAt: n.updated_at
+            })),
+            edges: rawEdges.map(e => ({
+                id: e.id,
+                fromNodeId: e.from_node_id,
+                toNodeId: e.to_node_id,
+                createdAt: e.created_at
+            })),
+            viewport
+        }
+
+        saveVaultCanvas(course.folder_path, canvasData)
+    } catch (err) {
+        console.error('[VaultCanvas] Failed to sync canvas to vault:', err)
+    }
+}
 
 // GET /api/canvas/:courseId
 router.get('/:courseId', (req, res) => {
@@ -199,6 +251,7 @@ router.put('/:courseId', (req, res) => {
             }
         })
 
+        syncCourseCanvasToVault(courseId)
         res.json({ success: true })
     } catch (err) {
         console.error('Failed to save canvas data:', err)
@@ -239,6 +292,8 @@ router.post('/:courseId/nodes', (req, res) => {
             data.createdAt || now,
             now
         ])
+
+        syncCourseCanvasToVault(courseId)
         res.status(201).json({ success: true, id: data.id })
     } catch (err) {
         res.status(500).json({ error: err.message })
@@ -258,7 +313,6 @@ router.put('/:courseId/nodes/:nodeId', (req, res) => {
         const fields = []
         const params = []
 
-        const allowed = ['noteId', 'type', 'content', 'title', 'x', 'y', 'width', 'height', 'color', 'parentGroupId', 'collapsed']
         const columnMap = {
             noteId: 'note_id',
             type: 'type',
@@ -296,6 +350,7 @@ router.put('/:courseId/nodes/:nodeId', (req, res) => {
             run('UPDATE notes SET content = ?, updated_at = ? WHERE id = ?', [updates.content, now, node.note_id])
         }
 
+        syncCourseCanvasToVault(courseId)
         res.json({ success: true })
     } catch (err) {
         res.status(500).json({ error: err.message })
@@ -310,6 +365,8 @@ router.delete('/:courseId/nodes/:nodeId', (req, res) => {
             run('DELETE FROM canvas_edges WHERE (from_node_id = ? OR to_node_id = ?) AND course_id = ?', [nodeId, nodeId, courseId])
             run('DELETE FROM canvas_nodes WHERE id = ? AND course_id = ?', [nodeId, courseId])
         })
+
+        syncCourseCanvasToVault(courseId)
         res.json({ success: true })
     } catch (err) {
         res.status(500).json({ error: err.message })
@@ -330,6 +387,8 @@ router.post('/:courseId/edges', (req, res) => {
             INSERT INTO canvas_edges (id, course_id, from_node_id, to_node_id, created_at)
             VALUES (?, ?, ?, ?, ?)
         `, [data.id, courseId, data.fromNodeId, data.toNodeId, data.createdAt || now])
+
+        syncCourseCanvasToVault(courseId)
         res.status(201).json({ success: true, id: data.id })
     } catch (err) {
         res.status(500).json({ error: err.message })
@@ -341,6 +400,8 @@ router.delete('/:courseId/edges/:edgeId', (req, res) => {
     const { courseId, edgeId } = req.params
     try {
         run('DELETE FROM canvas_edges WHERE id = ? AND course_id = ?', [edgeId, courseId])
+
+        syncCourseCanvasToVault(courseId)
         res.json({ success: true })
     } catch (err) {
         res.status(500).json({ error: err.message })

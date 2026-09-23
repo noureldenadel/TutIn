@@ -1,5 +1,8 @@
 import express from 'express'
+import fs from 'fs'
+import path from 'path'
 import { getAll, getOne, run, transaction } from '../database.js'
+import { loadFullVaultData, saveVaultMetadata } from '../utils/courseAssets.js'
 
 const router = express.Router()
 
@@ -18,6 +21,7 @@ function mapCourseRow(course) {
         folderPath: course.folder_path,
         sourceType: course.source_type,
         courseUrl: course.course_url,
+        language: course.language || 'en',
         dateAdded: course.date_added,
         dateModified: course.date_modified,
         lastAccessed: course.last_accessed,
@@ -75,19 +79,33 @@ router.post('/', (req, res) => {
         run(`
             INSERT INTO courses (
                 id, title, original_title, description, instructor, tags,
-                thumbnail_data, folder_path, source_type, course_url,
+                thumbnail_data, folder_path, source_type, course_url, language,
                 date_added, date_modified, last_accessed, last_accessed_click_time,
                 total_duration, total_videos, completed_videos, completion_percentage,
                 custom_metadata, "order"
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `, [
             data.id, data.title, data.originalTitle || null, data.description || '', data.instructor || '',
             JSON.stringify(data.tags || []), data.thumbnailData || null, data.folderPath || null,
-            data.sourceType || 'local', data.courseUrl || null, data.dateAdded || now, data.dateModified || now,
+            data.sourceType || 'local', data.courseUrl || null, data.language || 'en', data.dateAdded || now, data.dateModified || now,
             data.lastAccessed || now, data.lastAccessedClickTime || now, data.totalDuration || 0,
             data.totalVideos || 0, data.completedVideos || 0, data.completionPercentage || 0,
             JSON.stringify(data.customMetadata || {}), data.order || 0
         ])
+
+        // If local folder, initialize/sync .tutin/metadata.json
+        if (data.folderPath && fs.existsSync(data.folderPath)) {
+            saveVaultMetadata(data.folderPath, {
+                title: data.title,
+                originalTitle: data.originalTitle || null,
+                instructor: data.instructor || '',
+                language: data.language || 'en',
+                tags: data.tags || [],
+                description: data.description || '',
+                updatedAt: now
+            })
+        }
+
         res.status(201).json({ success: true, id: data.id })
     } catch (err) {
         res.status(500).json({ error: err.message })
@@ -180,6 +198,212 @@ router.put('/reorder', (req, res) => {
     }
 })
 
+// POST /api/courses/:id/hydrate-vault — restore notes, canvas, metadata from .tutin/
+router.post('/:id/hydrate-vault', (req, res) => {
+    const { id } = req.params
+    try {
+        const course = getOne('SELECT * FROM courses WHERE id = ?', [id])
+        if (!course) return res.status(404).json({ error: 'Course not found' })
+
+        const courseFolder = course.folder_path
+        if (!courseFolder || !fs.existsSync(courseFolder)) {
+            return res.json({ success: true, message: 'No local folder to hydrate' })
+        }
+
+        const vaultData = loadFullVaultData(courseFolder)
+        if (!vaultData) {
+            return res.json({ success: true, message: 'No .tutin vault found' })
+        }
+
+        let hydratedNotes = 0
+        let hydratedNodes = 0
+        let hydratedEdges = 0
+
+        transaction(() => {
+            // 1. Hydrate Metadata if available
+            if (vaultData.metadata) {
+                const meta = vaultData.metadata
+                const updates = []
+                const params = []
+
+                if (meta.instructor && !course.instructor) {
+                    updates.push('instructor = ?')
+                    params.push(meta.instructor)
+                }
+                if (meta.language && course.language === 'en' && meta.language !== 'en') {
+                    updates.push('language = ?')
+                    params.push(meta.language)
+                }
+                if (meta.tags && Array.isArray(meta.tags) && meta.tags.length > 0) {
+                    const currentTags = JSON.parse(course.tags || '[]')
+                    const mergedTags = Array.from(new Set([...currentTags, ...meta.tags]))
+                    updates.push('tags = ?')
+                    params.push(JSON.stringify(mergedTags))
+                }
+                if (meta.description && !course.description) {
+                    updates.push('description = ?')
+                    params.push(meta.description)
+                }
+
+                if (updates.length > 0) {
+                    params.push(id)
+                    run(`UPDATE courses SET ${updates.join(', ')} WHERE id = ?`, params)
+                }
+            }
+
+            // 2. Hydrate Notes
+            if (Array.isArray(vaultData.notes) && vaultData.notes.length > 0) {
+                const videos = getAll('SELECT id, title, file_name, file_path FROM videos WHERE course_id = ?', [id])
+                const now = new Date().toISOString()
+
+                for (const note of vaultData.notes) {
+                    let matchedVideo = null
+                    if (note.relativeVideoPath) {
+                        const normNoteRel = note.relativeVideoPath.replace(/\\/g, '/').toLowerCase()
+                        matchedVideo = videos.find(v => {
+                            if (!v.file_path) return false
+                            const normVRel = path.relative(courseFolder, v.file_path).replace(/\\/g, '/').toLowerCase()
+                            return normVRel === normNoteRel
+                        })
+                    }
+
+                    if (!matchedVideo && note.videoFileName) {
+                        const noteFn = note.videoFileName.toLowerCase()
+                        matchedVideo = videos.find(v => (v.file_name || '').toLowerCase() === noteFn)
+                    }
+
+                    if (!matchedVideo && note.videoId) {
+                        matchedVideo = videos.find(v => v.id === note.videoId)
+                    }
+
+                    if (matchedVideo) {
+                        const existingNote = getOne('SELECT id FROM notes WHERE id = ?', [note.id])
+                        const imagesJson = JSON.stringify(note.images || [])
+                        const tagsJson = JSON.stringify(note.tags || [])
+
+                        if (existingNote) {
+                            run(`
+                                UPDATE notes SET 
+                                    video_id = ?, timestamp = ?, content = ?, 
+                                    images = ?, tags = ?, updated_at = ?
+                                WHERE id = ?
+                            `, [
+                                matchedVideo.id, note.timestamp || 0, note.content || '',
+                                imagesJson, tagsJson, note.updatedAt || now, note.id
+                            ])
+                        } else {
+                            run(`
+                                INSERT INTO notes (
+                                    id, video_id, course_id, timestamp, content, images, tags, created_at, updated_at
+                                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            `, [
+                                note.id, matchedVideo.id, id, note.timestamp || 0,
+                                note.content || '', imagesJson, tagsJson,
+                                note.createdAt || now, note.updatedAt || now
+                            ])
+                        }
+                        hydratedNotes++
+                    }
+                }
+            }
+
+            // 3. Hydrate Canvas
+            if (vaultData.canvas) {
+                const { nodes, edges, viewport } = vaultData.canvas
+                const now = new Date().toISOString()
+
+                if (viewport) {
+                    const panX = viewport.pan?.x ?? 0
+                    const panY = viewport.pan?.y ?? 0
+                    const zoom = viewport.zoom ?? 1
+                    run(`
+                        INSERT INTO canvas_viewports (course_id, pan_x, pan_y, zoom, updated_at)
+                        VALUES (?, ?, ?, ?, ?)
+                        ON CONFLICT(course_id) DO UPDATE SET
+                            pan_x = excluded.pan_x,
+                            pan_y = excluded.pan_y,
+                            zoom = excluded.zoom,
+                            updated_at = excluded.updated_at
+                    `, [id, panX, panY, zoom, now])
+                }
+
+                if (Array.isArray(nodes) && nodes.length > 0) {
+                    for (const node of nodes) {
+                        run(`
+                            INSERT INTO canvas_nodes (
+                                id, course_id, note_id, type, content, title,
+                                x, y, width, height, color, parent_group_id, collapsed,
+                                created_at, updated_at
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            ON CONFLICT(id) DO UPDATE SET
+                                note_id = excluded.note_id,
+                                type = excluded.type,
+                                content = excluded.content,
+                                title = excluded.title,
+                                x = excluded.x,
+                                y = excluded.y,
+                                width = excluded.width,
+                                height = excluded.height,
+                                color = excluded.color,
+                                parent_group_id = excluded.parent_group_id,
+                                collapsed = excluded.collapsed,
+                                updated_at = excluded.updated_at
+                        `, [
+                            node.id,
+                            id,
+                            node.noteId || null,
+                            node.type || 'note',
+                            node.content || '',
+                            node.title || '',
+                            node.x || 0,
+                            node.y || 0,
+                            node.width || 280,
+                            node.height || 180,
+                            node.color || '',
+                            node.parentGroupId || null,
+                            node.collapsed ? 1 : 0,
+                            node.createdAt || now,
+                            node.updatedAt || now
+                        ])
+                        hydratedNodes++
+                    }
+                }
+
+                if (Array.isArray(edges) && edges.length > 0) {
+                    for (const edge of edges) {
+                        run(`
+                            INSERT INTO canvas_edges (id, course_id, from_node_id, to_node_id, created_at)
+                            VALUES (?, ?, ?, ?, ?)
+                            ON CONFLICT(id) DO UPDATE SET
+                                from_node_id = excluded.from_node_id,
+                                to_node_id = excluded.to_node_id
+                        `, [
+                            edge.id,
+                            id,
+                            edge.fromNodeId,
+                            edge.toNodeId,
+                            edge.createdAt || now
+                        ])
+                        hydratedEdges++
+                    }
+                }
+            }
+        })
+
+        res.json({
+            success: true,
+            hydrated: {
+                notes: hydratedNotes,
+                nodes: hydratedNodes,
+                edges: hydratedEdges
+            }
+        })
+    } catch (err) {
+        console.error('Failed to hydrate vault:', err)
+        res.status(500).json({ error: err.message })
+    }
+})
+
 // PUT /api/courses/:id
 router.put('/:id', (req, res) => {
     const id = req.params.id
@@ -202,6 +426,7 @@ router.put('/:id', (req, res) => {
             folderPath: 'folder_path',
             sourceType: 'source_type',
             courseUrl: 'course_url',
+            language: 'language',
             dateModified: 'date_modified',
             lastAccessed: 'last_accessed',
             lastAccessedClickTime: 'last_accessed_click_time',
@@ -229,14 +454,28 @@ router.put('/:id', (req, res) => {
             params.push(JSON.stringify(data.customMetadata))
         }
 
-        if (updateFields.length === 0) {
-            return res.json({ success: true, message: 'No fields to update' })
+        if (updateFields.length > 0) {
+            // Add ID to params
+            params.push(id)
+            run(`UPDATE courses SET ${updateFields.join(', ')} WHERE id = ?`, params)
         }
 
-        // Add ID to params
-        params.push(id)
+        // Sync metadata to .tutin/metadata.json
+        const updatedCourse = getOne('SELECT * FROM courses WHERE id = ?', [id])
+        if (updatedCourse?.folder_path && fs.existsSync(updatedCourse.folder_path)) {
+            let currentTags = []
+            try { currentTags = JSON.parse(updatedCourse.tags || '[]') } catch { }
+            saveVaultMetadata(updatedCourse.folder_path, {
+                title: updatedCourse.title,
+                originalTitle: updatedCourse.original_title,
+                instructor: updatedCourse.instructor,
+                language: updatedCourse.language,
+                tags: currentTags,
+                description: updatedCourse.description,
+                updatedAt: new Date().toISOString()
+            })
+        }
 
-        run(`UPDATE courses SET ${updateFields.join(', ')} WHERE id = ?`, params)
         res.json({ success: true })
     } catch (err) {
         res.status(500).json({ error: err.message })

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { FileText, Sparkles, Loader2, AlertCircle, Download, Copy, RefreshCw, Upload, Captions, X, Globe } from 'lucide-react'
+import { FileText, Sparkles, Loader2, AlertCircle, Download, Copy, RefreshCw, Upload, Captions, X, Globe, Headphones, Volume2 } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import { getVideo, updateVideo } from '../../utils/db'
 import { SERVER_URL } from '../../utils/api'
@@ -8,6 +8,7 @@ import { verifyPermission } from '../../utils/fileSystem'
 import { useSettings } from '../../contexts/SettingsContext'
 import TranslateModal from './TranslateModal'
 import SmartCaptionsModal from './SmartCaptionsModal'
+import DubModal from './DubModal'
 
 // Format seconds to MM:SS or HH:MM:SS
 function formatTime(seconds) {
@@ -21,7 +22,7 @@ function formatTime(seconds) {
     return `${m}:${s.toString().padStart(2, '0')}`
 }
 
-function AISummaryPanel({ video, courseId, onSeek, onVideoDataChange, currentTime = 0 }) {
+function AISummaryPanel({ video, courseId, course, onSeek, onVideoDataChange, currentTime = 0 }) {
     const { settings, updateSettings } = useSettings()
     const [transcript, setTranscript] = useState(null)
     const [summary, setSummary] = useState(null)
@@ -32,12 +33,14 @@ function AISummaryPanel({ video, courseId, onSeek, onVideoDataChange, currentTim
     const [activeTab, setActiveTab] = useState('summary')
     const [missingCaptions, setMissingCaptions] = useState(false)
     const [languages, setLanguages] = useState({ sourceExists: false, translatedLangs: [], existingLangs: [] })
+    const [dubLanguages, setDubLanguages] = useState([])
     const [showTranslateModal, setShowTranslateModal] = useState(false)
+    const [showDubModal, setShowDubModal] = useState(false)
     const [smartCaptionData, setSmartCaptionData] = useState(null)
     const fileInputRef = useRef(null)
     const activeVideoIdRef = useRef(video?.id)
 
-    // Listen for global transcript updates (from player, translation, batch import, etc.)
+    // Listen for global transcript and dub updates
     useEffect(() => {
         function handleTranscriptUpdated(e) {
             const { videoId, updatedVideoIds } = e?.detail || {}
@@ -48,8 +51,19 @@ function AISummaryPanel({ video, courseId, onSeek, onVideoDataChange, currentTim
                 loadExistingData()
             }
         }
+        function handleDubUpdated(e) {
+            const { videoId } = e?.detail || {}
+            if (!video?.id) return
+            if (!videoId || videoId === video.id) {
+                loadExistingData()
+            }
+        }
         window.addEventListener('tutin:transcript-updated', handleTranscriptUpdated)
-        return () => window.removeEventListener('tutin:transcript-updated', handleTranscriptUpdated)
+        window.addEventListener('tutin:dub-updated', handleDubUpdated)
+        return () => {
+            window.removeEventListener('tutin:transcript-updated', handleTranscriptUpdated)
+            window.removeEventListener('tutin:dub-updated', handleDubUpdated)
+        }
     }, [video?.id])
 
     // Load existing data when video changes
@@ -114,10 +128,14 @@ function AISummaryPanel({ video, courseId, onSeek, onVideoDataChange, currentTim
 
                         const langs = await get(`/api/transcripts/${video.id}/languages`)
                         if (langs) setLanguages(langs)
+
+                        const dubLangs = await get(`/api/dub/video/${video.id}/languages`)
+                        if (Array.isArray(dubLangs)) setDubLanguages(dubLangs)
                     } else {
                         setTranscript(null)
                         setCaptionChunks([])
                         setMissingCaptions(false)
+                        setDubLanguages([])
                     }
                     
                     if (hasSummary) {
@@ -184,7 +202,8 @@ function AISummaryPanel({ video, courseId, onSeek, onVideoDataChange, currentTim
                 setProgress,
                 settings.openRouterApiKey,
                 settings.openRouterModel,
-                settings.aiDevice
+                settings.aiDevice,
+                course?.language || 'en'
             )
 
             if (activeVideoIdRef.current !== targetVideoId) return
@@ -502,6 +521,14 @@ function AISummaryPanel({ video, courseId, onSeek, onVideoDataChange, currentTim
                                                     Translate
                                                 </button>
 
+                                                <button
+                                                    onClick={() => setShowDubModal(true)}
+                                                    className="text-xs bg-primary-fg/10 text-primary-fg hover:bg-primary-fg/20 px-3 py-1.5 rounded flex items-center gap-1.5 border border-primary-fg/30 font-medium transition-colors"
+                                                >
+                                                    <Headphones className="w-3 h-3" />
+                                                    AI Dub
+                                                </button>
+
                                                 {captionChunks.length > 0 && (
                                                     <>
                                                         <a
@@ -525,7 +552,7 @@ function AISummaryPanel({ video, courseId, onSeek, onVideoDataChange, currentTim
                                             </div>
 
                                             {/* Languages List */}
-                                            {(languages.sourceExists || languages.existingLangs.length > 0 || languages.translatedLangs.length > 0) && (
+                                            {(languages.sourceExists || languages.existingLangs.length > 0 || languages.translatedLangs.length > 0 || dubLanguages.length > 0) && (
                                                 <div className="flex flex-col gap-1 p-2 bg-black/5 dark:bg-white/5 rounded border border-light-border dark:border-dark-border">
                                                     <span className="text-xs font-semibold mb-1 opacity-70">Available Languages:</span>
                                                     {languages.sourceExists && (
@@ -533,7 +560,14 @@ function AISummaryPanel({ video, courseId, onSeek, onVideoDataChange, currentTim
                                                             onClick={() => updateSettings({ captionLanguage: 'source' })}
                                                             className={`flex items-center justify-between text-sm px-2 py-1 rounded cursor-pointer ${settings.captionLanguage === 'source' || !settings.captionLanguage ? 'bg-primary-fg/20 border border-primary-fg/50' : 'bg-white dark:bg-black/20 hover:bg-black/5 dark:hover:bg-white/5'}`}
                                                         >
-                                                            <span className="flex items-center gap-2"><span>✨</span> Source / Generated</span>
+                                                            <span className="flex items-center gap-2">
+                                                                <span>✨</span> Source / Generated
+                                                                {dubLanguages.includes('en') && (
+                                                                    <span className="text-[10px] bg-primary-fg/20 text-primary-fg px-1.5 py-0.5 rounded flex items-center gap-0.5">
+                                                                        <Headphones className="w-2.5 h-2.5" /> Dub
+                                                                    </span>
+                                                                )}
+                                                            </span>
                                                             <button onClick={(e) => { e.stopPropagation(); handleDeleteCaption('source') }} className="text-red-500 hover:text-red-700 p-1"><X className="w-3 h-3" /></button>
                                                         </div>
                                                     )}
@@ -543,7 +577,14 @@ function AISummaryPanel({ video, courseId, onSeek, onVideoDataChange, currentTim
                                                             onClick={() => updateSettings({ captionLanguage: lang })}
                                                             className={`flex items-center justify-between text-sm px-2 py-1 rounded cursor-pointer ${settings.captionLanguage === lang ? 'bg-primary-fg/20 border border-primary-fg/50' : 'bg-white dark:bg-black/20 hover:bg-black/5 dark:hover:bg-white/5'}`}
                                                         >
-                                                            <span className="flex items-center gap-2"><span>📄</span> {lang === 'source' ? 'Original File' : lang}</span>
+                                                            <span className="flex items-center gap-2">
+                                                                <span>📄</span> {lang === 'source' ? 'Original File' : lang}
+                                                                {dubLanguages.includes(lang) && (
+                                                                    <span className="text-[10px] bg-primary-fg/20 text-primary-fg px-1.5 py-0.5 rounded flex items-center gap-0.5">
+                                                                        <Headphones className="w-2.5 h-2.5" /> Dub
+                                                                    </span>
+                                                                )}
+                                                            </span>
                                                             {/* Cannot delete existing */}
                                                         </div>
                                                     ))}
@@ -553,7 +594,14 @@ function AISummaryPanel({ video, courseId, onSeek, onVideoDataChange, currentTim
                                                             onClick={() => updateSettings({ captionLanguage: lang })}
                                                             className={`flex items-center justify-between text-sm px-2 py-1 rounded cursor-pointer ${settings.captionLanguage === lang ? 'bg-primary-fg/20 border border-primary-fg/50' : 'bg-white dark:bg-black/20 hover:bg-black/5 dark:hover:bg-white/5'}`}
                                                         >
-                                                            <span className="flex items-center gap-2"><span>🌐</span> {lang.toUpperCase()}</span>
+                                                            <span className="flex items-center gap-2">
+                                                                <span>🌐</span> {lang.toUpperCase()}
+                                                                {dubLanguages.includes(lang) && (
+                                                                    <span className="text-[10px] bg-primary-fg/20 text-primary-fg px-1.5 py-0.5 rounded flex items-center gap-0.5">
+                                                                        <Headphones className="w-2.5 h-2.5" /> Dub
+                                                                    </span>
+                                                                )}
+                                                            </span>
                                                             <button onClick={(e) => { e.stopPropagation(); handleDeleteCaption(lang) }} className="text-red-500 hover:text-red-700 p-1"><X className="w-3 h-3" /></button>
                                                         </div>
                                                     ))}
@@ -677,6 +725,16 @@ function AISummaryPanel({ video, courseId, onSeek, onVideoDataChange, currentTim
                 languageName={smartCaptionData?.languageName}
                 matches={smartCaptionData?.matches}
                 onBatchImported={() => {
+                    loadExistingData()
+                    onVideoDataChange?.()
+                }}
+            />
+
+            <DubModal
+                isOpen={showDubModal}
+                onClose={() => setShowDubModal(false)}
+                video={video}
+                onSuccess={(lang) => {
                     loadExistingData()
                     onVideoDataChange?.()
                 }}

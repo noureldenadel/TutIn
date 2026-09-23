@@ -81,7 +81,7 @@ function startPythonService() {
     })
 }
 
-export async function submitDubJob(videoId, videoPath, chunks, lang) {
+export async function submitDubJob(videoId, videoPath, chunks, lang, voiceReferencePath = null) {
     const isRunning = await ensureServiceRunning()
     if (!isRunning) {
         throw new Error("Dubbing backend service is not running and could not be started.")
@@ -93,7 +93,8 @@ export async function submitDubJob(videoId, videoPath, chunks, lang) {
         body: JSON.stringify({
             videoPath,
             chunks,
-            targetLang: lang
+            targetLang: lang,
+            voiceReferencePath
         })
     })
     

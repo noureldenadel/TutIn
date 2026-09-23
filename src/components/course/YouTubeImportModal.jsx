@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react'
-import { X, Youtube, Save, AlertTriangle, PlayCircle, List, Loader, Settings } from 'lucide-react'
+import { X, Youtube, Save, AlertTriangle, PlayCircle, List, Loader, Settings, Languages } from 'lucide-react'
 import { formatDuration, parseISODuration } from '../../utils/db'
 import { useSettings } from '../../contexts/SettingsContext'
+import { SUPPORTED_LANGUAGES } from '../../utils/languages'
 
 function YouTubeImportModal({ isOpen, onClose, onImport }) {
     const { settings } = useSettings()
@@ -11,6 +12,7 @@ function YouTubeImportModal({ isOpen, onClose, onImport }) {
     const [error, setError] = useState(null)
     const [previewData, setPreviewData] = useState(null)
     const [importType, setImportType] = useState(null) // 'video' or 'playlist'
+    const [language, setLanguage] = useState('en')
 
     // Reset when opened
     useEffect(() => {
@@ -19,6 +21,7 @@ function YouTubeImportModal({ isOpen, onClose, onImport }) {
             setError(null)
             setPreviewData(null)
             setImportType(null)
+            setLanguage('en')
         }
     }, [isOpen])
 
@@ -205,6 +208,7 @@ function YouTubeImportModal({ isOpen, onClose, onImport }) {
             instructor: previewData.author,
             channelAvatar: previewData.channelAvatar, // Passed separately for instructors store
             thumbnailData: previewData.thumbnail,
+            language: language || 'en',
             description: `Imported from YouTube (${importType})`,
             modules: [{
                 title: 'Videos',
@@ -279,27 +283,45 @@ function YouTubeImportModal({ isOpen, onClose, onImport }) {
                             <AlertTriangle className="w-5 h-5" />
                             {error}
                         </div>
-                    )}
-
-                    {/* Preview */}
+                    )}                    {/* Preview */}
                     {previewData && (
-                        <div className="border border-light-border dark:border-dark-border rounded-lg overflow-hidden">
-                            <div className="p-4 bg-light-surface dark:bg-dark-bg flex gap-4">
-                                <img src={previewData.thumbnail} alt="Thumbnail" className="w-32 h-20 object-cover rounded" />
-                                <div>
-                                    <h3 className="font-semibold text-lg">{previewData.title}</h3>
-                                    <p className="text-light-text-secondary dark:text-dark-text-secondary">{previewData.author}</p>
-                                    <p className="text-sm mt-1">{previewData.videos.length} videos found</p>
-                                </div>
+                        <div className="space-y-4">
+                            <div>
+                                <label className="block text-sm font-medium mb-1 flex items-center gap-2">
+                                    <Languages className="w-4 h-4 text-primary" />
+                                    Language
+                                </label>
+                                <select
+                                    value={language}
+                                    onChange={(e) => setLanguage(e.target.value)}
+                                    className="w-full px-3 py-2 rounded-lg border border-light-border dark:border-dark-border bg-white dark:bg-dark-bg focus:ring-2 focus:ring-primary outline-none text-sm"
+                                >
+                                    {SUPPORTED_LANGUAGES.map((lang) => (
+                                        <option key={lang.code} value={lang.code}>
+                                            {lang.flag} {lang.name} ({lang.native})
+                                        </option>
+                                    ))}
+                                </select>
                             </div>
 
-                            <div className="max-h-48 overflow-y-auto divide-y divide-light-border dark:divide-dark-border">
-                                {previewData.videos.map((v, i) => (
-                                    <div key={i} className="p-2 px-4 text-sm flex items-center gap-2">
-                                        <span className="text-light-text-secondary dark:text-dark-text-secondary w-6">{i + 1}.</span>
-                                        <span className="truncate flex-1">{v.title}</span>
+                            <div className="border border-light-border dark:border-dark-border rounded-lg overflow-hidden">
+                                <div className="p-4 bg-light-surface dark:bg-dark-bg flex gap-4">
+                                    <img src={previewData.thumbnail} alt="Thumbnail" className="w-32 h-20 object-cover rounded" />
+                                    <div>
+                                        <h3 className="font-semibold text-lg">{previewData.title}</h3>
+                                        <p className="text-light-text-secondary dark:text-dark-text-secondary">{previewData.author}</p>
+                                        <p className="text-sm mt-1">{previewData.videos.length} videos found</p>
                                     </div>
-                                ))}
+                                </div>
+
+                                <div className="max-h-48 overflow-y-auto divide-y divide-light-border dark:divide-dark-border">
+                                    {previewData.videos.map((v, i) => (
+                                        <div key={i} className="p-2 px-4 text-sm flex items-center gap-2">
+                                            <span className="text-light-text-secondary dark:text-dark-text-secondary w-6">{i + 1}.</span>
+                                            <span className="truncate flex-1">{v.title}</span>
+                                        </div>
+                                    ))}
+                                </div>
                             </div>
                         </div>
                     )}

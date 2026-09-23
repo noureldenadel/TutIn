@@ -2,29 +2,18 @@ import { useState, useRef, useEffect } from 'react'
 import { X, Globe, Loader2, AlertCircle, CheckCircle2 } from 'lucide-react'
 import { useSettings } from '../../contexts/SettingsContext'
 import { SERVER_URL } from '../../utils/api'
+import { SUPPORTED_LANGUAGES, getLanguageInfo } from '../../utils/languages'
 
-export const TRANSLATION_LANGUAGES = [
-    { code: 'ar', name: 'Arabic' },
-    { code: 'es', name: 'Spanish' },
-    { code: 'fr', name: 'French' },
-    { code: 'de', name: 'German' },
-    { code: 'zh', name: 'Chinese' },
-    { code: 'ja', name: 'Japanese' },
-    { code: 'ko', name: 'Korean' },
-    { code: 'ru', name: 'Russian' },
-    { code: 'pt', name: 'Portuguese' },
-    { code: 'it', name: 'Italian' },
-    { code: 'hi', name: 'Hindi' },
-    { code: 'tr', name: 'Turkish' },
-    { code: 'nl', name: 'Dutch' },
-    { code: 'pl', name: 'Polish' },
-    { code: 'vi', name: 'Vietnamese' },
-    { code: 'th', name: 'Thai' }
-]
-
-export default function TranslateModal({ isOpen, onClose, video, onSuccess, chunkCount = 0 }) {
+export default function TranslateModal({ isOpen, onClose, video, course, sourceLanguage: propSourceLang, onSuccess, chunkCount = 0 }) {
     const { settings } = useSettings()
-    const [targetLang, setTargetLang] = useState('ar')
+    const sourceLang = (propSourceLang || course?.language || 'en').toLowerCase().trim()
+    const sourceInfo = getLanguageInfo(sourceLang)
+
+    // Filter available target languages (exclude source language)
+    const availableTargets = SUPPORTED_LANGUAGES.filter(l => l.code !== sourceLang)
+    const defaultTarget = sourceLang === 'ar' ? 'en' : 'ar'
+
+    const [targetLang, setTargetLang] = useState(defaultTarget)
     const [isTranslating, setIsTranslating] = useState(false)
     const [progress, setProgress] = useState(0)
     const [statusText, setStatusText] = useState('')
@@ -45,8 +34,13 @@ export default function TranslateModal({ isOpen, onClose, video, onSuccess, chun
                 abortControllerRef.current.abort()
                 abortControllerRef.current = null
             }
+        } else {
+            // Set sensible default target
+            if (targetLang === sourceLang) {
+                setTargetLang(sourceLang === 'ar' ? 'en' : 'ar')
+            }
         }
-    }, [isOpen])
+    }, [isOpen, sourceLang])
 
     async function handleTranslate() {
         setIsTranslating(true)
@@ -64,7 +58,8 @@ export default function TranslateModal({ isOpen, onClose, video, onSuccess, chun
                     'Content-Type': 'application/json'
                 },
                 body: JSON.stringify({
-                    targetLanguage: targetLang
+                    targetLanguage: targetLang,
+                    sourceLanguage: sourceLang
                 }),
                 signal: abortControllerRef.current.signal
             })
@@ -157,7 +152,7 @@ export default function TranslateModal({ isOpen, onClose, video, onSuccess, chun
                 <div className="flex items-center justify-between p-4 border-b border-light-border dark:border-dark-border">
                     <h2 className="text-lg font-semibold flex items-center gap-2">
                         <Globe className="w-5 h-5 text-primary-fg" />
-                        Translate Captions
+                        Translate Subtitles
                     </h2>
                     <button
                         onClick={handleCancel}
@@ -180,9 +175,9 @@ export default function TranslateModal({ isOpen, onClose, video, onSuccess, chun
                             disabled={isTranslating || isDone}
                             className="w-full px-3 py-2 bg-light-bg dark:bg-dark-bg border border-light-border dark:border-dark-border rounded-lg focus:outline-none focus:border-primary-fg transition-colors"
                         >
-                            {TRANSLATION_LANGUAGES.map(lang => (
+                            {availableTargets.map(lang => (
                                 <option key={lang.code} value={lang.code}>
-                                    {lang.name}
+                                    {lang.flag} {lang.nativeName} ({lang.name})
                                 </option>
                             ))}
                         </select>
@@ -190,17 +185,20 @@ export default function TranslateModal({ isOpen, onClose, video, onSuccess, chun
 
                     {/* Info Card */}
                     <div className="bg-light-bg dark:bg-dark-bg p-4 rounded-lg border border-light-border dark:border-dark-border space-y-2 text-sm">
-                        <div className="flex justify-between">
-                            <span className="opacity-70">Source:</span>
-                            <span className="font-medium">English (Source)</span>
+                        <div className="flex justify-between items-center">
+                            <span className="opacity-70">Source Audio:</span>
+                            <span className="font-semibold text-primary-fg flex items-center gap-1.5">
+                                <span>{sourceInfo.flag}</span>
+                                <span>{sourceInfo.nativeName} ({sourceInfo.name})</span>
+                            </span>
                         </div>
-                        <div className="flex justify-between">
+                        <div className="flex justify-between items-center">
                             <span className="opacity-70">Model:</span>
                             <span className="font-medium truncate max-w-[150px]" title="NLLB-200 Distilled (600M)">
                                 NLLB-200 (Local)
                             </span>
                         </div>
-                        <div className="flex justify-between">
+                        <div className="flex justify-between items-center">
                             <span className="opacity-70">Est. Time:</span>
                             <span className="font-medium">{estimatedTimeMin} - {estimatedTimeMax} seconds</span>
                         </div>

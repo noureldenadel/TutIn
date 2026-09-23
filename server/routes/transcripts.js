@@ -262,7 +262,7 @@ router.post('/:videoId/translate', async (req, res) => {
     }
 
     try {
-        const { targetLanguage } = req.body
+        const { targetLanguage, sourceLanguage = 'en' } = req.body
         if (!targetLanguage) {
             sendEvent({ error: 'Missing target language' })
             return res.end()
@@ -287,7 +287,8 @@ router.post('/:videoId/translate', async (req, res) => {
             null, // apiKey unused
             null, // model unused
             sendEvent,
-            req
+            req,
+            sourceLanguage
         )
 
         // Save translation

@@ -125,11 +125,11 @@ async function extractAndProcessAudio(fileOrHandle, onProgress) {
  */
 let whisperWorker = null
 
-export async function transcribeAudio(audioData, onProgress, device = 'auto') {
+export async function transcribeAudio(audioData, onProgress, device = 'auto', language = 'en') {
     // Try Web Worker first for non-blocking transcription
     if (typeof Worker !== 'undefined') {
         try {
-            return await transcribeWithWorker(audioData, onProgress, device)
+            return await transcribeWithWorker(audioData, onProgress, device, language)
         } catch (err) {
             console.warn('Worker transcription failed, falling back to main thread:', err)
             // Fall through to main thread fallback
@@ -137,15 +137,15 @@ export async function transcribeAudio(audioData, onProgress, device = 'auto') {
     }
 
     // Fallback: Run on main thread (may freeze UI)
-    return await transcribeOnMainThread(audioData, onProgress, device)
+    return await transcribeOnMainThread(audioData, onProgress, device, language)
 }
 
 /**
  * Transcribe using Web Worker (non-blocking)
  */
-async function transcribeWithWorker(audioData, onProgress, device = 'auto') {
+async function transcribeWithWorker(audioData, onProgress, device = 'auto', language = 'en') {
     return new Promise((resolve, reject) => {
-        console.log('[AI] Starting transcribeWithWorker, samples:', audioData.length)
+        console.log('[AI] Starting transcribeWithWorker, samples:', audioData.length, 'lang:', language)
 
         // Create worker if not exists
         if (!whisperWorker) {
@@ -209,6 +209,7 @@ async function transcribeWithWorker(audioData, onProgress, device = 'auto') {
                 type: 'transcribe',
                 audioBuffer: audioBuffer,
                 device: device,
+                language: language || 'en',
                 id: requestId
             }, [audioBuffer])  // Transfer ownership - no copy over to worker!
 
@@ -220,19 +221,26 @@ async function transcribeWithWorker(audioData, onProgress, device = 'auto') {
 /**
  * Fallback: Transcribe on main thread (may freeze UI)
  */
-async function transcribeOnMainThread(audioData, onProgress, device = 'auto') {
+async function transcribeOnMainThread(audioData, onProgress, device = 'auto', language = 'en') {
     const pipeline = await loadTranscriptionPipeline(onProgress, device)
 
-    onProgress?.({ stage: 'transcribing', progress: 0, message: 'Transcribing audio (this may take a minute)…' })
+    onProgress?.({ stage: 'transcribing', progress: 0, message: `Transcribing audio (${(language || 'en').toUpperCase()})…` })
 
     try {
-        // Run transcription with word-level timestamps for CC support
-        const result = await pipeline(audioData, {
+        const cleanLang = (language || 'en').toLowerCase().trim()
+        const options = {
             chunk_length_s: 30,
             stride_length_s: 5,
             return_timestamps: 'word',
             force_full_sequences: false
-        })
+        }
+        if (cleanLang !== 'en') {
+            options.language = cleanLang
+            options.task = 'transcribe'
+        }
+
+        // Run transcription with word-level timestamps for CC support
+        const result = await pipeline(audioData, options)
 
         onProgress?.({ stage: 'transcribing', progress: 1, message: 'Transcription complete!' })
 
@@ -508,13 +516,13 @@ export function chunksToVTT(chunks) {
 /**
  * Process a video for transcription and summarization
  */
-export async function processVideoForSummary(videoId, fileSource, onProgress, apiKey, model, device = 'auto') {
+export async function processVideoForSummary(videoId, fileSource, onProgress, apiKey, model, device = 'auto', language = 'en') {
     try {
         // Step 1: Extract audio
         const audioData = await extractAndProcessAudio(fileSource, onProgress)
 
         // Step 2: Transcribe using Whisper (now returns { text, chunks })
-        const transcription = await transcribeAudio(audioData, onProgress, device)
+        const transcription = await transcribeAudio(audioData, onProgress, device, language)
         const transcript = transcription.text
         const captionChunks = transcription.chunks
 

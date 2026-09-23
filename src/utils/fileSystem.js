@@ -347,5 +347,13 @@ export async function applySyncChanges(courseId, preview) {
         await deleteModule(modId)
     }
 
+    // 7. Hydrate any notes/canvas/settings changes from .tutin vault
+    try {
+        await api.post(`/api/courses/${courseId}/hydrate-vault`)
+    } catch (e) {
+        console.warn('Sync vault hydration notice:', e)
+    }
+
     return true
 }
+

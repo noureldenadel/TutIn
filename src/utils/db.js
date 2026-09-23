@@ -28,7 +28,13 @@ export async function getAllCourses() {
 }
 
 export async function updateCourse(courseId, updates) {
-    return api.put(`/api/courses/${courseId}`, updates)
+    const res = await api.put(`/api/courses/${courseId}`, updates)
+    if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('tutin:course-updated', {
+            detail: { courseId, updates }
+        }))
+    }
+    return res
 }
 
 export async function deleteCourse(courseId) {
@@ -114,6 +120,14 @@ export async function toggleVideoFavorite(videoId) {
     const video = await getVideo(videoId)
     if (!video) throw new Error('Video not found')
     return api.post(`/api/videos/${videoId}/favorite`, { isFavorite: !video.isFavorite })
+}
+
+export async function getDubbedTracks(videoId) {
+    return api.get(`/api/dub/video/${videoId}/tracks`)
+}
+
+export async function getDubLanguages(videoId) {
+    return api.get(`/api/dub/video/${videoId}/languages`)
 }
 
 // ============= NOTE OPERATIONS =============

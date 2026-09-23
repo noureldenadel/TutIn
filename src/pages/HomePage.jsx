@@ -138,7 +138,10 @@ function HomePage() {
             const courseData = {
                 ...importData,
                 title: editedData.title,
-                instructor: editedData.instructor,
+                instructor: editedData.instructor || importData?.vaultData?.metadata?.instructor || '',
+                language: editedData.language || importData?.vaultData?.metadata?.language || 'en',
+                tags: importData?.vaultData?.metadata?.tags || [],
+                description: importData?.vaultData?.metadata?.description || '',
                 thumbnailData: editedData.thumbnailData,
                 folderPath: importData.folderPath || importData.path // Support both scanner and pick-folder results
             }
@@ -187,6 +190,13 @@ function HomePage() {
             }
 
             await saveModulesRecursive(editedData.modules)
+
+            // If vault data was detected on disk (or course re-added), hydrate notes, canvas, and metadata
+            try {
+                await api.post(`/api/courses/${savedCourse.id}/hydrate-vault`)
+            } catch (vaultErr) {
+                console.warn('Hydrating vault on import skipped/failed:', vaultErr)
+            }
 
             console.log('Import complete!')
             setImportData(null)

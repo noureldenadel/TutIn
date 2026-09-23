@@ -1,10 +1,11 @@
 import { useState, useRef, useEffect } from 'react'
 import {
     X, Upload, Folder, FolderOpen, Video, Clock, AlertTriangle,
-    ChevronDown, ChevronRight, Image
+    ChevronDown, ChevronRight, Image, Globe, Sparkles
 } from 'lucide-react'
 import { formatDuration } from '../../utils/db'
 import { useNotification } from '../../contexts/NotificationContext'
+import { SUPPORTED_LANGUAGES } from '../../utils/languages'
 
 /**
  * Count total videos recursively including sub-modules
@@ -43,6 +44,7 @@ function ImportPreviewModal({
 }) {
     const [courseName, setCourseName] = useState(courseStructure?.title || '')
     const [instructor, setInstructor] = useState('')
+    const [language, setLanguage] = useState('en')
     const [modules, setModules] = useState(
         courseStructure?.modules?.map(m => ({
             ...m,
@@ -60,7 +62,8 @@ function ImportPreviewModal({
     useEffect(() => {
         if (courseStructure) {
             setCourseName(courseStructure.title || '')
-            setInstructor('')
+            setInstructor(courseStructure.instructor || courseStructure.vaultData?.metadata?.instructor || '')
+            setLanguage(courseStructure.language || courseStructure.vaultData?.metadata?.language || 'en')
             setThumbnail(courseStructure.thumbnailData || null)
             setThumbnailPreview(courseStructure.thumbnailData || null)
             setModules(
@@ -119,6 +122,7 @@ function ImportPreviewModal({
         onConfirm({
             title: courseName,
             instructor: instructor,
+            language: language || 'en',
             thumbnailData: thumbnail,
             modules: modules.map(m => ({
                 ...m,
@@ -249,6 +253,16 @@ function ImportPreviewModal({
 
                 {/* Body */}
                 <div className="flex-1 overflow-y-auto p-4 space-y-6">
+                    {/* Vault Detection Notice */}
+                    {courseStructure?.vaultData && (
+                        <div className="flex items-center gap-2.5 px-3.5 py-2 bg-primary/10 border border-primary/20 rounded-lg text-xs text-primary-fg animate-fade-in">
+                            <Sparkles className="w-3.5 h-3.5 text-primary flex-shrink-0" />
+                            <span>
+                                <strong>Vault detected:</strong> notes, canvas &amp; settings will be restored.
+                            </span>
+                        </div>
+                    )}
+
                     {/* Course Name */}
                     <div>
                         <label className="block text-sm font-medium mb-2">Course Name</label>
@@ -281,19 +295,39 @@ function ImportPreviewModal({
                         </div>
                     </div>
 
-                    {/* Instructor */}
-                    <div>
-                        <label className="block text-sm font-medium mb-2">
-                            Instructor <span className="text-light-text-secondary dark:text-dark-text-secondary font-normal">(optional)</span>
-                        </label>
-                        <input
-                            type="text"
-                            value={instructor}
-                            onChange={(e) => setInstructor(e.target.value.slice(0, 100))}
-                            className="w-full px-3 py-2 rounded-lg border border-light-border dark:border-dark-border bg-white dark:bg-dark-bg focus:ring-2 focus:ring-primary focus:border-transparent outline-none"
-                            placeholder="Enter instructor name"
-                            maxLength={100}
-                        />
+                    {/* Instructor & Language Grid */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div>
+                            <label className="block text-sm font-medium mb-2">
+                                Instructor <span className="text-light-text-secondary dark:text-dark-text-secondary font-normal">(optional)</span>
+                            </label>
+                            <input
+                                type="text"
+                                value={instructor}
+                                onChange={(e) => setInstructor(e.target.value.slice(0, 100))}
+                                className="w-full px-3 py-2 rounded-lg border border-light-border dark:border-dark-border bg-white dark:bg-dark-bg focus:ring-2 focus:ring-primary focus:border-transparent outline-none"
+                                placeholder="Enter instructor name"
+                                maxLength={100}
+                            />
+                        </div>
+
+                        <div>
+                            <label className="block text-sm font-medium mb-2 flex items-center gap-1.5">
+                                <Globe className="w-4 h-4 text-primary-fg" />
+                                <span>Language</span>
+                            </label>
+                            <select
+                                value={language}
+                                onChange={(e) => setLanguage(e.target.value)}
+                                className="w-full px-3 py-2 rounded-lg border border-light-border dark:border-dark-border bg-white dark:bg-dark-bg focus:ring-2 focus:ring-primary focus:border-transparent outline-none text-sm"
+                            >
+                                {SUPPORTED_LANGUAGES.map(lang => (
+                                    <option key={lang.code} value={lang.code}>
+                                        {lang.flag} {lang.nativeName} ({lang.name})
+                                    </option>
+                                ))}
+                            </select>
+                        </div>
                     </div>
 
                     {/* Thumbnail */}

@@ -122,6 +122,18 @@ function CoursePlayerPage() {
         loadCourseData()
     }, [courseId])
 
+    // Listen for global course updates
+    useEffect(() => {
+        function handleCourseUpdated(e) {
+            const { courseId: updatedId, updates } = e?.detail || {}
+            if (updatedId === courseId && updates) {
+                setCourse(prev => prev ? ({ ...prev, ...updates }) : prev)
+            }
+        }
+        window.addEventListener('tutin:course-updated', handleCourseUpdated)
+        return () => window.removeEventListener('tutin:course-updated', handleCourseUpdated)
+    }, [courseId])
+
     // Refresh only course progress when calculation mode changes (don't interrupt video)
     const prevProgressModeRef = useRef(settings.progressCalculationMode)
     useEffect(() => {
@@ -484,6 +496,8 @@ function CoursePlayerPage() {
                                         ref={videoRef}
                                         video={currentVideo}
                                         courseId={courseId}
+                                        course={course}
+                                        onCourseUpdate={(updated) => setCourse(prev => ({ ...prev, ...updated }))}
                                         onComplete={handleVideoComplete}
                                         onNext={handleNextVideo}
                                         onPrevious={handlePreviousVideo}

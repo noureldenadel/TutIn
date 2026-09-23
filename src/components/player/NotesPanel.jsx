@@ -1493,7 +1493,7 @@ function NotesPanel({
                             <Link
                                 to={`/course/${courseId}/canvas`}
                                 className="h-9 w-9 flex items-center justify-center border border-light-border dark:border-dark-border rounded-lg bg-light-surface dark:bg-dark-bg hover:bg-gray-100 dark:hover:bg-dark-surface/80 text-light-text-secondary dark:text-dark-text-secondary hover:text-primary-fg dark:hover:text-primary-fg transition-colors cursor-pointer shrink-0 shadow-sm active:scale-[0.98]"
-                                title="Open Course Canvas Whiteboard"
+                                title="Open Canvas"
                             >
                                 <LayoutGrid className="w-4 h-4 text-primary-fg" />
                             </Link>
@@ -1509,7 +1509,7 @@ function NotesPanel({
                             }}
                             disabled={notes.length <= 1}
                             className="h-9 w-9 flex items-center justify-center border border-light-border dark:border-dark-border rounded-lg bg-light-surface dark:bg-dark-bg hover:bg-gray-100 dark:hover:bg-dark-surface/80 text-light-text-secondary dark:text-dark-text-secondary hover:text-light-text dark:hover:text-dark-text transition-colors cursor-pointer shrink-0 shadow-sm active:scale-[0.98] disabled:opacity-40 disabled:cursor-not-allowed"
-                            title={`Sort order: ${sortOrder === 'asc' ? 'Ascending (Oldest first)' : 'Descending (Latest first)'} (Click to reverse)`}
+                            title={`Sort: ${sortOrder === 'asc' ? 'Oldest first' : 'Latest first'}`}
                         >
                             {sortOrder === 'asc' ? (
                                 <ArrowUpNarrowWide className="w-4 h-4 text-primary-fg" />

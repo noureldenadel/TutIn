@@ -34,7 +34,8 @@ function mapVideoRow(video) {
         youtubeId: video.youtube_id,
         url: video.url,
         hasTranscript: video.has_transcript === 1,
-        subtitleSources: JSON.parse(video.subtitle_sources || '[]')
+        subtitleSources: JSON.parse(video.subtitle_sources || '[]'),
+        dubbedTracks: JSON.parse(video.dubbed_tracks || '[]')
     }
 }
 
@@ -153,6 +154,11 @@ router.put('/:id', (req, res) => {
         if (data.bookmarks !== undefined) {
             updateFields.push('bookmarks = ?')
             params.push(JSON.stringify(data.bookmarks))
+        }
+
+        if (data.dubbedTracks !== undefined) {
+            updateFields.push('dubbed_tracks = ?')
+            params.push(JSON.stringify(data.dubbedTracks))
         }
 
         if (updateFields.length === 0) {

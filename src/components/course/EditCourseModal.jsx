@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
-import { X, Upload, Image, BookOpen, User, FileText, Trash2, Tag, Folder, Video, Clock, RefreshCw } from 'lucide-react'
+import { X, Upload, Image, BookOpen, User, FileText, Trash2, Tag, Folder, Video, Clock, RefreshCw, Globe } from 'lucide-react'
 import { updateCourse, formatDuration } from '../../utils/db'
+import { SUPPORTED_LANGUAGES } from '../../utils/languages'
 
 import { validateCourseTitle, sanitizeHTML } from '../../utils/validation'
 
@@ -8,6 +9,7 @@ function EditCourseModal({ course, isOpen, onClose, onSave, onSync }) {
     const [formData, setFormData] = useState({
         title: '',
         instructor: '',
+        language: 'en',
         tags: [],
         thumbnailData: null,
         courseUrl: '',
@@ -29,6 +31,7 @@ function EditCourseModal({ course, isOpen, onClose, onSave, onSync }) {
             setFormData({
                 title: course.title || '',
                 instructor: course.instructor || '',
+                language: course.language || 'en',
                 tags: course.tags || [],
                 thumbnailData: course.thumbnailData || null,
                 courseUrl: course.courseUrl || '',
@@ -176,6 +179,7 @@ function EditCourseModal({ course, isOpen, onClose, onSave, onSync }) {
                 title: titleValidation.sanitized,
                 description: course.description || '',
                 instructor: sanitizeHTML(formData.instructor),
+                language: formData.language || 'en',
                 tags: formData.tags,
                 thumbnailData: formData.thumbnailData,
                 updatedAt: new Date().toISOString()
@@ -287,19 +291,39 @@ function EditCourseModal({ course, isOpen, onClose, onSave, onSync }) {
                         {errors.title && <p className="text-error text-sm mt-1">{errors.title}</p>}
                     </div>
 
-                    {/* Instructor */}
-                    <div>
-                        <label className="block text-sm font-medium mb-2">
-                            Instructor
-                        </label>
-                        <input
-                            type="text"
-                            value={formData.instructor}
-                            onChange={(e) => handleChange('instructor', e.target.value)}
-                            className="w-full px-3 py-2 rounded-lg border border-light-border dark:border-dark-border bg-white dark:bg-dark-bg focus:border-primary dark:focus:border-blue-400 outline-none focus:outline-none ring-0 focus:ring-0"
-                            placeholder="Instructor name"
-                            maxLength={100}
-                        />
+                    {/* Instructor & Language Grid */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div>
+                            <label className="block text-sm font-medium mb-2">
+                                Instructor
+                            </label>
+                            <input
+                                type="text"
+                                value={formData.instructor}
+                                onChange={(e) => handleChange('instructor', e.target.value)}
+                                className="w-full px-3 py-2 rounded-lg border border-light-border dark:border-dark-border bg-white dark:bg-dark-bg focus:border-primary dark:focus:border-blue-400 outline-none focus:outline-none ring-0 focus:ring-0"
+                                placeholder="Instructor name"
+                                maxLength={100}
+                            />
+                        </div>
+
+                        <div>
+                            <label className="block text-sm font-medium mb-2 flex items-center gap-1.5">
+                                <Globe className="w-4 h-4 text-primary-fg" />
+                                <span>Language</span>
+                            </label>
+                            <select
+                                value={formData.language}
+                                onChange={(e) => handleChange('language', e.target.value)}
+                                className="w-full px-3 py-2 rounded-lg border border-light-border dark:border-dark-border bg-white dark:bg-dark-bg focus:border-primary dark:focus:border-blue-400 outline-none focus:outline-none ring-0 focus:ring-0 text-sm"
+                            >
+                                {SUPPORTED_LANGUAGES.map(lang => (
+                                    <option key={lang.code} value={lang.code}>
+                                        {lang.flag} {lang.nativeName} ({lang.name})
+                                    </option>
+                                ))}
+                            </select>
+                        </div>
                     </div>
 
                     {/* Tags */}

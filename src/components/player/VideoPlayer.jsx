@@ -2,7 +2,7 @@ import { useRef, useState, useEffect, useCallback, forwardRef, useImperativeHand
 import {
     Play, Pause, Volume2, VolumeX, Maximize, Minimize,
     SkipBack, SkipForward, Settings, PictureInPicture, FolderOpen, X, Repeat, Captions, CaptionsOff, Globe, Headphones,
-    Sparkles, FileText, Languages, Upload, Gauge, ChevronRight, ChevronLeft, Check
+    Sparkles, FileText, Languages, Upload, Gauge, ChevronRight, ChevronLeft, Check, MessageSquareText
 } from 'lucide-react'
 // YouTube videos use native iframe embed
 import { getVideoUrl, releaseVideoUrl } from '../../utils/fileSystem'
@@ -12,16 +12,89 @@ import { SERVER_URL } from '../../utils/api'
 import CaptionOverlay from './CaptionOverlay'
 import TranslateModal from './TranslateModal'
 import SmartCaptionsModal from './SmartCaptionsModal'
-// [DUB FEATURE HIDDEN] import DubModal from './DubModal'
+import DubModal from './DubModal'
 import mpegts from 'mpegts.js'
+import { SUPPORTED_LANGUAGES, getLanguageLabel, getLanguageInfo } from '../../utils/languages'
 
+export const LANGUAGE_LABEL_MAP = {
+    source: 'Original',
+    en: 'English',
+    es: 'Español',
+    fr: 'Français',
+    de: 'Deutsch',
+    it: 'Italiano',
+    pt: 'Português',
+    ru: 'Русский',
+    ar: 'العربية',
+    zh: '中文',
+    ja: '日本語',
+    ko: '한국어',
+    hi: 'हिन्दी',
+    tr: 'Türkçe',
+    nl: 'Nederlands',
+    pl: 'Polski',
+    vi: 'Tiếng Việt',
+    th: 'ไทย',
+    cs: 'Čeština',
+    hu: 'Magyar',
+    uk: 'Українська',
+    id: 'Bahasa Indonesia',
+    sv: 'Svenska',
+    da: 'Dansk',
+    no: 'Norsk',
+    fi: 'Suomi',
+    el: 'Ελληνικά',
+    he: 'עברית'
+}
 
-const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext, onPrevious, courseId, onTimeUpdate, autoPlay, onAspectRatioChange, onVideoDataChange }, ref) {
+export function getLangLabel(code) {
+    if (!code) return 'Unknown'
+    const clean = code.toLowerCase().trim()
+    return LANGUAGE_LABEL_MAP[clean] || code.toUpperCase()
+}
+
+const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext, onPrevious, courseId, course, onCourseUpdate, onTimeUpdate, autoPlay, onAspectRatioChange, onVideoDataChange }, ref) {
     const { settings, updateSettings } = useSettings()
     const videoRef = useRef(null)
     const containerRef = useRef(null)
     const progressRef = useRef(null)
     const [videoUrl, setVideoUrl] = useState(null)
+    const [courseData, setCourseData] = useState(course || null)
+
+    useEffect(() => {
+        if (course) {
+            setCourseData(course)
+        } else if (courseId) {
+            getCourse(courseId).then(c => {
+                if (c) setCourseData(c)
+            })
+        }
+    }, [course, courseId])
+
+    useEffect(() => {
+        function handleCourseUpdated(e) {
+            const { courseId: updatedId, updates } = e?.detail || {}
+            const activeId = course?.id || courseId || courseData?.id
+            if (activeId && updatedId === activeId && updates) {
+                setCourseData(prev => prev ? ({ ...prev, ...updates }) : { id: activeId, ...updates })
+            }
+        }
+        window.addEventListener('tutin:course-updated', handleCourseUpdated)
+        return () => window.removeEventListener('tutin:course-updated', handleCourseUpdated)
+    }, [course?.id, courseId, courseData?.id])
+
+    async function handleUpdateCourseLanguage(newLang) {
+        const targetId = courseData?.id || course?.id || courseId
+        if (!targetId) return
+        try {
+            await updateCourse(targetId, { language: newLang })
+            const updated = { ...(courseData || {}), id: targetId, language: newLang }
+            setCourseData(updated)
+            onCourseUpdate?.(updated)
+        } catch (err) {
+            console.error('Failed to update course language:', err)
+        }
+    }
     const [isPlaying, setIsPlaying] = useState(false)
     const [currentTime, setCurrentTime] = useState(0)
     const [duration, setDuration] = useState(0)
@@ -51,7 +124,7 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
     const [captionLanguages, setCaptionLanguages] = useState({ sourceExists: false, translatedLangs: [], existingLangs: [] })
     const [selectedCaptionLang, setSelectedCaptionLang] = useState(() => settings.captionLanguage || 'source')
     const [captionChunks, setCaptionChunks] = useState([])
-    const [showCCMenu, setShowCCMenu] = useState(false)
+    const [showAudioSubMenu, setShowAudioSubMenu] = useState(false)
     const [isSpeedBoosting, setIsSpeedBoosting] = useState(false)
     const [isTransitioning, setIsTransitioning] = useState(false)
     const [speedBeforeBoost, setSpeedBeforeBoost] = useState(1)
@@ -60,16 +133,10 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
     const pendingAutoPlayRef = useRef(false) // Track autoplay intent during video transitions
     const [showTranslateModal, setShowTranslateModal] = useState(false)
     const [smartCaptionData, setSmartCaptionData] = useState(null)
-    // [DUB FEATURE HIDDEN] — state kept but hardcoded to disabled
     const dubAudioRef = useRef(null)
-    const dubLanguages = [] // was: useState([])
-    const setDubLanguages = () => {} // no-op
-    const selectedDubLang = 'none' // was: useState('none')
-    const setSelectedDubLang = () => {} // no-op
-    const showAudioMenu = false // was: useState(false)
-    const setShowAudioMenu = () => {} // no-op
-    const showDubModal = false // was: useState(false)
-    const setShowDubModal = () => {} // no-op
+    const [dubLanguages, setDubLanguages] = useState([])
+    const [selectedDubLang, setSelectedDubLang] = useState('none')
+    const [showDubModal, setShowDubModal] = useState(false)
     const [showSettingsMenu, setShowSettingsMenu] = useState(false)
     const [settingsSubMenu, setSettingsSubMenu] = useState('main')
 
@@ -156,28 +223,65 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
         }
     }, [videoUrl, isTs])
 
-    /* [DUB FEATURE HIDDEN] — dub audio loading effect disabled
-    // Load dub audio when selectedDubLang changes
+    // Helper to fetch available dub languages
+    const fetchDubLanguages = useCallback((videoId = video?.id) => {
+        if (!videoId) return
+        if (video?.youtubeId || video?.url?.startsWith('http')) return
+
+        fetch(`${SERVER_URL}/api/dub/video/${videoId}/languages`)
+            .then(res => {
+                if (!res.ok) return []
+                return res.json()
+            })
+            .then(langs => {
+                if (Array.isArray(langs)) {
+                    setDubLanguages(langs)
+                }
+            })
+            .catch(err => console.error('Failed to fetch dub languages:', err))
+    }, [video?.id, video?.youtubeId, video?.url])
+
+    // Fetch dub languages on video change
+    useEffect(() => {
+        fetchDubLanguages()
+        setSelectedDubLang('none')
+    }, [video?.id, fetchDubLanguages])
+
+    // Also populate from video.dubbedTracks if available
+    useEffect(() => {
+        if (video?.dubbedTracks && Array.isArray(video.dubbedTracks)) {
+            const readyLangs = video.dubbedTracks.filter(t => t.status === 'ready').map(t => t.language)
+            if (readyLangs.length > 0) {
+                setDubLanguages(prev => Array.from(new Set([...prev, ...readyLangs])))
+            }
+        }
+    }, [video?.dubbedTracks])
+
+    // Load and sync dub audio when selectedDubLang changes
     useEffect(() => {
         if (selectedDubLang === 'none' || !video?.id) {
             if (dubAudioRef.current) {
                 dubAudioRef.current.pause()
                 dubAudioRef.current.src = ''
             }
-            if (videoRef.current) videoRef.current.muted = false
+            if (videoRef.current) {
+                videoRef.current.muted = isMuted
+                videoRef.current.volume = isMuted ? 0 : volume
+            }
             return
         }
         if (dubAudioRef.current) {
             dubAudioRef.current.src = `${SERVER_URL}/api/dub/audio/${video.id}?lang=${selectedDubLang}`
             dubAudioRef.current.currentTime = videoRef.current?.currentTime || 0
-            dubAudioRef.current.playbackRate = videoRef.current?.playbackRate || 1
+            dubAudioRef.current.playbackRate = videoRef.current?.playbackRate || playbackSpeed || 1
+            dubAudioRef.current.volume = isMuted ? 0 : volume
+            dubAudioRef.current.muted = isMuted
             if (videoRef.current) videoRef.current.muted = true
             if (isPlaying) {
                 dubAudioRef.current.play().catch(e => console.error('Dub play err:', e))
             }
         }
     }, [selectedDubLang, video?.id])
-    */
 
     // Load video when video prop changes
     useEffect(() => {
@@ -356,16 +460,13 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
             setCurrentTime(videoRef.current.currentTime)
             onTimeUpdate?.(videoRef.current.currentTime)
             
-            /* [DUB FEATURE HIDDEN] — dub audio sync disabled
-            // Sync dub audio
+            // Sync dub audio with drift correction (>0.3s)
             if (selectedDubLang !== 'none' && dubAudioRef.current) {
                 const diff = Math.abs(videoRef.current.currentTime - dubAudioRef.current.currentTime)
-                // If out of sync by more than 300ms, snap dub to video
                 if (diff > 0.3) {
                     dubAudioRef.current.currentTime = videoRef.current.currentTime
                 }
             }
-            */
         }
     }
 
@@ -385,6 +486,9 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
                     console.log('[VideoPlayer] Video play catch:', err)
                 })
             }
+            if (selectedDubLang !== 'none' && dubAudioRef.current) {
+                dubAudioRef.current.play().catch(e => console.log('[VideoPlayer] Dub play catch:', e))
+            }
             isPlayingRef.current = true
             setIsPlaying(true)
         },
@@ -399,6 +503,9 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
                 }), '*')
             } else if (videoRef.current && typeof videoRef.current.pause === 'function') {
                 videoRef.current.pause()
+            }
+            if (selectedDubLang !== 'none' && dubAudioRef.current) {
+                dubAudioRef.current.pause()
             }
             isPlayingRef.current = false
             setIsPlaying(false)
@@ -442,6 +549,9 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
                 } else {
                     videoRef.current.currentTime = time
                 }
+            }
+            if (selectedDubLang !== 'none' && dubAudioRef.current) {
+                dubAudioRef.current.currentTime = time
             }
         },
         getCurrentTime: () => {
@@ -512,6 +622,13 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
         setIsPlaying(true)
         isPlayingRef.current = true
         startProgressTracking()
+        if (selectedDubLang !== 'none' && dubAudioRef.current) {
+            if (videoRef.current) {
+                const diff = Math.abs(videoRef.current.currentTime - dubAudioRef.current.currentTime)
+                if (diff > 0.1) dubAudioRef.current.currentTime = videoRef.current.currentTime
+            }
+            dubAudioRef.current.play().catch(e => console.log('[VideoPlayer] dub audio play catch:', e))
+        }
     }
 
     function handlePause() {
@@ -524,6 +641,9 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
         isPlayingRef.current = false
         stopProgressTracking()
         saveProgress()
+        if (selectedDubLang !== 'none' && dubAudioRef.current) {
+            dubAudioRef.current.pause()
+        }
     }
 
     function handleEnded() {
@@ -671,6 +791,9 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
         } else {
             videoRef.current.currentTime = newTime
         }
+        if (selectedDubLang !== 'none' && dubAudioRef.current) {
+            dubAudioRef.current.currentTime = newTime
+        }
         setCurrentTime(newTime)
     }
 
@@ -680,22 +803,37 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
         setIsMuted(newVolume === 0)
 
         const isYt = video?.youtubeId || video?.url?.startsWith('http')
-        if (videoRef.current && !isYt) {
+        if (selectedDubLang !== 'none') {
+            if (videoRef.current && !isYt) videoRef.current.muted = true
+            if (dubAudioRef.current) {
+                dubAudioRef.current.volume = newVolume
+                dubAudioRef.current.muted = newVolume === 0
+            }
+        } else if (videoRef.current && !isYt) {
             videoRef.current.volume = newVolume
+            videoRef.current.muted = newVolume === 0
         }
         updateSettings({ volume: newVolume })
     }
 
     function toggleMute() {
-        if (videoRef.current) {
-            const isYt = video?.youtubeId || video?.url?.startsWith('http')
+        const nextMuted = !isMuted
+        setIsMuted(nextMuted)
+        const isYt = video?.youtubeId || video?.url?.startsWith('http')
 
-            if (isMuted) {
-                if (!isYt) videoRef.current.volume = volume || 0.75
-                setIsMuted(false)
+        if (selectedDubLang !== 'none') {
+            if (videoRef.current && !isYt) videoRef.current.muted = true
+            if (dubAudioRef.current) {
+                dubAudioRef.current.muted = nextMuted
+                dubAudioRef.current.volume = nextMuted ? 0 : (volume || 0.75)
+            }
+        } else if (videoRef.current && !isYt) {
+            if (nextMuted) {
+                videoRef.current.volume = 0
+                videoRef.current.muted = true
             } else {
-                if (!isYt) videoRef.current.volume = 0
-                setIsMuted(true)
+                videoRef.current.volume = volume || 0.75
+                videoRef.current.muted = false
             }
         }
     }
@@ -719,6 +857,9 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
         const isYt = video?.youtubeId || video?.url?.startsWith('http')
         if (videoRef.current && !isYt) {
             videoRef.current.playbackRate = speed
+        }
+        if (dubAudioRef.current) {
+            dubAudioRef.current.playbackRate = speed
         }
         setShowSpeedMenu(false)
     }
@@ -880,6 +1021,9 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
                             videoRef.current.play().catch(() => {})
                         }
                     }
+                    if (dubAudioRef.current) {
+                        dubAudioRef.current.playbackRate = 2
+                    }
                 }, 280)
                 return
             }
@@ -978,7 +1122,7 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
                 case 'escape':
                     e.preventDefault()
                     setShowSpeedMenu(false)
-                    setShowCCMenu(false)
+                    setShowAudioSubMenu(false)
                     setShowSettingsMenu(false)
                     break
             }
@@ -1004,6 +1148,9 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
                     if (videoRef.current && !isYt) {
                         videoRef.current.playbackRate = speedBeforeBoostRef.current || playbackSpeed || 1
                     }
+                    if (dubAudioRef.current) {
+                        dubAudioRef.current.playbackRate = speedBeforeBoostRef.current || playbackSpeed || 1
+                    }
                 } else {
                     // Short tap -> toggle play/pause
                     togglePlay()
@@ -1021,7 +1168,7 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
     }, [currentTime, duration, settings.keyboardShortcuts, playbackSpeed, video?.youtubeId, video?.url])
 
     // Auto-hide controls
-    const hasOpenMenu = showSettingsMenu || showCCMenu || showSpeedMenu || showAudioMenu
+    const hasOpenMenu = showSettingsMenu || showAudioSubMenu || showSpeedMenu
 
     useEffect(() => {
         function handleMouseMove() {
@@ -1075,9 +1222,8 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
 
             // Close all menus
             setShowSettingsMenu(false)
-            setShowCCMenu(false)
+            setShowAudioSubMenu(false)
             setShowSpeedMenu(false)
-            setShowAudioMenu(false)
 
             // If cursor is NOT on the player viewport (e.g. they clicked outside the player),
             // hide the controls too.
@@ -1170,10 +1316,11 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
             .catch(err => console.error('Failed to fetch caption chunks:', err))
     }, [video?.id, video?.youtubeId, video?.url, selectedCaptionLang])
 
-    // Fetch caption languages when video changes or menus open
+    // Fetch caption and dub languages when video changes or menu opens
     useEffect(() => {
         fetchCaptionLanguages()
-    }, [video?.id, showCCMenu, showAudioMenu, fetchCaptionLanguages])
+        fetchDubLanguages()
+    }, [video?.id, showAudioSubMenu, fetchCaptionLanguages, fetchDubLanguages])
 
     // Fetch caption chunks when language or enabled state changes
     useEffect(() => {
@@ -1207,6 +1354,23 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
         return () => window.removeEventListener('tutin:transcript-updated', handleTranscriptUpdated)
     }, [video?.id, captionsEnabled, selectedCaptionLang, fetchCaptionLanguages, fetchCaptionChunks])
 
+    // Listen for global dub updates
+    useEffect(() => {
+        function handleDubUpdated(e) {
+            const { videoId, lang } = e?.detail || {}
+            if (!video?.id) return
+            if (!videoId || videoId === video.id) {
+                fetchDubLanguages(video.id)
+                if (lang) {
+                    setDubLanguages(prev => Array.from(new Set([...prev, lang])))
+                    setSelectedDubLang(lang)
+                }
+            }
+        }
+        window.addEventListener('tutin:dub-updated', handleDubUpdated)
+        return () => window.removeEventListener('tutin:dub-updated', handleDubUpdated)
+    }, [video?.id, fetchDubLanguages])
+
     // Sync selected language with settings
     useEffect(() => {
         if (settings.captionLanguage && settings.captionLanguage !== selectedCaptionLang) {
@@ -1236,7 +1400,7 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
                     setSelectedCaptionLang(lang)
                     updateSettings({ captionLanguage: lang })
                     setCaptionsEnabled(true)
-                    setShowCCMenu(false)
+                    setShowAudioSubMenu(false)
                     fetchCaptionLanguages(currentVideoId)
                     fetchCaptionChunks(currentVideoId, lang)
                     onVideoDataChange?.()
@@ -1283,6 +1447,9 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
                 if (videoRef.current && !(video?.youtubeId || video?.url?.startsWith('http'))) {
                     videoRef.current.playbackRate = 2
                 }
+                if (dubAudioRef.current) {
+                    dubAudioRef.current.playbackRate = 2
+                }
             }
         }, 500) // 500ms hold to activate
     }
@@ -1302,6 +1469,9 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
             wasSpeedBoostingRef.current = true
             if (videoRef.current && !(video?.youtubeId || video?.url?.startsWith('http'))) {
                 videoRef.current.playbackRate = speedBeforeBoost
+            }
+            if (dubAudioRef.current) {
+                dubAudioRef.current.playbackRate = speedBeforeBoost
             }
         }
     }
@@ -1589,111 +1759,231 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
                         {/* Right Side Pill */}
                         <div className="flex items-center gap-1 px-3 py-1 bg-white/15 backdrop-blur-sm rounded-full transition-all text-white shadow-sm relative">
                             
-                            {/* CC/Captions Toggle and Menu */}
-                            {(captionLanguages.existingLangs.length > 0 || captionLanguages.translatedLangs.length > 0 || captionLanguages.sourceExists || video?.id) && (
+                            {/* Audio & Subtitles Combined Toggle and Popover */}
+                            {(captionLanguages.existingLangs.length > 0 || captionLanguages.translatedLangs.length > 0 || captionLanguages.sourceExists || dubLanguages.length > 0 || video?.id) && (
                                 <div className="relative flex items-center">
                                     <button
                                         onClick={() => {
-                                            setShowCCMenu(!showCCMenu);
+                                            setShowAudioSubMenu(!showAudioSubMenu);
                                             setShowSettingsMenu(false);
                                         }}
-                                        className={`tut-in-menu-trigger p-1.5 hover:bg-white/15 rounded-full transition-all ${captionsEnabled ? 'text-[var(--primary-fg)]' : 'opacity-70 hover:opacity-100'}`}
-                                        title="Captions Menu (C)"
+                                        className={`tut-in-menu-trigger p-1.5 hover:bg-white/15 rounded-full transition-all ${
+                                            (captionsEnabled || selectedDubLang !== 'none' || showAudioSubMenu)
+                                                ? 'text-[var(--primary-fg)]'
+                                                : 'opacity-70 hover:opacity-100'
+                                        }`}
+                                        title="Audio & Subtitles (C)"
                                     >
-                                        <Captions className="w-4.5 h-4.5" />
+                                        <MessageSquareText className="w-4.5 h-4.5" />
                                     </button>
 
-                                    {showCCMenu && (
-                                        <div className="tut-in-menu-container absolute bottom-full right-0 mb-3 bg-black/90 backdrop-blur-md rounded-xl py-2 min-w-[200px] shadow-2xl border border-white/10 text-white text-sm z-50">
-                                            <div className="px-3 py-2 border-b border-white/10 flex justify-between items-center">
-                                                <span className="font-bold text-xs uppercase tracking-wider opacity-60">Captions</span>
-                                                <button 
-                                                    onClick={() => {
-                                                        setCaptionsEnabled(!captionsEnabled)
-                                                    }}
-                                                    className="text-xs bg-white/10 hover:bg-white/20 px-2 py-0.5 rounded"
-                                                >
-                                                    {captionsEnabled ? 'Turn Off' : 'Turn On'}
-                                                </button>
-                                            </div>
-                                            
-                                            <div className="max-h-[180px] overflow-y-auto mt-1">
-                                                {/* Source/Generated */}
-                                                {captionLanguages.sourceExists && !captionLanguages.existingLangs.includes('source') && (
-                                                    <button
-                                                        onClick={() => { setSelectedCaptionLang('source'); setCaptionsEnabled(true); setShowCCMenu(false) }}
-                                                        className={`w-full px-3 py-2 text-xs text-left hover:bg-white/10 flex items-center justify-between ${selectedCaptionLang === 'source' ? 'text-[var(--primary-fg)] font-bold bg-white/5' : ''}`}
-                                                    >
-                                                        <span>Source / Generated</span>
-                                                        <Sparkles className="w-3.5 h-3.5 text-amber-400" />
-                                                    </button>
-                                                )}
-
-                                                {/* Pre-existing files */}
-                                                {captionLanguages.existingLangs.map(lang => (
-                                                    <button
-                                                        key={`exist-${lang}`}
-                                                        onClick={() => { setSelectedCaptionLang(lang); setCaptionsEnabled(true); setShowCCMenu(false) }}
-                                                        className={`w-full px-3 py-2 text-xs text-left hover:bg-white/10 flex items-center justify-between ${selectedCaptionLang === lang ? 'text-[var(--primary-fg)] font-bold bg-white/5' : ''}`}
-                                                    >
-                                                        <span>{lang === 'source' ? 'Original File' : lang}</span>
-                                                        <FileText className="w-3.5 h-3.5 opacity-70" />
-                                                    </button>
-                                                ))}
-
-                                                {/* Translated */}
-                                                {captionLanguages.translatedLangs.map(lang => (
-                                                    <button
-                                                        key={`trans-${lang}`}
-                                                        onClick={() => { setSelectedCaptionLang(lang); setCaptionsEnabled(true); setShowCCMenu(false) }}
-                                                        className={`w-full px-3 py-2 text-xs text-left hover:bg-white/10 flex items-center justify-between ${selectedCaptionLang === lang ? 'text-[var(--primary-fg)] font-bold bg-white/5' : ''}`}
-                                                    >
-                                                        <span>{lang.toUpperCase()}</span>
-                                                        <Languages className="w-3.5 h-3.5 opacity-70" />
-                                                    </button>
-                                                ))}
+                                    {showAudioSubMenu && (
+                                        <div className="tut-in-menu-container absolute bottom-full right-0 mb-3 bg-[#141414]/95 backdrop-blur-xl rounded-2xl p-4 min-w-[340px] sm:min-w-[420px] shadow-2xl border border-white/10 text-white text-xs z-50 animate-scale-in">
+                                            <div className="grid grid-cols-2 gap-4 divide-x divide-white/10">
                                                 
-                                                {(!captionLanguages.sourceExists && captionLanguages.existingLangs.length === 0 && captionLanguages.translatedLangs.length === 0) && (
-                                                    <div className="px-3 py-2 text-xs opacity-50">No captions available</div>
-                                                )}
-                                            </div>
+                                                {/* Audio Column */}
+                                                <div className="flex flex-col pr-1">
+                                                    <div className="text-sm font-bold text-white/90 text-center pb-2.5 mb-1 border-b border-white/10">
+                                                        Audio
+                                                    </div>
+                                                    <div className="max-h-[220px] overflow-y-auto space-y-0.5 py-1">
+                                                        {/* Original / No Dub */}
+                                                        <button
+                                                            onClick={() => {
+                                                                setSelectedDubLang('none')
+                                                            }}
+                                                            className={`w-full px-2.5 py-1.5 rounded-lg text-left hover:bg-white/10 flex items-center justify-between transition-colors ${
+                                                                selectedDubLang === 'none'
+                                                                    ? 'text-white font-semibold bg-white/5'
+                                                                    : 'text-white/75 hover:text-white'
+                                                            }`}
+                                                        >
+                                                            <div className="flex items-center gap-2 truncate">
+                                                                {selectedDubLang === 'none' ? (
+                                                                    <Check className="w-3.5 h-3.5 text-white flex-shrink-0" />
+                                                                ) : (
+                                                                    <span className="w-3.5 flex-shrink-0" />
+                                                                )}
+                                                                <span className="truncate">Original (V.O.)</span>
+                                                            </div>
+                                                            <span className="text-[10px] text-white/60 bg-white/10 px-1.5 py-0.5 rounded ml-1 flex-shrink-0">
+                                                                {getLanguageLabel(courseData?.language || 'en')}
+                                                            </span>
+                                                        </button>
 
-                                            <div className="border-t border-white/10 mt-1 pt-1">
-                                                <label className="w-full px-3 py-1.5 text-xs text-left hover:bg-white/10 cursor-pointer flex items-center gap-2">
-                                                    <Upload className="w-3.5 h-3.5 opacity-70" />
-                                                    <span>Upload captions...</span>
-                                                    <input 
-                                                        type="file" 
-                                                        accept=".srt,.vtt,.ass,.lrc"
-                                                        className="hidden"
-                                                        ref={fileInputRef}
-                                                        onChange={handleUploadCaptions}
-                                                    />
-                                                </label>
-                                                <button
-                                                    onClick={() => {
-                                                        setShowCCMenu(false)
-                                                        setShowTranslateModal(true)
-                                                    }}
-                                                    className="w-full px-3 py-1.5 text-xs text-left hover:bg-white/10 flex items-center justify-between"
-                                                >
-                                                    <span className="flex items-center gap-2">
-                                                        <Languages className="w-3.5 h-3.5 opacity-70" /> Translate to...
-                                                    </span>
-                                                </button>
+                                                        {/* Available Dubbed Languages */}
+                                                        {dubLanguages.map(lang => (
+                                                            <button
+                                                                key={`dub-${lang}`}
+                                                                onClick={() => {
+                                                                    setSelectedDubLang(lang)
+                                                                }}
+                                                                className={`w-full px-2.5 py-1.5 rounded-lg text-left hover:bg-white/10 flex items-center gap-2 transition-colors ${
+                                                                    selectedDubLang === lang
+                                                                        ? 'text-white font-semibold bg-white/5'
+                                                                        : 'text-white/75 hover:text-white'
+                                                                }`}
+                                                            >
+                                                                {selectedDubLang === lang ? (
+                                                                    <Check className="w-3.5 h-3.5 text-white flex-shrink-0" />
+                                                                ) : (
+                                                                    <span className="w-3.5 flex-shrink-0" />
+                                                                )}
+                                                                <span className="truncate">{getLangLabel(lang)}</span>
+                                                            </button>
+                                                        ))}
+                                                    </div>
+
+                                                    {/* Audio actions: Generate Dub & Spoken Language Selector */}
+                                                    <div className="border-t border-white/10 mt-2 pt-2 space-y-2">
+                                                        <button
+                                                            onClick={() => {
+                                                                setShowAudioSubMenu(false)
+                                                                setShowDubModal(true)
+                                                            }}
+                                                            className="w-full px-2.5 py-1.5 text-xs text-center border border-white/15 rounded-lg hover:bg-white/10 text-white/80 hover:text-white transition-colors flex items-center justify-center gap-1.5 font-medium"
+                                                        >
+                                                            <Headphones className="w-3.5 h-3.5 text-[var(--primary-fg)]" />
+                                                            <span>Dub Audio...</span>
+                                                        </button>
+
+                                                        <div>
+                                                            <label className="text-[10px] uppercase font-semibold text-white/50 block mb-1">
+                                                                Language
+                                                            </label>
+                                                            <select
+                                                                value={courseData?.language || 'en'}
+                                                                onChange={(e) => handleUpdateCourseLanguage(e.target.value)}
+                                                                className="w-full text-xs bg-white/10 text-white rounded px-2 py-1 border border-white/10 outline-none focus:border-[var(--primary-fg)]"
+                                                            >
+                                                                {SUPPORTED_LANGUAGES.map((l) => (
+                                                                    <option key={l.code} value={l.code} className="bg-[#1f1f1f] text-white">
+                                                                        {l.flag} {l.name}
+                                                                    </option>
+                                                                ))}
+                                                            </select>
+                                                        </div>
+                                                    </div>
+                                                </div>
+
+                                                {/* Subtitles Column */}
+                                                <div className="flex flex-col pl-4">
+                                                    <div className="text-sm font-bold text-white/90 text-center pb-2.5 mb-1 border-b border-white/10">
+                                                        Subtitles
+                                                    </div>
+                                                    <div className="max-h-[220px] overflow-y-auto space-y-0.5 py-1">
+                                                        {/* Off */}
+                                                        <button
+                                                            onClick={() => {
+                                                                setCaptionsEnabled(false)
+                                                            }}
+                                                            className={`w-full px-2.5 py-1.5 rounded-lg text-left hover:bg-white/10 flex items-center gap-2 transition-colors ${
+                                                                !captionsEnabled
+                                                                    ? 'text-white font-semibold bg-white/5'
+                                                                    : 'text-white/75 hover:text-white'
+                                                            }`}
+                                                        >
+                                                            {!captionsEnabled ? (
+                                                                <Check className="w-3.5 h-3.5 text-white flex-shrink-0" />
+                                                            ) : (
+                                                                <span className="w-3.5 flex-shrink-0" />
+                                                            )}
+                                                            <span className="truncate">Off</span>
+                                                        </button>
+
+                                                        {/* Source / Original */}
+                                                        {(captionLanguages.sourceExists || captionLanguages.existingLangs.includes('source')) && (
+                                                            <button
+                                                                onClick={() => {
+                                                                    setSelectedCaptionLang('source')
+                                                                    setCaptionsEnabled(true)
+                                                                }}
+                                                                className={`w-full px-2.5 py-1.5 rounded-lg text-left hover:bg-white/10 flex items-center justify-between transition-colors ${
+                                                                    captionsEnabled && selectedCaptionLang === 'source'
+                                                                        ? 'text-white font-semibold bg-white/5'
+                                                                        : 'text-white/75 hover:text-white'
+                                                                }`}
+                                                            >
+                                                                <div className="flex items-center gap-2 truncate">
+                                                                    {captionsEnabled && selectedCaptionLang === 'source' ? (
+                                                                        <Check className="w-3.5 h-3.5 text-white flex-shrink-0" />
+                                                                    ) : (
+                                                                        <span className="w-3.5 flex-shrink-0" />
+                                                                    )}
+                                                                    <span className="truncate">Original</span>
+                                                                </div>
+                                                                <span className="text-[10px] text-white/60 bg-white/10 px-1.5 py-0.5 rounded ml-1 flex-shrink-0">
+                                                                    {getLanguageLabel(courseData?.language || 'en')}
+                                                                </span>
+                                                            </button>
+                                                        )}
+
+                                                        {/* Pre-existing and Translated Subtitle Languages */}
+                                                        {Array.from(new Set([
+                                                            ...captionLanguages.existingLangs.filter(l => l !== 'source'),
+                                                            ...captionLanguages.translatedLangs.filter(l => l !== 'source')
+                                                        ])).map(lang => (
+                                                            <button
+                                                                key={`sub-${lang}`}
+                                                                onClick={() => {
+                                                                    setSelectedCaptionLang(lang)
+                                                                    setCaptionsEnabled(true)
+                                                                }}
+                                                                className={`w-full px-2.5 py-1.5 rounded-lg text-left hover:bg-white/10 flex items-center gap-2 transition-colors ${
+                                                                    captionsEnabled && selectedCaptionLang === lang
+                                                                        ? 'text-white font-semibold bg-white/5'
+                                                                        : 'text-white/75 hover:text-white'
+                                                                }`}
+                                                            >
+                                                                {captionsEnabled && selectedCaptionLang === lang ? (
+                                                                    <Check className="w-3.5 h-3.5 text-white flex-shrink-0" />
+                                                                ) : (
+                                                                    <span className="w-3.5 flex-shrink-0" />
+                                                                )}
+                                                                <span className="truncate">{getLangLabel(lang)}</span>
+                                                            </button>
+                                                        ))}
+                                                    </div>
+
+                                                    {/* Subtitles actions: Translate & Upload */}
+                                                    <div className="border-t border-white/10 mt-2 pt-2 space-y-1">
+                                                        <button
+                                                            onClick={() => {
+                                                                setShowAudioSubMenu(false)
+                                                                setShowTranslateModal(true)
+                                                            }}
+                                                            className="w-full px-2 py-1 text-xs text-left hover:bg-white/10 rounded-lg text-white/80 hover:text-white flex items-center gap-2 transition-colors"
+                                                        >
+                                                            <Languages className="w-3.5 h-3.5 opacity-75" />
+                                                            <span>Translate...</span>
+                                                        </button>
+                                                        <label className="w-full px-2 py-1 text-xs text-left hover:bg-white/10 rounded-lg text-white/80 hover:text-white cursor-pointer flex items-center gap-2 transition-colors">
+                                                            <Upload className="w-3.5 h-3.5 opacity-75" />
+                                                            <span>Upload captions...</span>
+                                                            <input 
+                                                                type="file" 
+                                                                accept=".srt,.vtt,.ass,.lrc"
+                                                                className="hidden"
+                                                                ref={fileInputRef}
+                                                                onChange={handleUploadCaptions}
+                                                            />
+                                                        </label>
+                                                    </div>
+                                                </div>
+
                                             </div>
                                         </div>
                                     )}
                                 </div>
                             )}
 
-                            {/* Unified Settings Gear Button */}
+                            {/* Streamlined Settings Gear Button */}
                             <div className="relative flex items-center">
                                 <button
                                     onClick={() => {
                                         setShowSettingsMenu(!showSettingsMenu);
                                         setSettingsSubMenu('main');
-                                        setShowCCMenu(false);
+                                        setShowAudioSubMenu(false);
                                     }}
                                     className={`tut-in-menu-trigger p-1.5 hover:bg-white/15 rounded-full transition-all ${showSettingsMenu ? 'text-[var(--primary-fg)]' : 'opacity-70 hover:opacity-100'}`}
                                     title="Settings"
@@ -1702,7 +1992,7 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
                                 </button>
 
                                 {showSettingsMenu && (
-                                    <div className="tut-in-menu-container absolute bottom-full right-0 mb-3 bg-black/90 backdrop-blur-md text-white rounded-xl py-2 min-w-[220px] shadow-2xl border border-white/10 z-50 animate-scale-in text-sm">
+                                    <div className="tut-in-menu-container absolute bottom-full right-0 mb-3 bg-[#141414]/95 backdrop-blur-xl text-white rounded-2xl py-2 min-w-[220px] shadow-2xl border border-white/10 z-50 animate-scale-in text-sm">
                                         {settingsSubMenu === 'main' && (
                                             <div className="flex flex-col py-1">
                                                 {/* Playback Speed */}
@@ -1710,7 +2000,7 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
                                                     onClick={() => setSettingsSubMenu('speed')}
                                                     className="w-full px-4 py-2.5 flex items-center justify-between hover:bg-white/10 transition-colors"
                                                 >
-                                                    <span className="flex items-center gap-2">
+                                                    <span className="flex items-center gap-2 text-xs">
                                                         <Gauge className="w-4 h-4 opacity-75" /> Playback speed
                                                     </span>
                                                     <span className="text-xs text-white/50 flex items-center gap-1">
@@ -1719,24 +2009,9 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
                                                     </span>
                                                 </button>
 
-                                                {/* [DUB FEATURE HIDDEN] — Audio Track menu button hidden
-                                                <button
-                                                    onClick={() => setSettingsSubMenu('audio')}
-                                                    className="w-full px-4 py-2.5 flex items-center justify-between hover:bg-white/10 transition-colors"
-                                                >
-                                                    <span className="flex items-center gap-2">
-                                                        <Headphones className="w-4 h-4 opacity-75" /> Audio track
-                                                    </span>
-                                                    <span className="text-xs text-white/50 flex items-center gap-1">
-                                                        {selectedDubLang === 'none' ? 'Original' : selectedDubLang.toUpperCase()}
-                                                        <ChevronRight className="w-3 h-3 opacity-55" />
-                                                    </span>
-                                                </button>
-                                                */}
-
                                                 {/* Auto-play */}
                                                 <div className="w-full px-4 py-2.5 flex items-center justify-between border-t border-white/5 mt-1 pt-2">
-                                                    <span className="flex items-center gap-2">
+                                                    <span className="flex items-center gap-2 text-xs">
                                                         <Repeat className="w-4 h-4 opacity-75" /> Auto-play next
                                                     </span>
                                                     <button
@@ -1769,7 +2044,7 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
                                                                 changeSpeed(speed)
                                                                 setShowSettingsMenu(false)
                                                             }}
-                                                            className={`w-full px-8 py-2 text-left hover:bg-white/10 flex items-center justify-between text-xs ${playbackSpeed === speed ? 'text-[var(--primary-fg)] font-bold bg-white/5' : ''}`}
+                                                            className={`w-full px-6 py-2 text-left hover:bg-white/10 flex items-center justify-between text-xs ${playbackSpeed === speed ? 'text-[var(--primary-fg)] font-bold bg-white/5' : ''}`}
                                                         >
                                                             <span>{speed === 1 ? 'Normal' : `${speed}x`}</span>
                                                             {playbackSpeed === speed && <Check className="w-3.5 h-3.5 text-[var(--primary-fg)]" />}
@@ -1778,56 +2053,6 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
                                                 </div>
                                             </div>
                                         )}
-
-                                        {/* [DUB FEATURE HIDDEN] — Audio submenu hidden
-                                        {settingsSubMenu === 'audio' && (
-                                            <div className="flex flex-col">
-                                                <button
-                                                    onClick={() => setSettingsSubMenu('main')}
-                                                    className="px-4 py-2 border-b border-white/10 flex items-center gap-2 font-bold text-left hover:bg-white/5 w-full text-xs uppercase tracking-wider opacity-85"
-                                                >
-                                                    <ChevronLeft className="w-4 h-4" /> Audio track
-                                                </button>
-                                                <div className="max-h-[200px] overflow-y-auto py-1">
-                                                    <button
-                                                        onClick={() => {
-                                                            handleDubChange('none')
-                                                            setShowSettingsMenu(false)
-                                                        }}
-                                                        className={`w-full px-8 py-2 text-left hover:bg-white/10 flex items-center justify-between text-xs ${selectedDubLang === 'none' ? 'text-[var(--primary-fg)] font-bold bg-white/5' : ''}`}
-                                                    >
-                                                        <span>Original (No Dub)</span>
-                                                        {selectedDubLang === 'none' && <Check className="w-3.5 h-3.5 text-[var(--primary-fg)]" />}
-                                                    </button>
-                                                    {dubLanguages.map(lang => (
-                                                        <button
-                                                            key={lang}
-                                                            onClick={() => {
-                                                                handleDubChange(lang)
-                                                                setShowSettingsMenu(false)
-                                                            }}
-                                                            className={`w-full px-8 py-2 text-left hover:bg-white/10 flex items-center justify-between text-xs ${selectedDubLang === lang ? 'text-[var(--primary-fg)] font-bold bg-white/5' : ''}`}
-                                                        >
-                                                            <span>{lang.toUpperCase()}</span>
-                                                            {selectedDubLang === lang && <Check className="w-3.5 h-3.5 text-[var(--primary-fg)]" />}
-                                                        </button>
-                                                    ))}
-                                                </div>
-
-                                                <div className="border-t border-white/10 mt-1 pt-1 px-2 pb-1">
-                                                    <button
-                                                        onClick={() => {
-                                                            setShowSettingsMenu(false)
-                                                            setShowDubModal(true)
-                                                        }}
-                                                        className="w-full px-3 py-1.5 text-xs text-center border border-white/20 rounded hover:bg-white/10 transition-colors"
-                                                    >
-                                                        Generate New Dub
-                                                    </button>
-                                                </div>
-                                            </div>
-                                        )}
-                                        */}
                                     </div>
                                 )}
                             </div>
@@ -1927,6 +2152,7 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
                 isOpen={showTranslateModal}
                 onClose={() => setShowTranslateModal(false)}
                 video={video}
+                course={courseData}
                 chunkCount={captionChunks.length}
                 onSuccess={(lang) => {
                     // Update state to select new language and force refresh
@@ -1957,20 +2183,24 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
                 }}
             />
 
-            {/* [DUB FEATURE HIDDEN] — DubModal and dub audio element hidden
             <DubModal
                 isOpen={showDubModal}
                 onClose={() => setShowDubModal(false)}
                 video={video}
+                course={courseData}
                 onSuccess={(lang) => {
-                    setDubLanguages(prev => [...new Set([...prev, lang])])
+                    setDubLanguages(prev => Array.from(new Set([...prev, lang])))
                     setSelectedDubLang(lang)
+                    fetchDubLanguages(video?.id)
+                    onVideoDataChange?.()
+                    window.dispatchEvent(new CustomEvent('tutin:dub-updated', {
+                        detail: { videoId: video?.id, lang }
+                    }))
                 }}
             />
 
-            // Hidden audio element for dubbed audio playback
+            {/* Audio element for dubbed audio playback */}
             <audio ref={dubAudioRef} preload="auto" />
-            */}
         </div>
     )
 })
