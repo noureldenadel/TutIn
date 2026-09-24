@@ -10,6 +10,23 @@ const router = express.Router()
  * Map a raw SQLite course row (snake_case) to a camelCase API response object.
  */
 function mapCourseRow(course) {
+    let thumbUrl = null
+    if (course.has_thumbnail !== undefined) {
+        // Optimized bulk query
+        if (course.is_base64_thumbnail) {
+            thumbUrl = `http://127.0.0.1:9474/api/courses/${course.id}/thumbnail`
+        } else if (course.external_thumbnail) {
+            thumbUrl = course.external_thumbnail
+        }
+    } else if (course.thumbnail_data) {
+        // Single course query with full data
+        if (course.thumbnail_data.startsWith('data:')) {
+            thumbUrl = `http://127.0.0.1:9474/api/courses/${course.id}/thumbnail`
+        } else {
+            thumbUrl = course.thumbnail_data
+        }
+    }
+
     return {
         id: course.id,
         title: course.title,
@@ -17,7 +34,7 @@ function mapCourseRow(course) {
         description: course.description,
         instructor: course.instructor,
         tags: JSON.parse(course.tags || '[]'),
-        thumbnailData: course.thumbnail_data,
+        thumbnailData: thumbUrl,
         folderPath: course.folder_path,
         sourceType: course.source_type,
         courseUrl: course.course_url,
@@ -38,10 +55,21 @@ function mapCourseRow(course) {
 // GET /api/courses
 router.get('/', (req, res) => {
     try {
-        let query = 'SELECT * FROM courses'
+        let query = `
+            SELECT id, title, original_title, description, instructor, tags, 
+                   folder_path, source_type, course_url, language, 
+                   date_added, date_modified, last_accessed, last_accessed_click_time, 
+                   total_duration, total_videos, completed_videos, completion_percentage, 
+                   custom_metadata, "order",
+                   CASE WHEN thumbnail_data IS NOT NULL THEN 1 ELSE 0 END as has_thumbnail,
+                   CASE WHEN thumbnail_data LIKE 'data:%' THEN 1 ELSE 0 END as is_base64_thumbnail,
+                   CASE WHEN thumbnail_data NOT LIKE 'data:%' THEN thumbnail_data ELSE NULL END as external_thumbnail
+            FROM courses
+        `
         const params = []
 
         if (req.query.instructor) {
+            // Need to handle WHERE properly since we multiline
             query += ' WHERE LOWER(instructor) = LOWER(?)'
             params.push(req.query.instructor.trim())
         }
@@ -64,6 +92,27 @@ router.get('/:id', (req, res) => {
         res.json(mapCourseRow(course))
     } catch (err) {
         res.status(500).json({ error: err.message })
+    }
+})
+
+// GET /api/courses/:id/thumbnail
+router.get('/:id/thumbnail', (req, res) => {
+    try {
+        const course = getOne('SELECT thumbnail_data FROM courses WHERE id = ?', [req.params.id])
+        if (!course || !course.thumbnail_data) return res.status(404).send('Not found')
+        
+        const data = course.thumbnail_data
+        if (data.startsWith('data:')) {
+            const matches = data.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/)
+            if (matches && matches.length === 3) {
+                res.setHeader('Content-Type', matches[1])
+                res.setHeader('Cache-Control', 'public, max-age=31536000')
+                return res.send(Buffer.from(matches[2], 'base64'))
+            }
+        }
+        res.redirect(data)
+    } catch (err) {
+        res.status(500).send(err.message)
     }
 })
 
@@ -446,6 +495,9 @@ router.put('/:id', (req, res) => {
 
         for (const [key, dbField] of Object.entries(fieldMap)) {
             if (data[key] !== undefined) {
+                if (key === 'thumbnailData' && typeof data[key] === 'string' && data[key].includes('/api/courses/')) {
+                    continue
+                }
                 updateFields.push(`${dbField} = ?`)
                 params.push(data[key])
             }

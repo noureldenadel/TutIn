@@ -134,7 +134,7 @@ function PlaylistSidebar({
         e.stopPropagation()
         try {
             await markVideoComplete(video.id, !video.isCompleted)
-            onRefresh?.()
+            onRefresh?.(false)
         } catch (err) {
             console.error('Failed to update completion:', err)
         }
@@ -174,7 +174,7 @@ function PlaylistSidebar({
             await saveDeep(updatedModules)
 
             setIsBulkEditing(false)
-            onRefresh?.()
+            onRefresh?.(false)
         } catch (err) {
             console.error('Bulk save failed:', err)
             showNotification('Failed to save changes', 'error')
@@ -490,7 +490,7 @@ function PlaylistSidebar({
                 isOpen={!!editingModule}
                 onClose={() => setEditingModule(null)}
                 onSave={() => {
-                    onRefresh?.()
+                    onRefresh?.(false)
                 }}
             />
         </>

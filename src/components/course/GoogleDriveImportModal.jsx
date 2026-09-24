@@ -190,8 +190,7 @@ function GoogleDriveImportModal({ isOpen, onClose, onImport }) {
                                 </div>
 
                                 <div>
-                                    <label className="block text-xs text-light-text-secondary dark:text-dark-text-secondary mb-1 flex items-center gap-1.5 font-medium">
-                                        <Languages className="w-3.5 h-3.5 text-primary" />
+                                    <label className="block text-xs text-light-text-secondary dark:text-dark-text-secondary mb-1 font-medium">
                                         Language
                                     </label>
                                     <select

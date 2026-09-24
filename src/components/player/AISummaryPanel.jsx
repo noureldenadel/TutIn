@@ -145,7 +145,10 @@ function AISummaryPanel({ video, courseId, course, onSeek, onVideoDataChange, cu
                         setProgress(progressData)
                     }
                 },
-                course
+                course,
+                settings.openRouterApiKey,
+                settings.openRouterModel,
+                settings.aiDevice
             )
 
             if (activeVideoIdRef.current !== targetVideoId) return
@@ -198,11 +201,17 @@ function AISummaryPanel({ video, courseId, course, onSeek, onVideoDataChange, cu
                 throw new Error('No transcript available to summarize.')
             }
 
-            const newSummary = await regenerateSummaryOnly(targetVideoId, fullText, (progressData) => {
-                if (activeVideoIdRef.current === targetVideoId) {
-                    setProgress(progressData)
-                }
-            })
+            const newSummary = await regenerateSummaryOnly(
+                targetVideoId, 
+                fullText, 
+                (progressData) => {
+                    if (activeVideoIdRef.current === targetVideoId) {
+                        setProgress(progressData)
+                    }
+                },
+                settings.openRouterApiKey,
+                settings.openRouterModel
+            )
 
             if (activeVideoIdRef.current !== targetVideoId) return
 
@@ -495,7 +504,7 @@ function AISummaryPanel({ video, courseId, course, onSeek, onVideoDataChange, cu
                                         </span>
                                     </div>
                                     <div className="flex items-center gap-1">
-                                        {transcript && (
+                                        {(transcript || captionChunks.length > 0) && (
                                             <button
                                                 onClick={handleRegenerateSummary}
                                                 className="p-1.5 hover:bg-black/5 dark:hover:bg-white/10 rounded-lg transition-colors text-light-text-secondary dark:text-dark-text-secondary hover:text-light-text dark:hover:text-dark-text"
@@ -523,7 +532,7 @@ function AISummaryPanel({ video, courseId, course, onSeek, onVideoDataChange, cu
                                     </div>
                                 </div>
 
-                                <div className="prose dark:prose-invert prose-sm max-w-none flex-1 overflow-y-auto pr-1">
+                                <div className="note-content flex-1 overflow-y-auto pr-1">
                                     <ReactMarkdown>{summary}</ReactMarkdown>
                                 </div>
                             </>

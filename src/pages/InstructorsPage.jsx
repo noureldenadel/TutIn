@@ -20,9 +20,9 @@ function InstructorsPage() {
         loadCourses()
     }, [])
 
-    async function loadCourses() {
+    async function loadCourses(showSpinner = false) {
         try {
-            setIsLoading(true)
+            if (showSpinner) setIsLoading(true)
             const allCourses = await getAllCourses()
             setCourses(allCourses)
 

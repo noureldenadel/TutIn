@@ -176,9 +176,9 @@ function CoursePlayerPage() {
         }
     }, [course?.instructor])
 
-    async function loadCourseData() {
+    async function loadCourseData(showSpinner = true) {
         try {
-            setIsLoading(true)
+            if (showSpinner) setIsLoading(true)
 
             // Get course
             const courseData = await getCourse(courseId)

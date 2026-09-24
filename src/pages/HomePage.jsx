@@ -56,9 +56,9 @@ function HomePage() {
         localStorage.setItem('tutin_sort', sortBy)
     }, [sortBy])
 
-    async function loadCourses() {
+    async function loadCourses(showSpinner = false) {
         try {
-            setIsLoading(true)
+            if (showSpinner) setIsLoading(true)
             const allCourses = await getAllCourses()
             setCourses(allCourses)
         } catch (err) {

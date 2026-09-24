@@ -14,9 +14,9 @@ function StatisticsPage() {
         loadData()
     }, [])
 
-    async function loadData() {
+    async function loadData(showSpinner = false) {
         try {
-            setIsLoading(true)
+            if (showSpinner) setIsLoading(true)
             const [allCourses, recent] = await Promise.all([
                 getAllCourses(),
                 getRecentlyWatchedVideos(100)

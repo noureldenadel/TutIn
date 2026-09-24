@@ -15,9 +15,9 @@ function HistoryPage() {
         loadHistory()
     }, [])
 
-    async function loadHistory() {
+    async function loadHistory(showSpinner = false) {
         try {
-            setIsLoading(true)
+            if (showSpinner) setIsLoading(true)
             const [recent, allCourses] = await Promise.all([
                 getRecentlyWatchedVideos(100), // Get more for full history
                 getAllCourses()

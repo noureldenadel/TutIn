@@ -141,6 +141,7 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
     const [smartCaptionData, setSmartCaptionData] = useState(null)
     const dubAudioRef = useRef(null)
     const [dubLanguages, setDubLanguages] = useState([])
+    const [isDubLoading, setIsDubLoading] = useState(true)
     const [selectedDubLang, setSelectedDubLang] = useState('none')
     const [showDubModal, setShowDubModal] = useState(false)
     const [showSettingsMenu, setShowSettingsMenu] = useState(false)
@@ -231,9 +232,16 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
 
     // Helper to fetch available dub languages
     const fetchDubLanguages = useCallback((videoId = video?.id) => {
-        if (!videoId) return
-        if (video?.youtubeId || video?.url?.startsWith('http')) return
+        if (!videoId) {
+            setIsDubLoading(false)
+            return
+        }
+        if (video?.youtubeId || video?.url?.startsWith('http')) {
+            setIsDubLoading(false)
+            return
+        }
 
+        setIsDubLoading(true)
         fetch(`${SERVER_URL}/api/dub/video/${videoId}/languages`)
             .then(res => {
                 if (!res.ok) return []
@@ -245,17 +253,14 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
                 }
             })
             .catch(err => console.error('Failed to fetch dub languages:', err))
+            .finally(() => setIsDubLoading(false))
     }, [video?.id, video?.youtubeId, video?.url])
 
     // Fetch dub languages on video change and listen for updates
     useEffect(() => {
+        setIsDubLoading(true)
+        setDubLanguages([]) // Reset when video changes
         fetchDubLanguages()
-        
-        if (settings.isDubbingEnabled && settings.dubLanguage) {
-            setSelectedDubLang(settings.dubLanguage)
-        } else {
-            setSelectedDubLang('none')
-        }
 
         const handleDubUpdated = (e) => {
             if (e.detail?.videoId === video?.id) {
@@ -274,16 +279,25 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
                 setDubLanguages(prev => Array.from(new Set([...prev, ...readyLangs])))
             }
         }
-    }, [video?.dubbedTracks])
+    }, [video?.dubbedTracks, video?.id])
 
     // Sync with global settings when user clicks dub tracks in other panels
+    // Fall back to original sound if the selected dub is not available
     useEffect(() => {
+        if (isDubLoading) return // Wait until we finish fetching dubs for this video
+
         if (settings.isDubbingEnabled && settings.dubLanguage) {
-            setSelectedDubLang(settings.dubLanguage)
+            if (dubLanguages.includes(settings.dubLanguage)) {
+                setSelectedDubLang(settings.dubLanguage)
+            } else {
+                setSelectedDubLang('none')
+                // Video doesn't have this dub, disable globally to avoid surprise auto-play when navigating back
+                updateSettings({ isDubbingEnabled: false })
+            }
         } else {
             setSelectedDubLang('none')
         }
-    }, [settings.isDubbingEnabled, settings.dubLanguage])
+    }, [settings.isDubbingEnabled, settings.dubLanguage, dubLanguages, isDubLoading, updateSettings])
 
     // Load and sync dub audio when selectedDubLang changes
     useEffect(() => {

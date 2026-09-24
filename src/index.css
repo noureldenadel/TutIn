@@ -419,7 +419,8 @@ a:focus:not(:focus-visible) {
   pointer-events: none;
 }
 
-.note-editor img {
+.note-editor img,
+.note-content img {
   max-width: 100%;
   height: auto;
   border-radius: 6px;
@@ -428,20 +429,25 @@ a:focus:not(:focus-visible) {
 }
 
 .note-editor ul,
-.note-editor ol {
+.note-content ul,
+.note-editor ol,
+.note-content ol {
   padding-left: 1.5em;
   margin: 4px 0;
 }
 
-.note-editor ul {
+.note-editor ul,
+.note-content ul {
   list-style-type: none; /* custom bullet */
 }
 
-.note-editor ol {
+.note-editor ol,
+.note-content ol {
   list-style-type: decimal;
 }
 
-.note-editor li {
+.note-editor li,
+.note-content li {
   margin: 2px 0;
   position: relative;
 }
@@ -450,7 +456,8 @@ a:focus:not(:focus-visible) {
 /* Matching font-size to the heading — grayer muted shade on light and dark mode */
 
 /* Heading prefixes */
-.note-editor h1::before {
+.note-editor h1::before,
+.note-content h1::before {
   content: "# ";
   font-size: 1em;
   font-weight: 400;
@@ -458,7 +465,8 @@ a:focus:not(:focus-visible) {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
 }
 
-.note-editor h2::before {
+.note-editor h2::before,
+.note-content h2::before {
   content: "## ";
   font-size: 1em;
   font-weight: 400;
@@ -466,7 +474,8 @@ a:focus:not(:focus-visible) {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
 }
 
-.note-editor h3::before {
+.note-editor h3::before,
+.note-content h3::before {
   content: "### ";
   font-size: 1em;
   font-weight: 400;
@@ -475,7 +484,8 @@ a:focus:not(:focus-visible) {
 }
 
 /* Blockquote ">" prefix */
-.note-editor blockquote::before {
+.note-editor blockquote::before,
+.note-content blockquote::before {
   content: "> ";
   font-size: 1em;
   font-weight: 400;
@@ -485,7 +495,8 @@ a:focus:not(:focus-visible) {
 }
 
 /* Bullet list prefix */
-.note-editor ul > li::before {
+.note-editor ul > li::before,
+.note-content ul > li::before {
   content: "•";
   position: absolute;
   left: -1.1em;
@@ -496,7 +507,8 @@ a:focus:not(:focus-visible) {
 }
 
 /* Ordered list number styling */
-.note-editor ol > li::marker {
+.note-editor ol > li::marker,
+.note-content ol > li::marker {
   color: #9ca3af;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
   font-weight: 500;
@@ -505,19 +517,25 @@ a:focus:not(:focus-visible) {
 /* Dark mode: slightly muted slate-gray */
 .dark .note-editor h1::before,
 .dark .note-editor h2::before,
-.dark .note-editor h3::before {
+.dark .note-editor h3::before,
+.dark .note-content h1::before,
+.dark .note-content h2::before,
+.dark .note-content h3::before {
   color: #6b7280;
 }
 
-.dark .note-editor blockquote::before {
+.dark .note-editor blockquote::before,
+.dark .note-content blockquote::before {
   color: #6b7280;
 }
 
-.dark .note-editor ul > li::before {
+.dark .note-editor ul > li::before,
+.dark .note-content ul > li::before {
   color: #6b7280;
 }
 
-.dark .note-editor ol > li::marker {
+.dark .note-editor ol > li::marker,
+.dark .note-content ol > li::marker {
   color: #6b7280;
 }
 

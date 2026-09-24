@@ -312,9 +312,8 @@ function ImportPreviewModal({
                         </div>
 
                         <div>
-                            <label className="block text-sm font-medium mb-2 flex items-center gap-1.5">
-                                <Globe className="w-4 h-4 text-primary-fg" />
-                                <span>Language</span>
+                            <label className="block text-sm font-medium mb-2">
+                                Language
                             </label>
                             <select
                                 value={language}

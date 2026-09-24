@@ -287,8 +287,7 @@ function YouTubeImportModal({ isOpen, onClose, onImport }) {
                     {previewData && (
                         <div className="space-y-4">
                             <div>
-                                <label className="block text-sm font-medium mb-1 flex items-center gap-2">
-                                    <Languages className="w-4 h-4 text-primary" />
+                                <label className="block text-sm font-medium mb-1">
                                     Language
                                 </label>
                                 <select

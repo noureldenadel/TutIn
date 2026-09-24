@@ -37,17 +37,15 @@ function AppContent() {
                     ${isExpanded ? 'md:ml-64' : 'md:ml-20'}
                 `}
             >
-                <Suspense fallback={<LoadingSpinner />}>
-                    <Routes>
-                        <Route path="/" element={<div className="max-w-7xl mx-auto w-full"><HomePage /></div>} />
-                        <Route path="/course/:courseId" element={<CoursePlayerPage />} />
-                        <Route path="/course/:courseId/canvas" element={<CourseCanvasPage />} />
-                        <Route path="/instructors" element={<div className="max-w-7xl mx-auto w-full"><InstructorsPage /></div>} />
-                        <Route path="/history" element={<div className="max-w-7xl mx-auto w-full"><HistoryPage /></div>} />
-                        <Route path="/statistics" element={<div className="max-w-7xl mx-auto w-full"><StatisticsPage /></div>} />
-                        <Route path="/roadmap" element={<div className="max-w-7xl mx-auto w-full"><RoadmapPage /></div>} />
-                    </Routes>
-                </Suspense>
+                <Routes>
+                    <Route path="/" element={<Suspense fallback={<LoadingSpinner />}><div className="max-w-7xl mx-auto w-full"><HomePage /></div></Suspense>} />
+                    <Route path="/course/:courseId" element={<Suspense fallback={<LoadingSpinner />}><CoursePlayerPage /></Suspense>} />
+                    <Route path="/course/:courseId/canvas" element={<Suspense fallback={<LoadingSpinner />}><CourseCanvasPage /></Suspense>} />
+                    <Route path="/instructors" element={<Suspense fallback={<LoadingSpinner />}><div className="max-w-7xl mx-auto w-full"><InstructorsPage /></div></Suspense>} />
+                    <Route path="/history" element={<Suspense fallback={<LoadingSpinner />}><div className="max-w-7xl mx-auto w-full"><HistoryPage /></div></Suspense>} />
+                    <Route path="/statistics" element={<Suspense fallback={<LoadingSpinner />}><div className="max-w-7xl mx-auto w-full"><StatisticsPage /></div></Suspense>} />
+                    <Route path="/roadmap" element={<Suspense fallback={<LoadingSpinner />}><div className="max-w-7xl mx-auto w-full"><RoadmapPage /></div></Suspense>} />
+                </Routes>
             </main>
 
             {/* First-launch Welcome Guide */}
