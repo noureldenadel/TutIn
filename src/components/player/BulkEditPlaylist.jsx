@@ -1,8 +1,10 @@
 import { useState, useRef, useEffect } from 'react'
-import { GripVertical, Folder, Video, ChevronDown, ChevronRight } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
+import { GripVertical, Folder, Video, ChevronDown, ChevronRight, Settings } from 'lucide-react'
 import { formatDuration } from '../../utils/db'
 
-function BulkEditPlaylist({ modules: initialModules, onSave, onCancel }) {
+function BulkEditPlaylist({ modules: initialModules, onSave, onCancel, courseId, currentVideoId }) {
+    const navigate = useNavigate()
     const [items, setItems] = useState(initialModules)
     // Drag state
     const [draggedItem, setDraggedItem] = useState(null) // { type: 'module'|'video', id, parentId (moduleId) }
@@ -232,19 +234,28 @@ function BulkEditPlaylist({ modules: initialModules, onSave, onCancel }) {
             </div>
 
             {/* Footer Actions */}
-            <div className="p-4 border-t border-light-border dark:border-dark-border flex gap-2 bg-light-surface dark:bg-dark-surface">
+            <div className="p-4 border-t border-light-border dark:border-dark-border flex flex-col gap-2 bg-light-surface dark:bg-dark-surface">
                 <button
-                    onClick={onCancel}
-                    className="flex-1 py-2 border border-light-border dark:border-dark-border rounded-lg hover:bg-light-surface dark:hover:bg-dark-bg text-sm font-medium transition-colors"
+                    onClick={() => navigate(`/course/${courseId}/manage`, { state: { currentVideoId } })}
+                    className="w-full py-2 flex items-center justify-center gap-2 border border-blue-500 text-blue-500 rounded-lg hover:bg-blue-50 dark:hover:bg-blue-500/10 text-sm font-medium transition-colors"
                 >
-                    Cancel
+                    <Settings className="w-4 h-4" />
+                    Advanced Course Manager
                 </button>
-                <button
-                    onClick={() => onSave(items)}
-                    className="flex-1 py-2 bg-primary text-white rounded-lg hover:bg-primary/90 text-sm font-medium transition-colors"
-                >
-                    Save Changes
-                </button>
+                <div className="flex gap-2">
+                    <button
+                        onClick={onCancel}
+                        className="flex-1 py-2 border border-light-border dark:border-dark-border rounded-lg hover:bg-light-surface dark:hover:bg-dark-bg text-sm font-medium transition-colors"
+                    >
+                        Cancel
+                    </button>
+                    <button
+                        onClick={() => onSave(items)}
+                        className="flex-1 py-2 bg-primary text-white rounded-lg hover:bg-primary/90 text-sm font-medium transition-colors"
+                    >
+                        Save Changes
+                    </button>
+                </div>
             </div>
         </div>
     )

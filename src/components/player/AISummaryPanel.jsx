@@ -41,7 +41,7 @@ function AISummaryPanel({ video, courseId, course, onSeek, onVideoDataChange, cu
     const [isProcessing, setIsProcessing] = useState(false)
     const [progress, setProgress] = useState({ stage: '', progress: 0, message: '' })
     const [error, setError] = useState(null)
-    const [activeTab, setActiveTab] = useState('summary')
+    const [activeTab, setActiveTab] = useState('transcript')
     const [missingCaptions, setMissingCaptions] = useState(false)
     const [languages, setLanguages] = useState({ sourceExists: false, translatedLangs: [], existingLangs: [] })
     const [dubLanguages, setDubLanguages] = useState([])
@@ -100,7 +100,7 @@ function AISummaryPanel({ video, courseId, course, onSeek, onVideoDataChange, cu
                 setLanguages(data)
                 
                 // If captions exist, load the active one
-                const activeLang = settings.captionLanguage || 'source'
+                const activeLang = video?.primaryTranscript || settings.captionLanguage || 'source'
                 loadCaptionChunks(activeLang)
             }
         } catch { }
@@ -411,15 +411,6 @@ function AISummaryPanel({ video, courseId, course, onSeek, onVideoDataChange, cu
             <div className="p-4 pb-3 flex-shrink-0">
                 <div className="flex bg-light-surface dark:bg-dark-bg rounded-lg p-1">
                     <button
-                        onClick={() => setActiveTab('summary')}
-                        className={`flex-1 py-2 px-3 rounded-md text-sm font-medium transition-colors ${activeTab === 'summary'
-                            ? 'bg-white dark:bg-dark-surface shadow-sm'
-                            : 'text-light-text-secondary dark:text-dark-text-secondary'
-                            }`}
-                    >
-                        Summary
-                    </button>
-                    <button
                         onClick={() => setActiveTab('transcript')}
                         className={`flex-1 py-2 px-3 rounded-md text-sm font-medium transition-colors ${activeTab === 'transcript'
                             ? 'bg-white dark:bg-dark-surface shadow-sm'
@@ -427,6 +418,15 @@ function AISummaryPanel({ video, courseId, course, onSeek, onVideoDataChange, cu
                             }`}
                     >
                         Transcript
+                    </button>
+                    <button
+                        onClick={() => setActiveTab('summary')}
+                        className={`flex-1 py-2 px-3 rounded-md text-sm font-medium transition-colors ${activeTab === 'summary'
+                            ? 'bg-white dark:bg-dark-surface shadow-sm'
+                            : 'text-light-text-secondary dark:text-dark-text-secondary'
+                            }`}
+                    >
+                        Summary
                     </button>
                 </div>
             </div>
@@ -532,7 +532,7 @@ function AISummaryPanel({ video, courseId, course, onSeek, onVideoDataChange, cu
                                     </div>
                                 </div>
 
-                                <div className="note-content flex-1 overflow-y-auto pr-1">
+                                <div className="note-content flex-1 overflow-y-auto pr-1" dir="auto">
                                     <ReactMarkdown>{summary}</ReactMarkdown>
                                 </div>
                             </>
@@ -775,14 +775,14 @@ function AISummaryPanel({ video, courseId, course, onSeek, onVideoDataChange, cu
                                                     <span className="text-primary-fg font-mono text-xs shrink-0 pt-0.5 font-medium">
                                                         {formatTime(start)}
                                                     </span>
-                                                    <span className="text-light-text-secondary dark:text-dark-text-secondary text-xs leading-relaxed">
+                                                    <span className="text-light-text-secondary dark:text-dark-text-secondary text-xs leading-relaxed" dir="auto">
                                                         {chunk.text}
                                                     </span>
                                                 </div>
                                             )
                                         })
                                     ) : transcript ? (
-                                        <p className="text-sm whitespace-pre-wrap">{transcript}</p>
+                                        <p className="text-sm whitespace-pre-wrap" dir="auto">{transcript}</p>
                                     ) : (
                                         <div className="text-center py-10 text-light-text-secondary dark:text-dark-text-secondary space-y-3 flex-1 flex flex-col items-center justify-center">
                                             <Captions className="w-10 h-10 mx-auto opacity-30 text-primary-fg" />

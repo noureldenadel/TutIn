@@ -128,7 +128,19 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
     const [captionsEnabled, setCaptionsEnabled] = useState(() => settings.captionsEnabled)
     const [captionPosition, setCaptionPosition] = useState(() => settings.captionPosition)
     const [captionLanguages, setCaptionLanguages] = useState({ sourceExists: false, translatedLangs: [], existingLangs: [] })
-    const [selectedCaptionLang, setSelectedCaptionLang] = useState(() => settings.captionLanguage || 'source')
+    
+    // Default to video.primaryTranscript if available, otherwise global settings
+    const [selectedCaptionLang, setSelectedCaptionLang] = useState(() => {
+        return video?.primaryTranscript || settings.captionLanguage || 'source'
+    })
+    
+    // Sync if video changes and has a primaryTranscript
+    useEffect(() => {
+        if (video?.primaryTranscript && video.primaryTranscript !== selectedCaptionLang) {
+            setSelectedCaptionLang(video.primaryTranscript)
+        }
+    }, [video?.id, video?.primaryTranscript])
+
     const [captionChunks, setCaptionChunks] = useState([])
     const [showAudioSubMenu, setShowAudioSubMenu] = useState(false)
     const [isSpeedBoosting, setIsSpeedBoosting] = useState(false)

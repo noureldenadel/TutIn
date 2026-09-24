@@ -234,6 +234,7 @@ function runMigrations() {
         { name: '003_canvas_whiteboard_schema', fn: migration003 },
         { name: '004_dubbed_tracks_schema', fn: migration004 },
         { name: '005_course_language', fn: migration005 },
+        { name: '006_primary_transcript', fn: migration006 },
     ]
 
     for (const migration of migrations) {
@@ -528,3 +529,13 @@ function migration005() {
     }
 }
 
+/**
+ * Migration 006: Primary Transcript
+ */
+function migration006() {
+    const columns = getAll("PRAGMA table_info(videos)")
+    const hasPrimaryTranscript = columns.some(col => col.name === 'primary_transcript')
+    if (!hasPrimaryTranscript) {
+        db.run("ALTER TABLE videos ADD COLUMN primary_transcript TEXT")
+    }
+}

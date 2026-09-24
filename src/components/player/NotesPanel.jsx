@@ -1055,6 +1055,7 @@ function NoteEditor({
                     onDrop={handleDrop}
                     className="note-editor w-full min-h-full text-sm focus:outline-none"
                     data-placeholder={placeholder}
+                    dir="auto"
                 />
 
                 {/* Ghost text is rendered INLINE inside contentEditable via ghostSpanRef — no overlay div needed */}
@@ -1929,6 +1930,7 @@ function NotesPanel({
                                         <div
                                             className="note-content text-sm select-text"
                                             title="Click on any screenshot to view full size"
+                                            dir="auto"
                                             onClick={(e) => {
                                                 if (e.target.tagName === 'IMG' && e.target.src) {
                                                     e.stopPropagation()

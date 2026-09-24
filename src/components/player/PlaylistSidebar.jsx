@@ -1,4 +1,5 @@
 import { useState, useMemo, useRef, useEffect, useCallback } from 'react'
+import { useNavigate } from 'react-router-dom'
 import {
     ChevronDown, ChevronRight, ChevronLeft, Check,
     Pencil, GripVertical, Folder, FolderOpen
@@ -57,6 +58,7 @@ function PlaylistSidebar({
     getPlaybackState,
     onWidthChange
 }) {
+    const navigate = useNavigate()
     const [expandedModules, setExpandedModules] = useState(() => {
         // Expand all modules by default (including sub-modules)
         function expandAll(mods) {
@@ -409,11 +411,15 @@ function PlaylistSidebar({
                     {/* Playlist Tab */}
                     <div className={`flex-1 overflow-hidden flex-col ${activeTab === 'playlist' ? 'flex' : 'hidden'}`}>
                         {isBulkEditing ? (
-                            <BulkEditPlaylist
-                                modules={modules}
-                                onSave={handleBulkSave}
-                                onCancel={() => setIsBulkEditing(false)}
-                            />
+                            <div className="flex-1 overflow-hidden flex flex-col">
+                                <BulkEditPlaylist
+                                    modules={modules}
+                                    onSave={handleBulkSave}
+                                    onCancel={() => setIsBulkEditing(false)}
+                                    courseId={courseId}
+                                    currentVideoId={currentVideo?.id}
+                                />
+                            </div>
                         ) : (
                             <div className="flex-1 overflow-y-auto">
                                 {modules.map(module => renderModule(module, 0))}

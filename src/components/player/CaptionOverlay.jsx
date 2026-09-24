@@ -253,7 +253,6 @@ export default function CaptionOverlay({
                     ? 'none'
                     : 'left 0.1s, top 0.1s, transform 0.25s ease, opacity 0.25s ease',
                 whiteSpace: 'pre-wrap',
-                direction: 'ltr',
             }}
             className="backdrop-blur-sm shadow-lg"
         >

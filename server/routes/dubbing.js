@@ -67,9 +67,66 @@ router.post('/video/:videoId', async (req, res) => {
         
         // 1. Get captions for target language
         const subtitleSources = JSON.parse(video.subtitle_sources || '[]')
-        const chunks = loadCaptionChunks(video.id, targetLanguage, subtitleSources, coursePath, relModPath, videoBaseName)
+        let chunks = loadCaptionChunks(video.id, targetLanguage, subtitleSources, coursePath, relModPath, videoBaseName)
+        
+        // If no target-language captions exist, auto-translate from source before dubbing
         if (!chunks || chunks.length === 0) {
-            return res.status(400).json({ error: `Captions for language '${targetLanguage}' must be generated/translated before dubbing.` })
+            console.log(`[Dub] No '${targetLanguage}' captions found — auto-translating from source first...`)
+            
+            // Load source captions (use the ai_source lang or 'source')
+            let actualSourceLang = 'source'
+            const aiSource = subtitleSources.find(s => s.is_ai_source)
+            if (aiSource) actualSourceLang = aiSource.lang
+            
+            const sourceChunks = loadCaptionChunks(video.id, actualSourceLang, subtitleSources, coursePath, relModPath, videoBaseName)
+            
+            if (!sourceChunks || sourceChunks.length === 0) {
+                return res.status(400).json({ 
+                    error: `No source captions found for this video. Please transcribe the video first before dubbing.` 
+                })
+            }
+
+            // Check if source language is the same as target — no translation needed
+            const normalizedSource = (actualSourceLang === 'source' ? (aiSource?.lang || 'en') : actualSourceLang).toLowerCase()
+            const normalizedTarget = targetLanguage.toLowerCase()
+
+            if (normalizedSource === normalizedTarget) {
+                // Same language — use source chunks directly for dubbing
+                chunks = sourceChunks
+                console.log(`[Dub] Source and target language are the same (${normalizedTarget}), using source captions directly.`)
+            } else {
+                // Different language — run translation now
+                const { translateChunks } = await import('../utils/aiTranslation.js')
+                const { saveCaptionFile } = await import('../utils/courseAssets.js')
+                
+                const courseRecord = getOne('SELECT folder_path FROM courses WHERE id = ?', [video.course_id])
+                const courseFolder = courseRecord?.folder_path || null
+                
+                const translated = await translateChunks(sourceChunks, targetLanguage, null, null, null, null, normalizedSource)
+                if (!translated || translated.length === 0) {
+                    return res.status(400).json({ error: `Auto-translation to '${targetLanguage}' failed. Please translate the video captions manually first.` })
+                }
+                
+                // Save translated captions so they're available for future dubs too
+                try {
+                    const videoMeta = {
+                        id: video.id,
+                        courseFolder,
+                        relModulePath: relModPath,
+                        videoBaseName
+                    }
+                    const filePath = saveCaptionFile(videoMeta, targetLanguage, translated, 'generated')
+                    
+                    const currentSources = subtitleSources.filter(s => !(s.lang === targetLanguage && s.origin === 'generated'))
+                    currentSources.push({ lang: targetLanguage, filePath, origin: 'generated', format: 'vtt' })
+                    run(`UPDATE videos SET subtitle_sources = ? WHERE id = ?`, [JSON.stringify(currentSources), video.id])
+                    console.log(`[Dub] Auto-translated captions saved to ${filePath}`)
+                } catch (saveErr) {
+                    console.warn('[Dub] Could not save translated captions:', saveErr.message)
+                }
+                
+                chunks = translated
+            }
         }
         
         // 2. Resolve device preference from request or settings
@@ -84,14 +141,14 @@ router.post('/video/:videoId', async (req, res) => {
         // 3. Submit to python backend
         const jobId = await submitDubJob(video.id, videoPath, chunks, targetLanguage, voiceReferencePath, devicePref)
         
-        // 3. Save job to DB
+        // 4. Save job to DB
         const now = new Date().toISOString()
         run(`
             INSERT INTO dub_jobs (id, video_id, language, status, created_at)
             VALUES (?, ?, ?, ?, ?)
         `, [jobId, video.id, targetLanguage, 'queued', now])
 
-        // 4. Update video dubbed_tracks to record generating status
+        // 5. Update video dubbed_tracks to record generating status
         try {
             const existingTracks = JSON.parse(video.dubbed_tracks || '[]')
             const updatedTracks = existingTracks.filter(t => t.language !== targetLanguage)
@@ -112,6 +169,7 @@ router.post('/video/:videoId', async (req, res) => {
         res.status(500).json({ error: err.message })
     }
 })
+
 
 // GET /api/dub/video/:videoId/status
 router.get('/video/:videoId/status', async (req, res) => {

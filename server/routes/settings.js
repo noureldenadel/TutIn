@@ -26,6 +26,17 @@ router.get('/', (req, res) => {
     }
 })
 
+// GET /api/settings/openrouter-status — returns whether key is configured (does NOT expose the key)
+router.get('/openrouter-status', (req, res) => {
+    try {
+        const row = getOne("SELECT value FROM settings WHERE key = 'openRouterApiKey'")
+        const hasKey = !!row?.value && JSON.parse(row.value)?.trim()?.length > 0
+        res.json({ hasKey: !!hasKey })
+    } catch {
+        res.json({ hasKey: false })
+    }
+})
+
 // PUT /api/settings
 router.put('/', (req, res) => {
     const updates = req.body

@@ -220,12 +220,23 @@ export function loadCaptionChunks(videoId, lang, subtitleSources = [], courseFol
 
     if (isLocalCourse) {
         // 1. Try subtitle_sources entry if available and valid
+        let targetLang = lang
+        let targetOrigin = null
+        if (lang && lang.includes(':')) {
+            const parts = lang.split(':')
+            targetLang = parts[0]
+            targetOrigin = parts[1]
+        }
+
         let sourceEntry = subtitleSources.find(s =>
-            ((lang === 'source' && (!s.lang || s.lang === 'source')) || s.lang === lang) && s.is_master
+            ((targetLang === 'source' && (!s.lang || s.lang === 'source')) || s.lang === targetLang) && 
+            (!targetOrigin || s.origin === targetOrigin) &&
+            s.is_master
         )
         if (!sourceEntry) {
             sourceEntry = subtitleSources.find(s =>
-                (lang === 'source' && (!s.lang || s.lang === 'source')) || s.lang === lang
+                ((targetLang === 'source' && (!s.lang || s.lang === 'source')) || s.lang === targetLang) && 
+                (!targetOrigin || s.origin === targetOrigin)
             )
         }
         if (sourceEntry?.filePath && fs.existsSync(sourceEntry.filePath)) {

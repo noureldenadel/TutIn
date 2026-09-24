@@ -1,4 +1,5 @@
 import express from 'express'
+import fs from 'fs'
 import { getAll, getOne, run, transaction } from '../database.js'
 import { recalculateCourseProgress } from './courses.js'
 
@@ -34,8 +35,9 @@ function mapVideoRow(video) {
         youtubeId: video.youtube_id,
         url: video.url,
         hasTranscript: video.has_transcript === 1,
-        subtitleSources: JSON.parse(video.subtitle_sources || '[]'),
-        dubbedTracks: JSON.parse(video.dubbed_tracks || '[]')
+        primaryTranscript: video.primary_transcript,
+        subtitleSources: JSON.parse(video.subtitle_sources || '[]').filter(s => !s.filePath || fs.existsSync(s.filePath)),
+        dubbedTracks: JSON.parse(video.dubbed_tracks || '[]').filter(t => t.filePath && fs.existsSync(t.filePath))
     }
 }
 
@@ -133,7 +135,8 @@ router.put('/:id', (req, res) => {
             completedAt: 'completed_at',
             watchCount: 'watch_count',
             youtubeId: 'youtube_id',
-            url: 'url'
+            url: 'url',
+            primaryTranscript: 'primary_transcript'
         }
 
         for (const [key, dbField] of Object.entries(fieldMap)) {

@@ -245,7 +245,7 @@ def map_xtts_lang(lang: str) -> str:
     # XTTS v2 supported languages: en, es, fr, de, it, pt, pl, tr, ru, nl, cs, ar, zh-cn, hu, ko, ja, hi
     l = lang.lower().strip()
     if l == 'zh': return 'zh-cn'
-    if l == 'ar': return 'ar'
+    if l in ('ar', 'ar-eg', 'ar-sa'): return 'ar'
     if l == 'es': return 'es'
     if l == 'fr': return 'fr'
     if l == 'de': return 'de'
@@ -371,8 +371,8 @@ def apply_atempo_filter(input_wav: str, output_wav: str, speed_factor: float):
     Apply FFmpeg atempo filter to speed up audio clip.
     FFmpeg atempo filter accepts 0.5 to 2.0. If speed_factor > 2.0, chain filters.
     """
-    # Clamp speed factor between 0.5 and 2.5
-    factor = max(0.5, min(speed_factor, 2.5))
+    # Clamp speed factor between 0.5 and 1.5 to avoid extreme robotic/metallic artifacts
+    factor = max(0.5, min(speed_factor, 1.5))
     
     filter_chain = []
     current_factor = factor
@@ -507,8 +507,9 @@ def process_dubbing_job(job_id: str, req: DubRequest):
 
         # Normalize audio levels
         master_audio = master_audio.normalize()
-        master_audio.export(output_path, format="mp3", bitrate="192k")
-        print(f"[XTTS Dubbing] Exported final dubbed MP3 -> {output_path}")
+        # Export as 128k mono MP3 — high quality for speech, ~50% smaller than 192k stereo
+        master_audio.export(output_path, format="mp3", bitrate="128k", parameters=["-ac", "1"])
+        print(f"[XTTS Dubbing] Exported final dubbed MP3 (128k Mono) -> {output_path}")
 
         job["status"] = "done"
         job["step"] = "Complete"
