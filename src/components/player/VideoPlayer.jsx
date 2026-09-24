@@ -1940,6 +1940,7 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
                                                         <button
                                                             onClick={() => {
                                                                 setSelectedDubLang('none')
+                                                                updateSettings({ dubLanguage: 'none', isDubbingEnabled: false })
                                                             }}
                                                             className={`w-full px-2.5 py-1.5 rounded-lg text-left hover:bg-white/10 flex items-center justify-between transition-colors ${
                                                                 selectedDubLang === 'none'
@@ -1966,6 +1967,7 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
                                                                 key={`dub-${lang}`}
                                                                 onClick={() => {
                                                                     setSelectedDubLang(lang)
+                                                                    updateSettings({ dubLanguage: lang, isDubbingEnabled: true })
                                                                 }}
                                                                 className={`w-full px-2.5 py-1.5 rounded-lg text-left hover:bg-white/10 flex items-center gap-2 transition-colors ${
                                                                     selectedDubLang === lang

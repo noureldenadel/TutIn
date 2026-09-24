@@ -8,6 +8,9 @@ const REQUIRES_OPENROUTER = new Set(['ar-eg', 'ar-sa'])
 
 export function JobSetupModal({ isOpen, onClose, videos, course, type, onStart }) {
     const [hasOpenRouterKey, setHasOpenRouterKey] = useState(false)
+    const sourceLang = (course?.language || 'en').toLowerCase().trim()
+    const defaultLang = sourceLang === 'ar' ? 'es' : 'ar'
+    const [targetLang, setTargetLang] = useState(defaultLang)
 
     useEffect(() => {
         if (!isOpen) return
@@ -19,13 +22,9 @@ export function JobSetupModal({ isOpen, onClose, videos, course, type, onStart }
 
     if (!isOpen) return null
 
-    const sourceLang = (course?.language || 'en').toLowerCase().trim()
     const sourceInfo = getLanguageInfo(sourceLang)
 
     const availableTargets = SUPPORTED_LANGUAGES.filter(l => l.code !== sourceLang)
-
-    const defaultLang = sourceLang === 'ar' ? 'es' : 'ar'
-    const [targetLang, setTargetLang] = useState(defaultLang)
 
     // If the currently selected lang requires OpenRouter but key is missing, reset
     const selectedLangInfo = SUPPORTED_LANGUAGES.find(l => l.code === targetLang)
@@ -34,6 +33,27 @@ export function JobSetupModal({ isOpen, onClose, videos, course, type, onStart }
     // Group languages: regular + dialect (grayed if no key)
     const regularLangs = availableTargets.filter(l => !l.requiresOpenRouter)
     const dialectLangs = availableTargets.filter(l => l.requiresOpenRouter)
+
+    // Check if target subtitles already exist across the selected videos
+    let readyCount = 0;
+    videos.forEach(v => {
+        try {
+            const sources = v.subtitleSources || [];
+            if (sources.some(s => s.lang === targetLang)) {
+                readyCount++;
+            }
+        } catch (e) { }
+    });
+    
+    let targetSubtitlesStatus = 'Will auto-generate';
+    let targetSubtitlesClass = 'bg-amber-500/20 text-amber-600 dark:text-amber-400';
+    if (readyCount === videos.length && videos.length > 0) {
+        targetSubtitlesStatus = 'Ready';
+        targetSubtitlesClass = 'bg-green-500/20 text-green-600 dark:text-green-400';
+    } else if (readyCount > 0) {
+        targetSubtitlesStatus = `Mixed (${readyCount} ready)`;
+        targetSubtitlesClass = 'bg-blue-500/20 text-blue-600 dark:text-blue-400';
+    }
 
     return (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[100] flex items-center justify-center p-4 animate-in fade-in duration-200">
@@ -95,6 +115,55 @@ export function JobSetupModal({ isOpen, onClose, videos, course, type, onStart }
                                     <Lock className="w-3 h-3 shrink-0" />
                                     Egyptian &amp; Gulf Arabic require an OpenRouter API key. Add it in <strong>Settings → OpenRouter API Key</strong>.
                                 </p>
+                            )}
+
+                            {/* Feature Highlights & Pipeline Status */}
+                            {type === 'dub' && (
+                                <div className="mt-6 bg-light-bg dark:bg-dark-bg p-4 rounded-lg border border-light-border dark:border-dark-border space-y-2.5 text-sm">
+                                    <div className="flex justify-between items-center">
+                                        <span className="opacity-70">Source Audio:</span>
+                                        <span className="font-semibold text-primary-fg">
+                                            <span>{sourceInfo.nativeName} ({sourceInfo.name})</span>
+                                        </span>
+                                    </div>
+                                    <div className="flex justify-between items-center">
+                                        <span className="opacity-70">Engine:</span>
+                                        <span className="font-medium">Coqui XTTS v2 (Local Clone)</span>
+                                    </div>
+                                    <div className="flex justify-between items-center">
+                                        <span className="opacity-70">Voice Reference:</span>
+                                        <span className="font-medium text-primary-fg">Auto 8–10s clean sample</span>
+                                    </div>
+                                    <div className="flex justify-between items-center">
+                                        <span className="opacity-70">Target Subtitles:</span>
+                                        <span className={`text-xs px-2 py-0.5 rounded ${targetSubtitlesClass}`}>
+                                            {targetSubtitlesStatus}
+                                        </span>
+                                    </div>
+                                    <div className="flex justify-between items-center">
+                                        <span className="opacity-70">Timeline Fit:</span>
+                                        <span className="font-medium">Adaptive atempo compression</span>
+                                    </div>
+                                </div>
+                            )}
+
+                            {type === 'translate' && (
+                                <div className="mt-6 bg-light-bg dark:bg-dark-bg p-4 rounded-lg border border-light-border dark:border-dark-border space-y-2.5 text-sm">
+                                    <div className="flex justify-between items-center">
+                                        <span className="opacity-70">Source Audio:</span>
+                                        <span className="font-semibold text-primary-fg">
+                                            <span>{sourceInfo.nativeName} ({sourceInfo.name})</span>
+                                        </span>
+                                    </div>
+                                    <div className="flex justify-between items-center">
+                                        <span className="opacity-70">Transcription:</span>
+                                        <span className="font-medium text-primary-fg">Whisper (Local AI)</span>
+                                    </div>
+                                    <div className="flex justify-between items-center">
+                                        <span className="opacity-70">Translation:</span>
+                                        <span className="font-medium">Smart LLM / API</span>
+                                    </div>
+                                </div>
                             )}
                         </div>
                     </div>

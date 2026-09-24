@@ -319,139 +319,145 @@ function SettingsModal({ isOpen, onClose }) {
                         {/* AI & API Keys Tab */}
                         {activeTab === 'ai_keys' && (
                             <div className="space-y-6">
-                                {/* AI Features Section */}
-                                <div className="space-y-6">
-                                    <h3 className="text-sm font-bold text-primary-fg uppercase tracking-wider">AI Features</h3>
-                                    
-                                    {/* AI Acceleration */}
-                                    <div>
-                                        <label className="block text-sm font-medium mb-3">Transcription Acceleration</label>
-                                        <div className="space-y-2">
-                                            {[
-                                                { value: 'auto', label: 'Auto (Recommended)', description: 'Uses GPU (WebGPU) if available, otherwise CPU' },
-                                                { value: 'gpu', label: 'GPU (WebGPU)', description: 'Fastest. Requires compatible browser & hardware' },
-                                                { value: 'cpu', label: 'CPU (WASM)', description: 'Slowest. High compatibility, works everywhere' }
-                                            ].map(option => (
-                                                <button
-                                                    key={option.value}
-                                                    onClick={() => updateSettings({ aiDevice: option.value })}
-                                                    className={`
-                                                        w-full flex items-center justify-between p-3 rounded-lg border-2 transition-all text-left
-                                                        ${settings.aiDevice === option.value
-                                                            ? 'border-primary-fg/40 bg-primary-fg/5'
-                                                            : 'border-light-border dark:border-dark-border hover:border-primary-fg/30'
-                                                        }
-                                                    `}
-                                                >
-                                                    <div>
-                                                        <div className="font-medium text-sm">{option.label}</div>
-                                                        <div className="text-xs text-light-text-secondary dark:text-dark-text-secondary">
-                                                            {option.description}
-                                                        </div>
-                                                    </div>
-                                                    {settings.aiDevice === option.value && (
-                                                        <Check className="w-5 h-5 text-primary-fg" />
-                                                    )}
-                                                </button>
-                                            ))}
+
+                                {/* ── AI Acceleration ── */}
+                                <div>
+                                    <h3 className="text-sm font-bold text-primary-fg uppercase tracking-wider mb-4">AI Acceleration</h3>
+
+                                    {/* Transcription row */}
+                                    <div className="p-4 rounded-xl border border-light-border dark:border-dark-border bg-light-surface dark:bg-dark-bg mb-3">
+                                        <div className="flex items-start justify-between gap-4">
+                                            <div className="flex items-center gap-2.5 min-w-0">
+                                                <div className="w-8 h-8 rounded-lg bg-blue-500/10 flex items-center justify-center shrink-0">
+                                                    <Zap className="w-4 h-4 text-blue-500" />
+                                                </div>
+                                                <div className="min-w-0">
+                                                    <div className="text-sm font-semibold">Transcription</div>
+                                                    <div className="text-xs text-light-text-secondary dark:text-dark-text-secondary">Whisper AI — runs in the browser</div>
+                                                </div>
+                                            </div>
+                                            <div className="flex items-center gap-1 shrink-0 bg-light-bg dark:bg-dark-bg rounded-lg p-1 border border-light-border dark:border-dark-border">
+                                                {[{ value: 'auto', label: 'Auto' }, { value: 'gpu', label: 'GPU' }, { value: 'cpu', label: 'CPU' }].map(opt => (
+                                                    <button
+                                                        key={opt.value}
+                                                        onClick={() => updateSettings({ aiDevice: opt.value })}
+                                                        className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${
+                                                            settings.aiDevice === opt.value
+                                                                ? 'bg-white dark:bg-dark-surface shadow-sm text-light-text dark:text-dark-text'
+                                                                : 'text-light-text-secondary dark:text-dark-text-secondary hover:text-light-text dark:hover:text-dark-text'
+                                                        }`}
+                                                    >
+                                                        {opt.label}
+                                                    </button>
+                                                ))}
+                                            </div>
+                                        </div>
+                                        <div className="mt-2 ml-10 text-[11px] text-light-text-secondary dark:text-dark-text-secondary">
+                                            {settings.aiDevice === 'auto' && 'Uses WebGPU if available, falls back to WASM'}
+                                            {settings.aiDevice === 'gpu' && 'Forces WebGPU — fastest, requires compatible browser & GPU'}
+                                            {settings.aiDevice === 'cpu' && 'Forces WASM — most compatible, slowest'}
                                         </div>
                                     </div>
 
-                                    {/* Dubbing Acceleration (XTTS) */}
-                                    <div>
-                                        <label className="block text-sm font-medium mb-3">Dubbing Acceleration (XTTS)</label>
-                                        
-                                        {/* GPU Status Card */}
-                                        <div className={`mb-3 p-3 rounded-lg border text-xs ${
-                                            gpuLoading ? 'border-light-border dark:border-dark-border bg-light-surface/50 dark:bg-dark-bg/50' :
-                                            gpuInfo?.gpu_available ? 'border-green-500/30 bg-green-500/5' : 'border-amber-500/30 bg-amber-500/5'
-                                        }`}>
+                                    {/* Dubbing row */}
+                                    <div className="p-4 rounded-xl border border-light-border dark:border-dark-border bg-light-surface dark:bg-dark-bg">
+                                        <div className="flex items-start justify-between gap-4">
+                                            <div className="flex items-center gap-2.5 min-w-0">
+                                                <div className="w-8 h-8 rounded-lg bg-purple-500/10 flex items-center justify-center shrink-0">
+                                                    <Cpu className="w-4 h-4 text-purple-500" />
+                                                </div>
+                                                <div className="min-w-0">
+                                                    <div className="text-sm font-semibold">AI Dubbing</div>
+                                                    <div className="text-xs text-light-text-secondary dark:text-dark-text-secondary">XTTS-v2 — Python process</div>
+                                                </div>
+                                            </div>
+                                            <div className="flex items-center gap-1 shrink-0 bg-light-bg dark:bg-dark-bg rounded-lg p-1 border border-light-border dark:border-dark-border">
+                                                {[
+                                                    { value: 'auto', label: 'Auto' },
+                                                    { value: 'gpu', label: 'GPU', disabled: !gpuInfo?.gpu_available && !gpuLoading },
+                                                    { value: 'cpu', label: 'CPU' }
+                                                ].map(opt => (
+                                                    <button
+                                                        key={opt.value}
+                                                        disabled={opt.disabled || deviceSwitching}
+                                                        onClick={async () => {
+                                                            updateSettings({ dubbingDevice: opt.value })
+                                                            setDeviceSwitching(true)
+                                                            try {
+                                                                const api = await import('../../utils/api.js')
+                                                                const result = await api.post('/api/dub/set-device', { device: opt.value })
+                                                                if (result?.gpu_available !== undefined) setGpuInfo(prev => ({ ...prev, ...result }))
+                                                                showNotification(`Dubbing → ${opt.value.toUpperCase()}`, 'success')
+                                                            } catch (err) {
+                                                                showNotification(`Failed: ${err.message}`, 'error')
+                                                            } finally { setDeviceSwitching(false) }
+                                                        }}
+                                                        className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${
+                                                            opt.disabled ? 'opacity-35 cursor-not-allowed' : ''
+                                                        } ${
+                                                            settings.dubbingDevice === opt.value
+                                                                ? 'bg-white dark:bg-dark-surface shadow-sm text-light-text dark:text-dark-text'
+                                                                : 'text-light-text-secondary dark:text-dark-text-secondary hover:text-light-text dark:hover:text-dark-text'
+                                                        }`}
+                                                    >
+                                                        {opt.label}
+                                                        {deviceSwitching && settings.dubbingDevice === opt.value && (
+                                                            <span className="ml-1 inline-block w-2 h-2 border border-current border-t-transparent rounded-full animate-spin" />
+                                                        )}
+                                                    </button>
+                                                ))}
+                                            </div>
+                                        </div>
+
+                                        {/* Inline GPU status */}
+                                        <div className="mt-3 ml-10">
                                             {gpuLoading ? (
-                                                <div className="flex items-center gap-2 text-light-text-secondary dark:text-dark-text-secondary">
-                                                    <div className="w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin" />
+                                                <div className="flex items-center gap-1.5 text-[11px] text-light-text-secondary dark:text-dark-text-secondary">
+                                                    <div className="w-2.5 h-2.5 border border-current border-t-transparent rounded-full animate-spin" />
                                                     Detecting GPU...
                                                 </div>
                                             ) : gpuInfo?.gpu_available ? (
-                                                <div className="space-y-1">
-                                                    <div className="flex items-center gap-2 text-green-600 dark:text-green-400 font-medium">
-                                                        <Zap className="w-3.5 h-3.5" />
-                                                        GPU Detected: {gpuInfo.gpu_name || 'Available'}
-                                                    </div>
+                                                <div className="text-[11px] text-green-600 dark:text-green-400 flex items-center gap-1.5">
+                                                    <Zap className="w-3 h-3" />
+                                                    <span className="font-medium">{gpuInfo.gpu_name || 'GPU detected'}</span>
                                                     {gpuInfo.gpu_memory_total_mb && (
-                                                        <div className="text-light-text-secondary dark:text-dark-text-secondary ml-5">
-                                                            VRAM: {gpuInfo.gpu_memory_free_mb ? `${gpuInfo.gpu_memory_free_mb}MB free / ` : ''}{gpuInfo.gpu_memory_total_mb}MB total
-                                                        </div>
+                                                        <span className="text-light-text-secondary dark:text-dark-text-secondary font-normal">
+                                                            · {gpuInfo.gpu_memory_free_mb ? `${gpuInfo.gpu_memory_free_mb}/${gpuInfo.gpu_memory_total_mb}MB free` : `${gpuInfo.gpu_memory_total_mb}MB VRAM`}
+                                                        </span>
                                                     )}
                                                     {gpuInfo.model_loaded && gpuInfo.model_device && (
-                                                        <div className="text-light-text-secondary dark:text-dark-text-secondary ml-5">
-                                                            Model loaded on: <span className="font-medium text-light-text-primary dark:text-dark-text-primary">{gpuInfo.model_device.toUpperCase()}</span>
-                                                        </div>
+                                                        <span className="text-light-text-secondary dark:text-dark-text-secondary font-normal">
+                                                            · Model on <span className="font-semibold">{gpuInfo.model_device.toUpperCase()}</span>
+                                                        </span>
                                                     )}
                                                 </div>
                                             ) : (
-                                                <div className="flex items-center gap-2 text-amber-600 dark:text-amber-400">
-                                                    <Cpu className="w-3.5 h-3.5" />
-                                                    {!gpuInfo?.service_running 
-                                                        ? 'Dubbing service not running — GPU info available after first dub' 
-                                                        : 'No GPU detected. Dubbing will use CPU (slower)'
-                                                    }
+                                                <div className="text-[11px] text-amber-600 dark:text-amber-400 flex items-center gap-1.5">
+                                                    <Cpu className="w-3 h-3" />
+                                                    {!gpuInfo?.service_running
+                                                        ? 'Start a dub job to detect GPU'
+                                                        : <><span className="font-medium">No CUDA GPU detected.</span> See fix below.</>}
+                                                </div>
+                                            )}
+
+                                            {/* CUDA fix hint — only when service is running but no GPU */}
+                                            {!gpuLoading && gpuInfo?.service_running && !gpuInfo?.gpu_available && (
+                                                <div className="mt-2 p-2.5 rounded-lg bg-amber-500/5 border border-amber-500/20 text-[11px] text-amber-700 dark:text-amber-400 space-y-1">
+                                                    <p className="font-semibold">Your GPU isn't visible to PyTorch.</p>
+                                                    <p>Run this once in a terminal to install CUDA PyTorch for your RTX 4050:</p>
+                                                    <code className="block mt-1 p-1.5 bg-black/10 dark:bg-white/10 rounded font-mono text-[10px] break-all select-all">
+                                                        .venv\Scripts\pip install torch==2.5.1+cu121 torchaudio==2.5.1+cu121 --index-url https://download.pytorch.org/whl/cu121 --upgrade
+                                                    </code>
+                                                    <p className="opacity-75">Then restart the app.</p>
                                                 </div>
                                             )}
                                         </div>
-
-                                        <div className="space-y-2">
-                                            {[
-                                                { value: 'auto', label: 'Auto (Recommended)', description: 'Uses CUDA/MPS GPU if available, otherwise CPU' },
-                                                { value: 'gpu', label: 'GPU (CUDA / MPS)', description: gpuInfo?.gpu_available ? `Use ${gpuInfo.gpu_name || 'GPU'} — significantly faster` : 'Not available on this device', disabled: !gpuInfo?.gpu_available && !gpuLoading },
-                                                { value: 'cpu', label: 'CPU', description: 'Slower but always works. Use if GPU causes errors' }
-                                            ].map(option => (
-                                                <button
-                                                    key={option.value}
-                                                    disabled={option.disabled || deviceSwitching}
-                                                    onClick={async () => {
-                                                        updateSettings({ dubbingDevice: option.value })
-                                                        setDeviceSwitching(true)
-                                                        try {
-                                                            const api = await import('../../utils/api.js')
-                                                            const result = await api.post('/api/dub/set-device', { device: option.value })
-                                                            if (result?.gpu_available !== undefined) {
-                                                                setGpuInfo(prev => ({ ...prev, ...result }))
-                                                            }
-                                                            showNotification(`Dubbing device set to ${option.value.toUpperCase()}`, 'success')
-                                                        } catch (err) {
-                                                            showNotification(`Failed to set device: ${err.message}`, 'error')
-                                                        } finally {
-                                                            setDeviceSwitching(false)
-                                                        }
-                                                    }}
-                                                    className={`
-                                                        w-full flex items-center justify-between p-3 rounded-lg border-2 transition-all text-left
-                                                        ${option.disabled ? 'opacity-40 cursor-not-allowed' : ''}
-                                                        ${settings.dubbingDevice === option.value
-                                                            ? 'border-primary-fg/40 bg-primary-fg/5'
-                                                            : 'border-light-border dark:border-dark-border hover:border-primary-fg/30'
-                                                        }
-                                                    `}
-                                                >
-                                                    <div>
-                                                        <div className="font-medium text-sm flex items-center gap-2">
-                                                            {option.label}
-                                                            {deviceSwitching && settings.dubbingDevice === option.value && (
-                                                                <div className="w-3 h-3 border-2 border-primary-fg border-t-transparent rounded-full animate-spin" />
-                                                            )}
-                                                        </div>
-                                                        <div className="text-xs text-light-text-secondary dark:text-dark-text-secondary">
-                                                            {option.description}
-                                                        </div>
-                                                    </div>
-                                                    {settings.dubbingDevice === option.value && (
-                                                        <Check className="w-5 h-5 text-primary-fg" />
-                                                    )}
-                                                </button>
-                                            ))}
-                                        </div>
                                     </div>
+                                </div>
 
+                                {/* ── Summarization Model ── */}
+                                <div>
+                                    <h3 className="text-sm font-bold text-primary-fg uppercase tracking-wider mb-4">AI Model</h3>
                                     <div>
                                         <label className="block text-sm font-medium mb-3">Summarization Model</label>
                                         <div className="space-y-4">

@@ -240,7 +240,8 @@ export async function syncCoursePreview(courseId, scannedData) {
         thumbnailChanged,
         totalBefore: existingVideos.length,
         totalAfter: scannedVideos.length,
-        scannedData
+        scannedData,
+        scannedVideos
     }
 }
 
@@ -272,9 +273,21 @@ export async function applySyncChanges(courseId, preview) {
         await deleteVideo(video.id)
     }
 
-    // 2. Update changed videos
+    // 2. Update changed videos (duration)
     for (const video of updated) {
         await updateVideo(video.id, { duration: video.newDuration })
+    }
+
+    // 2.5 Update all existing videos with latest AI assets (subtitles & dubs) from disk
+    const existingVideosToUpdate = [...preview.unchanged, ...moved, ...updated]
+    for (const video of existingVideosToUpdate) {
+        const sv = preview.scannedVideos.find(v => v.filePath === video.filePath)
+        if (sv) {
+            await updateVideo(video.id, {
+                subtitleSources: sv.subtitleFiles || [],
+                dubbedTracks: sv.availableDubs || []
+            })
+        }
     }
 
     // 3. Sync Modules (Create new ones and update hierarchy)
@@ -337,6 +350,8 @@ export async function applySyncChanges(courseId, preview) {
                 filePath: nv.filePath,
                 fileSize: nv.fileSize,
                 duration: nv.duration,
+                subtitleSources: nv.subtitleFiles || [],
+                dubbedTracks: nv.availableDubs || [],
                 order: nv.order !== undefined ? nv.order : 999
             })
         }
