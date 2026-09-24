@@ -136,13 +136,20 @@ export function recalculateCourseProgress(courseId, dbMode = null) {
     if (mode === 'duration') {
         // Progress based on total watch time
         const totalDuration = videos.reduce((s, v) => s + (v.duration || 0), 0)
-        // Fix: If a video is manually marked complete, treat its watch_progress as 1 (100%)
+        // If a video is marked complete, treat as 100%. Otherwise require at least 15s watched to avoid phantom preview progress.
         const watchedDuration = videos.reduce((s, v) => {
-            const progress = v.is_completed === 1 ? 1 : (v.watch_progress || 0)
-            return s + ((v.duration || 0) * progress)
+            if (v.is_completed === 1) {
+                return s + (v.duration || 0)
+            }
+            const videoDuration = v.duration || 0
+            const watchedSecs = videoDuration * (v.watch_progress || 0)
+            // Ignore accidental clicks/previews under 15 seconds
+            if (watchedSecs < 15) return s
+            return s + watchedSecs
         }, 0)
         completedVideos = videos.filter(v => v.is_completed === 1).length
         completionPercentage = totalDuration > 0 ? (watchedDuration / totalDuration) * 100 : 0
+        if (completionPercentage < 0.5) completionPercentage = 0
     } else {
         // Default: progress based on completed video count
         completedVideos = videos.filter(v => v.is_completed === 1).length

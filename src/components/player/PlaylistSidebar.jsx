@@ -433,8 +433,6 @@ function PlaylistSidebar({
                                 onPlay={onPlay}
                                 onPause={onPause}
                                 getPlaybackState={getPlaybackState}
-                                isCollapsed={false}
-                                hideHeader={true}
                             />
                         </div>
                     </div>

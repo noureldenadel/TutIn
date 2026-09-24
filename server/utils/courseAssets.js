@@ -91,13 +91,32 @@ export function getScreenshotsDir(courseFolder) {
 }
 
 /**
+ * Returns (and creates) the summaries directory inside .tutin/summaries.
+ */
+export function getSummariesVaultDir(courseFolder, relModulePath = '') {
+    if (!courseFolder) return null
+    const vaultDir = getVaultDir(courseFolder)
+    if (!vaultDir) return null
+    const dir = path.join(vaultDir, 'summaries', relModulePath)
+    if (!fs.existsSync(dir)) {
+        try { fs.mkdirSync(dir, { recursive: true }) } catch { return null }
+    }
+    return dir
+}
+
+/**
  * Full path for a managed caption file.
  * e.g. /Course/.tutin/captions/Module 1/01 - Intro.ar.vtt
  */
-export function getCaptionFilePath(courseFolder, relModulePath, videoBaseName, lang) {
+export function getCaptionFilePath(courseFolder, relModulePath, videoBaseName, lang, origin = null) {
     const dir = getCaptionsDir(courseFolder, relModulePath)
     if (!dir) return null
-    return path.join(dir, `${videoBaseName}.${lang}.vtt`)
+    
+    const isGenerated = origin === 'generated'
+    const originSuffix = isGenerated ? '-generated' : ''
+    const safeLang = (lang && lang !== 'source') ? lang : 'en'
+    
+    return path.join(dir, `${videoBaseName}${originSuffix}.${safeLang}.vtt`)
 }
 
 /**
@@ -110,7 +129,17 @@ export function getDubFilePath(courseFolder, relModulePath, videoBaseName, lang)
     return path.join(dir, `${videoBaseName}.${lang}.mp3`)
 }
 
-// ── AppData Cache Helpers (for Web/Cloud Fallback) ─────────────
+/**
+ * Full path for a summary markdown file.
+ * e.g. /Course/.tutin/summaries/Module 1/01 - Intro.md
+ */
+export function getSummaryFilePath(courseFolder, relModulePath, videoBaseName) {
+    const dir = getSummariesVaultDir(courseFolder, relModulePath)
+    if (!dir) return null
+    return path.join(dir, `${videoBaseName}.md`)
+}
+
+// ── AppData Cache Helpers (used ONLY for Web / Cloud Stream Courses) ─────────────
 
 export function getTranscriptsDir() {
     const dir = path.join(getDataDir(), 'transcripts')
@@ -126,14 +155,15 @@ export function getCacheFilePath(videoId, lang) {
 // ── Caption Save & Load ─────────────────────────────────────────
 
 /**
- * Save caption chunks to both .tutin vault (if local) and AppData cache.
+ * Save caption chunks.
+ * For local courses: writes exclusively to `<courseFolder>/.tutin/captions/` and removes any stale AppData cache.
+ * For cloud courses: writes to AppData cache.
  */
-export function saveCaptionFile(videoMeta, lang, chunks) {
+export function saveCaptionFile(videoMeta, lang, chunks, origin = null) {
     const { id, courseFolder, relModulePath = '', videoBaseName } = videoMeta
 
-    let vttPath = null
     if (courseFolder && fs.existsSync(courseFolder)) {
-        vttPath = getCaptionFilePath(courseFolder, relModulePath, videoBaseName, lang)
+        const vttPath = getCaptionFilePath(courseFolder, relModulePath, videoBaseName, lang, origin)
         if (vttPath) {
             try {
                 fs.writeFileSync(vttPath, chunksToVTT(chunks), 'utf8')
@@ -141,75 +171,160 @@ export function saveCaptionFile(videoMeta, lang, chunks) {
                 console.warn('[CourseAssets] Failed to write caption file in vault:', err.message)
             }
         }
+
+        // Clean up any stale AppData cache file so the local course folder is the sole source of truth
+        try {
+            const staleCache = getCacheFilePath(id, lang)
+            if (fs.existsSync(staleCache)) fs.unlinkSync(staleCache)
+        } catch { }
+
+        return vttPath
     }
 
-    // Always update AppData cache
+    // Cloud course fallback: save to AppData
     const cachePath = getCacheFilePath(id, lang)
     try {
         fs.writeFileSync(cachePath, JSON.stringify(chunks, null, 2), 'utf8')
     } catch { }
 
-    return vttPath || cachePath
+    return cachePath
 }
 
 /**
  * Load caption chunks for a video + language.
- * Fallback order:
+ * Local course:
+ *   1. Course .tutin/captions/ VTT file
+ *   2. Legacy Captions/ VTT file
+ *   3. Subtitle sources (sibling files next to video)
+ *   (Never loads from AppData cache for local courses)
+ * Cloud course:
  *   1. AppData cache
- *   2. Course .tutin/captions/ VTT file
- *   3. Legacy Captions/ VTT file
- *   4. Subtitle sources (sibling files)
+ *   2. Subtitle sources
  */
+function normalizeChunks(rawChunks) {
+    if (!Array.isArray(rawChunks)) return []
+    return rawChunks.map(c => {
+        const start = typeof c.start === 'number' ? c.start : (Array.isArray(c.timestamp) ? c.timestamp[0] : 0)
+        const end = typeof c.end === 'number' ? c.end : (Array.isArray(c.timestamp) ? c.timestamp[1] : (start + 2))
+        return {
+            start: Number(start) || 0,
+            end: Number(end) || (Number(start) + 2),
+            timestamp: [Number(start) || 0, Number(end) || (Number(start) + 2)],
+            text: (c.text || '').trim()
+        }
+    })
+}
+
 export function loadCaptionChunks(videoId, lang, subtitleSources = [], courseFolder = null, relModulePath = '', videoBaseName = '') {
-    // 1. Try AppData cache
-    const cachePath = getCacheFilePath(videoId, lang)
-    if (fs.existsSync(cachePath)) {
-        try { return JSON.parse(fs.readFileSync(cachePath, 'utf8')) } catch { /* fall through */ }
-    }
+    const isLocalCourse = Boolean(courseFolder && fs.existsSync(courseFolder))
 
-    // 2. Try course vault: .tutin/captions/<relModPath>/<base>.<lang>.vtt
-    if (courseFolder && videoBaseName) {
-        const vaultVtt = getCaptionFilePath(courseFolder, relModulePath, videoBaseName, lang)
-        if (vaultVtt && fs.existsSync(vaultVtt)) {
+    if (isLocalCourse) {
+        // 1. Try subtitle_sources entry if available and valid
+        let sourceEntry = subtitleSources.find(s =>
+            ((lang === 'source' && (!s.lang || s.lang === 'source')) || s.lang === lang) && s.is_master
+        )
+        if (!sourceEntry) {
+            sourceEntry = subtitleSources.find(s =>
+                (lang === 'source' && (!s.lang || s.lang === 'source')) || s.lang === lang
+            )
+        }
+        if (sourceEntry?.filePath && fs.existsSync(sourceEntry.filePath)) {
             try {
-                const text = fs.readFileSync(vaultVtt, 'utf8')
-                const chunks = parseVTT(text)
-                if (chunks.length) {
-                    try { fs.writeFileSync(cachePath, JSON.stringify(chunks, null, 2)) } catch { }
-                    return chunks
+                const text = fs.readFileSync(sourceEntry.filePath, 'utf8')
+                const chunks = readCaptionFile(text, sourceEntry.filePath)
+                if (chunks.length) return normalizeChunks(chunks)
+            } catch { /* fall through */ }
+        }
+
+        // 2. Direct checks in course vault .tutin/captions/
+        if (videoBaseName) {
+            const cleanLang = (lang && lang !== 'source') ? lang : ''
+            const captionsDir = path.join(courseFolder, '.tutin', 'captions', relModulePath)
+
+            if (fs.existsSync(captionsDir) && cleanLang) {
+                // Check user provided / uploaded format: <base>.<lang>.vtt
+                const userVtt = path.join(captionsDir, `${videoBaseName}.${cleanLang}.vtt`)
+                if (fs.existsSync(userVtt)) {
+                    try {
+                        const text = fs.readFileSync(userVtt, 'utf8')
+                        const chunks = parseVTT(text)
+                        if (chunks.length) return normalizeChunks(chunks)
+                    } catch { /* fall through */ }
                 }
-            } catch { /* fall through */ }
-        }
 
-        // Check legacy /Captions/ folder
-        const legacyVtt = path.join(courseFolder, 'Captions', relModulePath, `${videoBaseName}.${lang}.vtt`)
-        if (fs.existsSync(legacyVtt)) {
-            try {
-                const text = fs.readFileSync(legacyVtt, 'utf8')
-                const chunks = parseVTT(text)
-                if (chunks.length) return chunks
-            } catch { /* fall through */ }
+                // Check AI generated format: <base>-generated.<lang>.vtt
+                const genVtt = path.join(captionsDir, `${videoBaseName}-generated.${cleanLang}.vtt`)
+                if (fs.existsSync(genVtt)) {
+                    try {
+                        const text = fs.readFileSync(genVtt, 'utf8')
+                        const chunks = parseVTT(text)
+                        if (chunks.length) return normalizeChunks(chunks)
+                    } catch { /* fall through */ }
+                }
+
+                // Check legacy format with -uploaded: <base>-uploaded.<lang>.vtt
+                const legacyUploadedVtt = path.join(captionsDir, `${videoBaseName}-uploaded.${cleanLang}.vtt`)
+                if (fs.existsSync(legacyUploadedVtt)) {
+                    try {
+                        const text = fs.readFileSync(legacyUploadedVtt, 'utf8')
+                        const chunks = parseVTT(text)
+                        if (chunks.length) return normalizeChunks(chunks)
+                    } catch { /* fall through */ }
+                }
+            }
+
+            // Also check for default .vtt when lang is 'source'
+            if (lang === 'source') {
+                const vaultSourceVtt = path.join(courseFolder, '.tutin', 'captions', relModulePath, `${videoBaseName}.vtt`)
+                if (fs.existsSync(vaultSourceVtt)) {
+                    try {
+                        const text = fs.readFileSync(vaultSourceVtt, 'utf8')
+                        const chunks = parseVTT(text)
+                        if (chunks.length) return normalizeChunks(chunks)
+                    } catch { /* fall through */ }
+                }
+                const vaultGenSourceVtt = path.join(courseFolder, '.tutin', 'captions', relModulePath, `${videoBaseName}-generated.vtt`)
+                if (fs.existsSync(vaultGenSourceVtt)) {
+                    try {
+                        const text = fs.readFileSync(vaultGenSourceVtt, 'utf8')
+                        const chunks = parseVTT(text)
+                        if (chunks.length) return normalizeChunks(chunks)
+                    } catch { /* fall through */ }
+                }
+            }
+
+            // Check legacy /Captions/ folder
+            if (cleanLang) {
+                const legacyVtt = path.join(courseFolder, 'Captions', relModulePath, `${videoBaseName}.${cleanLang}.vtt`)
+                if (fs.existsSync(legacyVtt)) {
+                    try {
+                        const text = fs.readFileSync(legacyVtt, 'utf8')
+                        const chunks = parseVTT(text)
+                        if (chunks.length) return normalizeChunks(chunks)
+                    } catch { /* fall through */ }
+                }
+            }
+        }
+    } else {
+        // Cloud course: check AppData cache
+        const cachePath = getCacheFilePath(videoId, lang)
+        if (fs.existsSync(cachePath)) {
+            try { return normalizeChunks(JSON.parse(fs.readFileSync(cachePath, 'utf8'))) } catch { /* fall through */ }
         }
     }
 
-    // 3. Try subtitle_sources — find matching lang entry
+    // Try any matching subtitle_sources fallback
     let sourceEntry = subtitleSources.find(s =>
-        (lang === 'source' && (!s.lang || s.lang === 'source')) ||
-        s.lang === lang
+        ((lang === 'source' && (!s.lang || s.lang === 'source')) || s.lang === lang)
     )
-
     if (!sourceEntry && subtitleSources.length > 0) {
         sourceEntry = subtitleSources[0]
     }
-
     if (sourceEntry?.filePath && fs.existsSync(sourceEntry.filePath)) {
         try {
             const text = fs.readFileSync(sourceEntry.filePath, 'utf8')
             const chunks = readCaptionFile(text, sourceEntry.filePath)
-            if (chunks.length) {
-                try { fs.writeFileSync(cachePath, JSON.stringify(chunks, null, 2)) } catch { }
-                return chunks
-            }
+            if (chunks.length) return normalizeChunks(chunks)
         } catch { /* fall through */ }
     }
 
@@ -262,24 +377,15 @@ export function listCourseLanguages(courseFolder) {
 
 /**
  * List all languages available for a specific video.
+ * For local courses: inspects exclusively the course folder (.tutin/captions, Captions, sibling files).
+ * For cloud courses: inspects AppData cache and subtitleSources.
  */
 export function listVideoLanguages(videoId, subtitleSources = [], courseFolder = null, relModulePath = '', videoBaseName = '') {
-    const transcriptsDir = getTranscriptsDir()
     const translatedLangs = new Set()
+    const isLocalCourse = Boolean(courseFolder && fs.existsSync(courseFolder))
 
-    // 1. Check AppData cache
-    try {
-        const files = fs.readdirSync(transcriptsDir)
-        for (const f of files) {
-            if (!f.startsWith(videoId)) continue
-            const withoutId = f.slice(videoId.length)
-            const match = withoutId.match(/^\.([a-z]{2,3})\.json$/)
-            if (match) translatedLangs.add(match[1])
-        }
-    } catch { }
-
-    // 2. Check vault .tutin/captions/
-    if (courseFolder && videoBaseName) {
+    if (isLocalCourse && videoBaseName) {
+        // Inspect course vault .tutin/captions/
         const checkVaultDir = (baseDir) => {
             const modDir = path.join(baseDir, relModulePath)
             if (fs.existsSync(modDir)) {
@@ -299,20 +405,53 @@ export function listVideoLanguages(videoId, subtitleSources = [], courseFolder =
         }
         checkVaultDir(path.join(courseFolder, '.tutin', 'captions'))
         checkVaultDir(path.join(courseFolder, 'Captions'))
+    } else if (!isLocalCourse) {
+        // Cloud course: check AppData cache
+        const transcriptsDir = getTranscriptsDir()
+        try {
+            const files = fs.readdirSync(transcriptsDir)
+            for (const f of files) {
+                if (!f.startsWith(videoId)) continue
+                const withoutId = f.slice(videoId.length)
+                const match = withoutId.match(/^\.([a-z]{2,3})\.json$/)
+                if (match) translatedLangs.add(match[1])
+            }
+        } catch { }
     }
 
-    const sourceExists = fs.existsSync(path.join(transcriptsDir, `${videoId}.json`)) ||
-        (courseFolder && videoBaseName && (
+    let sourceExists = false
+    if (isLocalCourse && videoBaseName) {
+        sourceExists = (
             fs.existsSync(path.join(courseFolder, '.tutin', 'captions', relModulePath, `${videoBaseName}.source.vtt`)) ||
             fs.existsSync(path.join(courseFolder, '.tutin', 'captions', relModulePath, `${videoBaseName}.vtt`)) ||
+            fs.existsSync(path.join(courseFolder, '.tutin', 'captions', relModulePath, `${videoBaseName}-generated.vtt`)) ||
             fs.existsSync(path.join(courseFolder, 'Captions', relModulePath, `${videoBaseName}.vtt`))
-        ))
+        )
+    } else if (!isLocalCourse) {
+        sourceExists = fs.existsSync(path.join(getTranscriptsDir(), `${videoId}.json`))
+    }
 
-    const existingLangs = Array.from(new Set(subtitleSources
+    const dbSources = subtitleSources.filter(s => {
+        if (s.filePath && !fs.existsSync(s.filePath)) return false
+        return true
+    })
+
+    const existingLangs = Array.from(new Set(dbSources
         .filter(s => s.origin === 'existing' || s.origin === 'uploaded')
         .map(s => s.lang || 'source')))
 
-    return { sourceExists: Boolean(sourceExists), translatedLangs: [...translatedLangs], existingLangs }
+    if (existingLangs.includes('source') || dbSources.some(s => s.lang === 'source' || !s.lang)) {
+        sourceExists = true
+    }
+
+    dbSources
+        .filter(s => s.origin === 'generated' && s.lang !== 'source')
+        .forEach(s => translatedLangs.add(s.lang))
+
+    // Exclude languages that already exist as uploaded/existing sources
+    const uniqueTranslatedLangs = [...translatedLangs].filter(l => !existingLangs.includes(l))
+
+    return { sourceExists: Boolean(sourceExists), translatedLangs: uniqueTranslatedLangs, existingLangs }
 }
 
 // ── Dubbing Helpers ─────────────────────────────────────────────
@@ -322,22 +461,9 @@ export function listVideoLanguages(videoId, subtitleSources = [], courseFolder =
  */
 export function listDubLanguages(videoId, courseFolder = null, relModulePath = '', videoBaseName = '') {
     const langs = new Set()
+    const isLocalCourse = Boolean(courseFolder && fs.existsSync(courseFolder))
 
-    // 1. AppData cache
-    const dubsDir = path.join(getDataDir(), 'dubs')
-    if (fs.existsSync(dubsDir)) {
-        try {
-            fs.readdirSync(dubsDir)
-                .filter(f => f.startsWith(videoId) && f.endsWith('.mp3'))
-                .forEach(f => {
-                    const match = f.match(new RegExp(`^${videoId}\\.([a-z]{2,3})\\.mp3$`))
-                    if (match) langs.add(match[1])
-                })
-        } catch { }
-    }
-
-    // 2. Vault .tutin/dubs/
-    if (courseFolder && videoBaseName) {
+    if (isLocalCourse && videoBaseName) {
         const checkDubs = (baseDir) => {
             const modDir = path.join(baseDir, relModulePath)
             if (fs.existsSync(modDir)) {
@@ -353,25 +479,42 @@ export function listDubLanguages(videoId, courseFolder = null, relModulePath = '
         }
         checkDubs(path.join(courseFolder, '.tutin', 'dubs'))
         checkDubs(path.join(courseFolder, 'Dubs'))
+    } else if (!isLocalCourse) {
+        const dubsDir = path.join(getDataDir(), 'dubs')
+        if (fs.existsSync(dubsDir)) {
+            try {
+                fs.readdirSync(dubsDir)
+                    .filter(f => f.startsWith(videoId) && f.endsWith('.mp3'))
+                    .forEach(f => {
+                        const match = f.match(new RegExp(`^${videoId}\\.([a-z]{2,3})\\.mp3$`))
+                        if (match) langs.add(match[1])
+                    })
+            } catch { }
+        }
     }
 
     return [...langs]
 }
 
 /**
- * Get path to dubbed audio file (checking vault first, then AppData cache).
+ * Get path to dubbed audio file.
+ * For local courses: checks exclusively the course folder (.tutin/dubs and Dubs).
+ * For cloud courses: checks AppData cache.
  */
 export function getDubFilePathForPlayback(videoId, lang, courseFolder = null, relModulePath = '', videoBaseName = '') {
-    // 1. Check vault .tutin/dubs/
-    if (courseFolder && videoBaseName) {
+    const isLocalCourse = Boolean(courseFolder && fs.existsSync(courseFolder))
+
+    if (isLocalCourse && videoBaseName) {
         const vaultDub = path.join(courseFolder, '.tutin', 'dubs', relModulePath, `${videoBaseName}.${lang}.mp3`)
         if (fs.existsSync(vaultDub)) return vaultDub
 
         const legacyDub = path.join(courseFolder, 'Dubs', relModulePath, `${videoBaseName}.${lang}.mp3`)
         if (fs.existsSync(legacyDub)) return legacyDub
+
+        return null
     }
 
-    // 2. Check AppData cache
+    // Cloud course fallback
     const cachePath = path.join(getDataDir(), 'dubs', `${videoId}.${lang}.mp3`)
     return fs.existsSync(cachePath) ? cachePath : null
 }
@@ -381,7 +524,7 @@ export function getDubCachePath(videoId, lang) {
     return fs.existsSync(p) ? p : null
 }
 
-// ── Vault Notes, Screenshots & Canvas Persistence ──────────────
+// ── Vault Notes, Screenshots, Canvas & Summaries Persistence ──────────────
 
 /**
  * Save notes for a course to <courseFolder>/.tutin/notes/notes.json.
@@ -477,6 +620,51 @@ export function loadVaultMetadata(courseFolder) {
         } catch { }
     }
     return null
+}
+
+/**
+ * Save video summary to <courseFolder>/.tutin/summaries/<relModPath>/<base>.md.
+ */
+export function saveVaultSummary(courseFolder, relModulePath, videoBaseName, content) {
+    if (!courseFolder || !fs.existsSync(courseFolder)) return false
+    const summaryPath = getSummaryFilePath(courseFolder, relModulePath, videoBaseName)
+    if (!summaryPath) return false
+    try {
+        fs.writeFileSync(summaryPath, content || '', 'utf8')
+        return true
+    } catch (err) {
+        console.error('[CourseAssets] Failed to save vault summary:', err.message)
+        return false
+    }
+}
+
+/**
+ * Load video summary from <courseFolder>/.tutin/summaries/<relModPath>/<base>.md.
+ */
+export function loadVaultSummary(courseFolder, relModulePath, videoBaseName) {
+    if (!courseFolder || !fs.existsSync(courseFolder)) return null
+    const summaryPath = getSummaryFilePath(courseFolder, relModulePath, videoBaseName)
+    if (summaryPath && fs.existsSync(summaryPath)) {
+        try {
+            return fs.readFileSync(summaryPath, 'utf8')
+        } catch { }
+    }
+    return null
+}
+
+/**
+ * Delete video summary from vault.
+ */
+export function deleteVaultSummary(courseFolder, relModulePath, videoBaseName) {
+    if (!courseFolder || !fs.existsSync(courseFolder)) return false
+    const summaryPath = getSummaryFilePath(courseFolder, relModulePath, videoBaseName)
+    if (summaryPath && fs.existsSync(summaryPath)) {
+        try {
+            fs.unlinkSync(summaryPath)
+            return true
+        } catch { }
+    }
+    return false
 }
 
 /**

@@ -238,43 +238,96 @@ async function scanDirectoryRecursive(dirPath, onProgress, progressState, course
 
         const videoBase = path.basename(videoEntry.name, path.extname(videoEntry.name))
 
-        // Detect pre-existing subtitle files (sibling to video)
-        const subtitleFiles = entries
-            .filter(e =>
-                e.isFile() &&
-                SUBTITLE_EXTENSIONS.has(path.extname(e.name).toLowerCase()) &&
-                e.name.startsWith(videoBase)
-            )
+        // Helper: match subtitle to video using prefix, normalized punctuation, and numbering
+        const matchSubtitleToVideo = (subFileName, base) => {
+            const subExt = path.extname(subFileName).toLowerCase()
+            if (!SUBTITLE_EXTENSIONS.has(subExt)) return false
+
+            const subNameWithoutExt = subFileName.replace(/\.[a-z0-9]+$/i, '')
+            const baseLower = base.toLowerCase()
+            const subLower = subNameWithoutExt.toLowerCase()
+
+            // 1. Direct prefix
+            if (subLower.startsWith(baseLower)) return true
+
+            // 2. Normalized punctuation
+            const normalize = str => str.replace(/[\s._\-\u2013\u2014]+/g, ' ').toLowerCase().trim()
+            const normBase = normalize(base)
+            const normSub = normalize(subNameWithoutExt)
+            if (normSub.startsWith(normBase)) return true
+
+            // 3. Number prefix match
+            const baseNum = base.match(/^0*(\d+)/)
+            const subNum = subFileName.match(/^0*(\d+)/)
+            if (baseNum && subNum && baseNum[1] === subNum[1]) {
+                const baseWords = normBase.split(' ').filter(w => w.length > 2)
+                const subWords = normSub.split(' ').filter(w => w.length > 2)
+                const hasCommonWord = baseWords.some(w => subWords.includes(w))
+                if (hasCommonWord || baseWords.length === 0) return true
+            }
+
+            return false
+        }
+
+        // Detect pre-existing subtitle files (sibling to video and in local Subs/ subfolders)
+        const candidateSubFiles = []
+        for (const e of entries) {
+            if (e.isFile() && SUBTITLE_EXTENSIONS.has(path.extname(e.name).toLowerCase())) {
+                candidateSubFiles.push({ name: e.name, fullPath: path.join(dirPath, e.name) })
+            } else if (e.isDirectory() && ['subs', 'subtitles', 'captions', 'sub'].includes(e.name.toLowerCase())) {
+                try {
+                    const subEntries = fs.readdirSync(path.join(dirPath, e.name))
+                    for (const sName of subEntries) {
+                        if (SUBTITLE_EXTENSIONS.has(path.extname(sName).toLowerCase())) {
+                            candidateSubFiles.push({ name: sName, fullPath: path.join(dirPath, e.name, sName) })
+                        }
+                    }
+                } catch { }
+            }
+        }
+
+        const subtitleFiles = candidateSubFiles
+            .filter(e => matchSubtitleToVideo(e.name, videoBase))
             .map(e => ({
-                filePath: path.join(dirPath, e.name),
+                filePath: e.fullPath,
                 lang: extractLangCode(e.name, videoBase) || 'source',
                 format: path.extname(e.name).slice(1).replace('ssa', 'ass'),
                 origin: 'existing'
             }))
 
-        // Detect app-managed captions in Captions\ subfolder
-        const captionsDir = path.join(courseRoot, 'Captions', relModulePath)
-        const managedCaptions = fs.existsSync(captionsDir)
-            ? fs.readdirSync(captionsDir)
-                .filter(f => f.startsWith(videoBase) && SUBTITLE_EXTENSIONS.has(path.extname(f).toLowerCase()))
-                .map(f => ({
-                    filePath: path.join(captionsDir, f),
-                    lang: extractLangCode(f, videoBase) || 'source',
-                    format: path.extname(f).slice(1),
-                    origin: 'generated'
-                }))
-            : []
+        // Detect app-managed captions in .tutin/captions/ and legacy Captions/ subfolders
+        const vaultCaptionsDir = path.join(courseRoot, '.tutin', 'captions', relModulePath)
+        const legacyCaptionsDir = path.join(courseRoot, 'Captions', relModulePath)
+        const scanCaptionsFrom = (dir) => {
+            if (!fs.existsSync(dir)) return []
+            try {
+                return fs.readdirSync(dir)
+                    .filter(f => f.startsWith(videoBase) && SUBTITLE_EXTENSIONS.has(path.extname(f).toLowerCase()))
+                    .map(f => ({
+                        filePath: path.join(dir, f),
+                        lang: extractLangCode(f, videoBase) || 'source',
+                        format: path.extname(f).slice(1),
+                        origin: 'generated'
+                    }))
+            } catch { return [] }
+        }
+        const managedCaptions = [...scanCaptionsFrom(vaultCaptionsDir), ...scanCaptionsFrom(legacyCaptionsDir)]
 
-        // Detect dubbed audio in Dubs\ subfolder
-        const dubsDir = path.join(courseRoot, 'Dubs', relModulePath)
-        const availableDubs = fs.existsSync(dubsDir)
-            ? fs.readdirSync(dubsDir)
-                .filter(f => f.startsWith(videoBase) && f.endsWith('.mp3'))
-                .map(f => ({
-                    filePath: path.join(dubsDir, f),
-                    lang: extractLangCode(f.replace('.mp3', ''), videoBase) || 'unknown'
-                }))
-            : []
+        // Detect dubbed audio in .tutin/dubs/ and legacy Dubs/ subfolders
+        const vaultDubsDir = path.join(courseRoot, '.tutin', 'dubs', relModulePath)
+        const legacyDubsDir = path.join(courseRoot, 'Dubs', relModulePath)
+        const scanDubsFrom = (dir) => {
+            if (!fs.existsSync(dir)) return []
+            try {
+                return fs.readdirSync(dir)
+                    .filter(f => f.startsWith(videoBase) && f.endsWith('.mp3'))
+                    .map(f => ({
+                        filePath: path.join(dir, f),
+                        lang: extractLangCode(f.replace('.mp3', ''), videoBase) || 'unknown'
+                    }))
+            } catch { return [] }
+        }
+        const availableDubs = [...scanDubsFrom(vaultDubsDir), ...scanDubsFrom(legacyDubsDir)]
 
         // Merge: pre-existing files first, then managed (avoid duplicate langs)
         const seenLangs = new Set()

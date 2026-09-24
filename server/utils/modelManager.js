@@ -23,10 +23,12 @@ export function getModelsDir() {
 
 export function getPythonEnv() {
     const modelsDir = getModelsDir()
-    // Coqui TTS respects XDG_DATA_HOME for caching models
-    // It caches in $XDG_DATA_HOME/tts/
+    // Coqui TTS respects XDG_DATA_HOME / TTS_HOME for caching models
     return {
         ...process.env,
-        XDG_DATA_HOME: modelsDir
+        COQUI_TOS_AGREED: "1",
+        PYTHONUNBUFFERED: "1",
+        XDG_DATA_HOME: modelsDir,
+        TTS_HOME: modelsDir
     }
 }

@@ -24,7 +24,7 @@ function getVideoMeta(videoId) {
     if (!video) throw new Error('Video not found')
 
     const moduleRecord = getOne('SELECT folder_path FROM modules WHERE id = ?', [video.module_id])
-    const courseRecord = getOne('SELECT folder_path FROM courses WHERE id = ?', [video.course_id])
+    const courseRecord = getOne('SELECT folder_path, language FROM courses WHERE id = ?', [video.course_id])
 
     let relModulePath = ''
     if (moduleRecord && courseRecord && moduleRecord.folder_path && courseRecord.folder_path) {
@@ -35,6 +35,7 @@ function getVideoMeta(videoId) {
     return {
         id: video.id,
         courseFolder: courseRecord?.folder_path || null,
+        courseLanguage: courseRecord?.language || 'en',
         relModulePath,
         videoBaseName: path.basename(video.file_name, path.extname(video.file_name)),
         subtitleSources: JSON.parse(video.subtitle_sources || '[]')
@@ -145,8 +146,10 @@ function detectCourseSiblingCaptions(videoId, targetLang) {
         }
 
         for (const otherVideo of otherVideos) {
-            const currentSources = JSON.parse(otherVideo.subtitle_sources || '[]')
-            // If already has this language registered, skip
+            let currentSources = JSON.parse(otherVideo.subtitle_sources || '[]')
+            currentSources = currentSources.filter(s => !s.filePath || fs.existsSync(s.filePath))
+            
+            // If already has this language registered and valid, skip
             if (currentSources.some(s => s.lang === targetLang)) continue
 
             const baseName = path.basename(otherVideo.file_name, path.extname(otherVideo.file_name))
@@ -173,33 +176,39 @@ function detectCourseSiblingCaptions(videoId, targetLang) {
 // ── Routes ────────────────────────────────────────────────────
 
 // POST /api/transcripts/:videoId/upload
-router.post('/:videoId/upload', upload.single('file'), (req, res) => {
+router.post('/:videoId/upload', upload.any(), (req, res) => {
     try {
-        if (!req.file) return res.status(400).json({ error: 'No file uploaded' })
+        const uploadedFile = req.file || (req.files && req.files[0])
+        if (!uploadedFile) return res.status(400).json({ error: 'No file uploaded' })
         
-        const fileContent = req.file.buffer.toString('utf8')
-        const originalName = req.file.originalname
+        const fileContent = uploadedFile.buffer.toString('utf8')
+        const originalName = uploadedFile.originalname
         const format = detectFormat(originalName) || 'srt'
         
         const videoMeta = getVideoMeta(req.params.videoId)
         
-        // Use user-provided lang, or extract from filename, or default to source
-        const reqLang = req.body.lang || extractLangCode(originalName, videoMeta.videoBaseName) || 'source'
+        // Use user-provided lang, or extract from filename, or default to courseLanguage / en
+        const reqLang = req.body.lang || extractLangCode(originalName, videoMeta.videoBaseName) || videoMeta.courseLanguage || 'en'
         
         // Parse the file
         const chunks = parseSubtitleFile(fileContent, originalName)
         if (!chunks.length) return res.status(400).json({ error: 'Could not parse caption file' })
 
-        // Save to Captions\ and AppData cache
-        const filePath = saveCaptionFile(videoMeta, reqLang, chunks)
+        // Save to .tutin/captions/ without -uploaded (e.g. 01 - Intro.es.vtt)
+        const filePath = saveCaptionFile(videoMeta, reqLang, chunks, 'uploaded')
 
         // Update DB
         const currentSources = videoMeta.subtitleSources.filter(s => !(s.lang === reqLang && s.origin === 'uploaded'))
+        
+        // If no master exists for this lang, make this the master
+        const hasMaster = currentSources.some(s => s.lang === reqLang && s.is_master)
+        
         currentSources.push({
             lang: reqLang,
             filePath,
             origin: 'uploaded',
-            format: 'vtt' // we always convert to VTT internally
+            format: 'vtt', // we always convert to VTT internally
+            is_master: !hasMaster
         })
 
         run(`UPDATE videos SET has_transcript = 1, subtitle_sources = ? WHERE id = ?`, [
@@ -227,8 +236,65 @@ router.post('/:videoId/upload', upload.single('file'), (req, res) => {
 router.get('/:videoId/languages', (req, res) => {
     try {
         const videoMeta = getVideoMeta(req.params.videoId)
-        const langs = listVideoLanguages(req.params.videoId, videoMeta.subtitleSources)
-        res.json(langs)
+        let sources = videoMeta.subtitleSources || []
+        let dbNeedsUpdate = false
+
+        sources = sources.filter(s => {
+            if (s.filePath && !fs.existsSync(s.filePath)) {
+                dbNeedsUpdate = true
+                return false
+            }
+            return true
+        })
+
+        // Also auto-discover any manually placed caption files in .tutin/captions/
+        if (videoMeta.courseFolder && fs.existsSync(videoMeta.courseFolder) && videoMeta.videoBaseName) {
+            const captionsDir = path.join(videoMeta.courseFolder, '.tutin', 'captions', videoMeta.relModulePath)
+            if (fs.existsSync(captionsDir)) {
+                try {
+                    const files = fs.readdirSync(captionsDir)
+                    for (const f of files) {
+                        if (f.startsWith(videoMeta.videoBaseName) && f.endsWith('.vtt')) {
+                            const fullPath = path.join(captionsDir, f)
+                            if (!sources.some(s => s.filePath === fullPath)) {
+                                const isGenerated = f.includes('-generated')
+                                const lang = extractLangCode(f, videoMeta.videoBaseName) || videoMeta.courseLanguage || 'en'
+                                const origin = isGenerated ? 'generated' : 'uploaded'
+                                const hasMaster = sources.some(s => s.lang === lang && s.is_master)
+                                sources.push({
+                                    lang,
+                                    filePath: fullPath,
+                                    origin,
+                                    format: 'vtt',
+                                    is_master: !hasMaster
+                                })
+                                dbNeedsUpdate = true
+                            }
+                        }
+                    }
+                } catch {}
+            }
+        }
+
+        if (dbNeedsUpdate) {
+            run(`UPDATE videos SET subtitle_sources = ? WHERE id = ?`, [
+                JSON.stringify(sources),
+                req.params.videoId
+            ])
+            videoMeta.subtitleSources = sources
+        }
+
+        const langs = listVideoLanguages(
+            req.params.videoId,
+            videoMeta.subtitleSources,
+            videoMeta.courseFolder,
+            videoMeta.relModulePath,
+            videoMeta.videoBaseName
+        )
+        res.json({
+            ...langs,
+            subtitleSources: sources
+        })
     } catch (err) {
         res.status(500).json({ error: err.message })
     }
@@ -237,9 +303,22 @@ router.get('/:videoId/languages', (req, res) => {
 // GET /api/transcripts/:videoId/chunks
 router.get('/:videoId/chunks', (req, res) => {
     try {
-        const lang = req.query.lang || 'source'
+        let lang = req.query.lang || 'source'
         const videoMeta = getVideoMeta(req.params.videoId)
-        const chunks = loadCaptionChunks(req.params.videoId, lang, videoMeta.subtitleSources)
+        
+        if (lang === 'source') {
+            const aiSource = videoMeta.subtitleSources?.find(s => s.is_ai_source)
+            if (aiSource) lang = aiSource.lang
+        }
+
+        const chunks = loadCaptionChunks(
+            req.params.videoId,
+            lang,
+            videoMeta.subtitleSources,
+            videoMeta.courseFolder,
+            videoMeta.relModulePath,
+            videoMeta.videoBaseName
+        )
 
         // custom_metadata fallback removed due to missing column
         res.json(chunks)
@@ -269,7 +348,19 @@ router.post('/:videoId/translate', async (req, res) => {
         }
 
         const videoMeta = getVideoMeta(req.params.videoId)
-        let sourceChunks = loadCaptionChunks(req.params.videoId, 'source', videoMeta.subtitleSources)
+        
+        let actualSourceLang = 'source'
+        const aiSource = videoMeta.subtitleSources?.find(s => s.is_ai_source)
+        if (aiSource) actualSourceLang = aiSource.lang
+
+        let sourceChunks = loadCaptionChunks(
+            req.params.videoId,
+            actualSourceLang,
+            videoMeta.subtitleSources,
+            videoMeta.courseFolder,
+            videoMeta.relModulePath,
+            videoMeta.videoBaseName
+        )
 
         if (sourceChunks.length === 0) {
         // custom_metadata fallback removed
@@ -291,10 +382,10 @@ router.post('/:videoId/translate', async (req, res) => {
             sourceLanguage
         )
 
-        // Save translation
-        const filePath = saveCaptionFile(videoMeta, targetLanguage, translatedChunks)
+        // Save translation with origin 'generated' (e.g. 01 - Intro-generated.es.vtt)
+        const filePath = saveCaptionFile(videoMeta, targetLanguage, translatedChunks, 'generated')
 
-        const currentSources = videoMeta.subtitleSources.filter(s => s.lang !== targetLanguage)
+        const currentSources = videoMeta.subtitleSources.filter(s => !(s.lang === targetLanguage && s.origin === 'generated'))
         currentSources.push({
             lang: targetLanguage,
             filePath,
@@ -320,7 +411,14 @@ router.get('/:videoId/text', (req, res) => {
     try {
         const lang = req.query.lang || 'source'
         const videoMeta = getVideoMeta(req.params.videoId)
-        let chunks = loadCaptionChunks(req.params.videoId, lang, videoMeta.subtitleSources)
+        let chunks = loadCaptionChunks(
+            req.params.videoId,
+            lang,
+            videoMeta.subtitleSources,
+            videoMeta.courseFolder,
+            videoMeta.relModulePath,
+            videoMeta.videoBaseName
+        )
 
         // custom_metadata fallback removed
         
@@ -336,7 +434,14 @@ router.get('/:videoId/download', (req, res) => {
         const lang = req.query.lang || 'source'
         const format = req.query.format || 'srt'
         const videoMeta = getVideoMeta(req.params.videoId)
-        const chunks = loadCaptionChunks(req.params.videoId, lang, videoMeta.subtitleSources)
+        const chunks = loadCaptionChunks(
+            req.params.videoId,
+            lang,
+            videoMeta.subtitleSources,
+            videoMeta.courseFolder,
+            videoMeta.relModulePath,
+            videoMeta.videoBaseName
+        )
 
         if (!chunks.length) return res.status(404).send('Captions not found')
 
@@ -364,21 +469,26 @@ router.get('/:videoId/download', (req, res) => {
 
 // PUT /api/transcripts/:videoId (Save JSON chunks - used by AI generator)
 router.put('/:videoId', (req, res) => {
-    const { chunks } = req.body
+    const { chunks, language } = req.body
     if (!Array.isArray(chunks)) return res.status(400).json({ error: 'Chunks must be an array' })
 
     try {
         const videoMeta = getVideoMeta(req.params.videoId)
+        const genLang = language || req.body.lang || videoMeta.courseLanguage || 'en'
         
-        // AI generation is always 'source' English for now
-        const filePath = saveCaptionFile(videoMeta, 'source', chunks)
+        // AI generation is always saved with origin 'generated' and explicit language code
+        // e.g. 01 - Intro-generated.en.vtt
+        const filePath = saveCaptionFile(videoMeta, genLang, chunks, 'generated')
 
-        const currentSources = videoMeta.subtitleSources.filter(s => !(s.lang === 'source' && s.origin === 'generated'))
+        const currentSources = videoMeta.subtitleSources.filter(s => !(s.lang === genLang && s.origin === 'generated'))
+        const hasMaster = currentSources.some(s => s.lang === genLang && s.is_master)
+
         currentSources.push({
-            lang: 'source',
+            lang: genLang,
             filePath,
             origin: 'generated',
-            format: 'vtt'
+            format: 'vtt',
+            is_master: !hasMaster
         })
 
         run(`UPDATE videos SET has_transcript = 1, transcript_generated_at = ?, subtitle_sources = ? WHERE id = ?`, [
@@ -387,6 +497,73 @@ router.put('/:videoId', (req, res) => {
             req.params.videoId
         ])
         
+        res.json({ success: true, language: genLang })
+    } catch (err) {
+        res.status(500).json({ error: err.message })
+    }
+})
+
+// POST /api/transcripts/:videoId/set-master
+router.post('/:videoId/set-master', (req, res) => {
+    const { lang, origin } = req.body
+    if (!lang || !origin) return res.status(400).json({ error: 'Missing lang or origin' })
+
+    try {
+        const videoMeta = getVideoMeta(req.params.videoId)
+        const sources = videoMeta.subtitleSources
+        
+        // Ensure the source exists
+        const targetExists = sources.some(s => s.lang === lang && s.origin === origin)
+        if (!targetExists) return res.status(404).json({ error: 'Specified subtitle source not found' })
+
+        // Clear is_master for all sources of this language
+        sources.forEach(s => {
+            if (s.lang === lang) s.is_master = false
+        })
+
+        // Set is_master for the target
+        const target = sources.find(s => s.lang === lang && s.origin === origin)
+        if (target) target.is_master = true
+
+        run(`UPDATE videos SET subtitle_sources = ? WHERE id = ?`, [
+            JSON.stringify(sources),
+            req.params.videoId
+        ])
+
+        res.json({ success: true })
+    } catch (err) {
+        res.status(500).json({ error: err.message })
+    }
+})
+
+// POST /api/transcripts/:videoId/make-source
+router.post('/:videoId/make-source', (req, res) => {
+    const { lang, origin } = req.body
+    if (!lang || !origin) return res.status(400).json({ error: 'Missing lang or origin' })
+
+    try {
+        const videoMeta = getVideoMeta(req.params.videoId)
+        const sources = videoMeta.subtitleSources
+        
+        // Find the target source
+        const target = sources.find(s => s.lang === lang && s.origin === origin)
+        if (!target || !target.filePath || !fs.existsSync(target.filePath)) {
+            return res.status(404).json({ error: 'Specified subtitle source file not found' })
+        }
+
+        // Clear is_ai_source for all tracks
+        sources.forEach(s => {
+            s.is_ai_source = false
+        })
+
+        // Set is_ai_source for the target
+        target.is_ai_source = true
+
+        run(`UPDATE videos SET subtitle_sources = ? WHERE id = ?`, [
+            JSON.stringify(sources),
+            req.params.videoId
+        ])
+
         res.json({ success: true })
     } catch (err) {
         res.status(500).json({ error: err.message })

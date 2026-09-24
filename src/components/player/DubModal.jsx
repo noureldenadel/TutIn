@@ -442,7 +442,7 @@ export default function DubModal({ isOpen, onClose, video, course, sourceLanguag
                         >
                             {availableTargets.map(lang => (
                                 <option key={lang.code} value={lang.code}>
-                                    {lang.flag} {lang.nativeName} ({lang.name}) {dubbedLangs.includes(lang.code) ? '✓ (Dub Available)' : ''}
+                                    {lang.nativeName} ({lang.name}) {dubbedLangs.includes(lang.code) ? '✓ (Dub Available)' : ''}
                                 </option>
                             ))}
                         </select>
@@ -452,8 +452,7 @@ export default function DubModal({ isOpen, onClose, video, course, sourceLanguag
                     <div className="bg-light-bg dark:bg-dark-bg p-4 rounded-lg border border-light-border dark:border-dark-border space-y-2.5 text-sm">
                         <div className="flex justify-between items-center">
                             <span className="opacity-70">Source Audio:</span>
-                            <span className="font-semibold text-primary-fg flex items-center gap-1.5">
-                                <span>{sourceInfo.flag}</span>
+                            <span className="font-semibold text-primary-fg">
                                 <span>{sourceInfo.nativeName} ({sourceInfo.name})</span>
                             </span>
                         </div>
@@ -543,7 +542,7 @@ export default function DubModal({ isOpen, onClose, video, course, sourceLanguag
                     {!isDubbing && !isDone && (
                         <button
                             onClick={handleStartDub}
-                            className="px-4 py-2 rounded-lg text-sm font-medium bg-primary-fg text-white hover:bg-primary-dark transition-colors flex items-center gap-2"
+                            className="px-4 py-2 rounded-lg text-sm font-medium bg-primary text-primary-content hover:bg-primary-hover transition-colors flex items-center gap-2"
                         >
                             <Headphones className="w-4 h-4" />
                             {isTargetAlreadyDubbed ? 'Regenerate Dub' : 'Start Dubbing'}

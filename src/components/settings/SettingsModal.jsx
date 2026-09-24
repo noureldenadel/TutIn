@@ -1,7 +1,7 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import {
     X, Sun, Moon, Monitor, Palette, Layout, Type, Settings,
-    Play, SkipForward, FastForward, Check, Download, Upload, Database, AlertTriangle, KeyRound, Eye, EyeOff, ExternalLink, Sparkles, Clock, PictureInPicture, MessageSquare, Send, Bug, Lightbulb, MessageCircle
+    Play, SkipForward, FastForward, Check, Download, Upload, Database, AlertTriangle, KeyRound, Eye, EyeOff, ExternalLink, Sparkles, Clock, PictureInPicture, MessageSquare, Send, Bug, Lightbulb, MessageCircle, Cpu, Zap
 } from 'lucide-react'
 import { useSettings } from '../../contexts/SettingsContext'
 import { useTheme } from '../../contexts/ThemeContext'
@@ -39,7 +39,24 @@ function SettingsModal({ isOpen, onClose }) {
     const [feedbackEmail, setFeedbackEmail] = useState('')
     const [sendingFeedback, setSendingFeedback] = useState(false)
     const [feedbackSent, setFeedbackSent] = useState(false)
+    const [gpuInfo, setGpuInfo] = useState(null)
+    const [gpuLoading, setGpuLoading] = useState(false)
+    const [deviceSwitching, setDeviceSwitching] = useState(false)
     const { showNotification } = useNotification()
+
+    // Fetch GPU info when AI tab is active
+    useEffect(() => {
+        if (isOpen && activeTab === 'ai_keys') {
+            setGpuLoading(true)
+            import('../../utils/api.js').then(api => {
+                api.get('/api/dub/gpu-info').then(data => {
+                    setGpuInfo(data)
+                }).catch(() => {
+                    setGpuInfo({ gpu_available: false, service_running: false })
+                }).finally(() => setGpuLoading(false))
+            })
+        }
+    }, [isOpen, activeTab])
 
     if (!isOpen) return null
 
@@ -333,6 +350,101 @@ function SettingsModal({ isOpen, onClose }) {
                                                         </div>
                                                     </div>
                                                     {settings.aiDevice === option.value && (
+                                                        <Check className="w-5 h-5 text-primary-fg" />
+                                                    )}
+                                                </button>
+                                            ))}
+                                        </div>
+                                    </div>
+
+                                    {/* Dubbing Acceleration (XTTS) */}
+                                    <div>
+                                        <label className="block text-sm font-medium mb-3">Dubbing Acceleration (XTTS)</label>
+                                        
+                                        {/* GPU Status Card */}
+                                        <div className={`mb-3 p-3 rounded-lg border text-xs ${
+                                            gpuLoading ? 'border-light-border dark:border-dark-border bg-light-surface/50 dark:bg-dark-bg/50' :
+                                            gpuInfo?.gpu_available ? 'border-green-500/30 bg-green-500/5' : 'border-amber-500/30 bg-amber-500/5'
+                                        }`}>
+                                            {gpuLoading ? (
+                                                <div className="flex items-center gap-2 text-light-text-secondary dark:text-dark-text-secondary">
+                                                    <div className="w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin" />
+                                                    Detecting GPU...
+                                                </div>
+                                            ) : gpuInfo?.gpu_available ? (
+                                                <div className="space-y-1">
+                                                    <div className="flex items-center gap-2 text-green-600 dark:text-green-400 font-medium">
+                                                        <Zap className="w-3.5 h-3.5" />
+                                                        GPU Detected: {gpuInfo.gpu_name || 'Available'}
+                                                    </div>
+                                                    {gpuInfo.gpu_memory_total_mb && (
+                                                        <div className="text-light-text-secondary dark:text-dark-text-secondary ml-5">
+                                                            VRAM: {gpuInfo.gpu_memory_free_mb ? `${gpuInfo.gpu_memory_free_mb}MB free / ` : ''}{gpuInfo.gpu_memory_total_mb}MB total
+                                                        </div>
+                                                    )}
+                                                    {gpuInfo.model_loaded && gpuInfo.model_device && (
+                                                        <div className="text-light-text-secondary dark:text-dark-text-secondary ml-5">
+                                                            Model loaded on: <span className="font-medium text-light-text-primary dark:text-dark-text-primary">{gpuInfo.model_device.toUpperCase()}</span>
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            ) : (
+                                                <div className="flex items-center gap-2 text-amber-600 dark:text-amber-400">
+                                                    <Cpu className="w-3.5 h-3.5" />
+                                                    {!gpuInfo?.service_running 
+                                                        ? 'Dubbing service not running — GPU info available after first dub' 
+                                                        : 'No GPU detected. Dubbing will use CPU (slower)'
+                                                    }
+                                                </div>
+                                            )}
+                                        </div>
+
+                                        <div className="space-y-2">
+                                            {[
+                                                { value: 'auto', label: 'Auto (Recommended)', description: 'Uses CUDA/MPS GPU if available, otherwise CPU' },
+                                                { value: 'gpu', label: 'GPU (CUDA / MPS)', description: gpuInfo?.gpu_available ? `Use ${gpuInfo.gpu_name || 'GPU'} — significantly faster` : 'Not available on this device', disabled: !gpuInfo?.gpu_available && !gpuLoading },
+                                                { value: 'cpu', label: 'CPU', description: 'Slower but always works. Use if GPU causes errors' }
+                                            ].map(option => (
+                                                <button
+                                                    key={option.value}
+                                                    disabled={option.disabled || deviceSwitching}
+                                                    onClick={async () => {
+                                                        updateSettings({ dubbingDevice: option.value })
+                                                        setDeviceSwitching(true)
+                                                        try {
+                                                            const api = await import('../../utils/api.js')
+                                                            const result = await api.post('/api/dub/set-device', { device: option.value })
+                                                            if (result?.gpu_available !== undefined) {
+                                                                setGpuInfo(prev => ({ ...prev, ...result }))
+                                                            }
+                                                            showNotification(`Dubbing device set to ${option.value.toUpperCase()}`, 'success')
+                                                        } catch (err) {
+                                                            showNotification(`Failed to set device: ${err.message}`, 'error')
+                                                        } finally {
+                                                            setDeviceSwitching(false)
+                                                        }
+                                                    }}
+                                                    className={`
+                                                        w-full flex items-center justify-between p-3 rounded-lg border-2 transition-all text-left
+                                                        ${option.disabled ? 'opacity-40 cursor-not-allowed' : ''}
+                                                        ${settings.dubbingDevice === option.value
+                                                            ? 'border-primary-fg/40 bg-primary-fg/5'
+                                                            : 'border-light-border dark:border-dark-border hover:border-primary-fg/30'
+                                                        }
+                                                    `}
+                                                >
+                                                    <div>
+                                                        <div className="font-medium text-sm flex items-center gap-2">
+                                                            {option.label}
+                                                            {deviceSwitching && settings.dubbingDevice === option.value && (
+                                                                <div className="w-3 h-3 border-2 border-primary-fg border-t-transparent rounded-full animate-spin" />
+                                                            )}
+                                                        </div>
+                                                        <div className="text-xs text-light-text-secondary dark:text-dark-text-secondary">
+                                                            {option.description}
+                                                        </div>
+                                                    </div>
+                                                    {settings.dubbingDevice === option.value && (
                                                         <Check className="w-5 h-5 text-primary-fg" />
                                                     )}
                                                 </button>

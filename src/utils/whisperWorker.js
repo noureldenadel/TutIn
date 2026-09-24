@@ -11,35 +11,33 @@ let isLoadingPipeline = false
 
 // Handle messages from main thread
 self.onmessage = async function (e) {
-    console.log('[Worker] Received message:', e.data?.type, 'buffer size:', e.data?.audioBuffer?.byteLength)
-    const { type, audioBuffer, id, language = 'en', device = 'auto' } = e.data
+    const { type, audioBuffer, id, language = 'en', device = 'auto' } = e.data || {}
+    console.log('[Whisper AI] 📥 Worker received request:', { type, bufferBytes: audioBuffer?.byteLength, language, device })
 
     if (type === 'transcribe') {
+        const startTime = performance.now()
         try {
             const cleanLang = (language || 'en').toLowerCase().trim()
             const targetModel = cleanLang === 'en' ? 'Xenova/whisper-tiny.en' : 'Xenova/whisper-tiny'
 
             // Load pipeline if not loaded or if model mismatch (e.g. switched between English-only and Multilingual)
             if (!transcriptionPipeline || currentModelLoaded !== targetModel) {
-                console.log(`[Worker] Loading pipeline for ${targetModel} (lang: ${cleanLang}, device: ${device})...`)
+                console.log(`[Whisper AI] ⚙️ Initializing pipeline model: ${targetModel} | Language: ${cleanLang} | Device: ${device}`)
                 await loadTranscriptionPipeline(device, targetModel)
-                console.log('[Worker] Pipeline loaded!')
             }
 
             // Report progress
             self.postMessage({ type: 'progress', id, stage: 'transcribing', progress: 0, message: `Transcribing audio (${cleanLang.toUpperCase()})…` })
 
             // Convert ArrayBuffer to Float32Array
-            console.log('[Worker] Converting buffer to Float32Array...')
             const audioFloat32 = new Float32Array(audioBuffer)
-            console.log('[Worker] Audio samples:', audioFloat32.length)
+            console.log(`[Whisper AI] 🎙️ Processing audio: ${audioFloat32.length} samples (~${Math.round(audioFloat32.length / 16000)}s duration)`)
 
             // Run transcription with timestamps & explicit language
-            console.log('[Worker] Starting transcription...')
             const options = {
                 chunk_length_s: 30,
                 stride_length_s: 5,
-                return_timestamps: 'word',
+                return_timestamps: true,
                 force_full_sequences: false
             }
 
@@ -50,7 +48,8 @@ self.onmessage = async function (e) {
             }
 
             const result = await transcriptionPipeline(audioFloat32, options)
-            console.log('[Worker] Transcription complete!')
+            const durationSecs = ((performance.now() - startTime) / 1000).toFixed(2)
+            console.log(`[Whisper AI] ✅ Transcription completed in ${durationSecs}s: ${result.chunks?.length || 0} chunks generated.`)
 
             self.postMessage({ type: 'progress', id, stage: 'transcribing', progress: 1, message: 'Transcription complete!' })
 
@@ -62,7 +61,7 @@ self.onmessage = async function (e) {
                 chunks: result.chunks || []
             })
         } catch (err) {
-            console.error('[Worker] Error:', err)
+            console.error('[Whisper AI] ❌ Transcription error:', err)
             self.postMessage({
                 type: 'error',
                 id,

@@ -323,7 +323,7 @@ function ImportPreviewModal({
                             >
                                 {SUPPORTED_LANGUAGES.map(lang => (
                                     <option key={lang.code} value={lang.code}>
-                                        {lang.flag} {lang.nativeName} ({lang.name})
+                                        {lang.nativeName} ({lang.name})
                                     </option>
                                 ))}
                             </select>

@@ -55,6 +55,12 @@ export function getLangLabel(code) {
 
 const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext, onPrevious, courseId, course, onCourseUpdate, onTimeUpdate, autoPlay, onAspectRatioChange, onVideoDataChange }, ref) {
     const { settings, updateSettings } = useSettings()
+
+    // YouTube and Google Drive videos are embedded in cross-origin iframes
+    // whose play/pause/seek/volume can't be controlled from outside HTML5 element.
+    const isEmbeddedPlayer = !!(video?.youtubeId || video?.driveFileId ||
+        (video?.url && (video.url.includes('youtube.com') || video.url.includes('youtu.be') || video.url.includes('drive.google.com'))))
+
     const videoRef = useRef(null)
     const containerRef = useRef(null)
     const progressRef = useRef(null)
@@ -241,10 +247,23 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
             .catch(err => console.error('Failed to fetch dub languages:', err))
     }, [video?.id, video?.youtubeId, video?.url])
 
-    // Fetch dub languages on video change
+    // Fetch dub languages on video change and listen for updates
     useEffect(() => {
         fetchDubLanguages()
-        setSelectedDubLang('none')
+        
+        if (settings.isDubbingEnabled && settings.dubLanguage) {
+            setSelectedDubLang(settings.dubLanguage)
+        } else {
+            setSelectedDubLang('none')
+        }
+
+        const handleDubUpdated = (e) => {
+            if (e.detail?.videoId === video?.id) {
+                fetchDubLanguages()
+            }
+        }
+        window.addEventListener('tutin:dub-updated', handleDubUpdated)
+        return () => window.removeEventListener('tutin:dub-updated', handleDubUpdated)
     }, [video?.id, fetchDubLanguages])
 
     // Also populate from video.dubbedTracks if available
@@ -257,31 +276,81 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
         }
     }, [video?.dubbedTracks])
 
+    // Sync with global settings when user clicks dub tracks in other panels
+    useEffect(() => {
+        if (settings.isDubbingEnabled && settings.dubLanguage) {
+            setSelectedDubLang(settings.dubLanguage)
+        } else {
+            setSelectedDubLang('none')
+        }
+    }, [settings.isDubbingEnabled, settings.dubLanguage])
+
     // Load and sync dub audio when selectedDubLang changes
     useEffect(() => {
+        const dubAudio = dubAudioRef.current
+        const videoEl = videoRef.current
+
+        console.log('[DUB DEBUG] selectedDubLang changed:', selectedDubLang)
+
         if (selectedDubLang === 'none' || !video?.id) {
-            if (dubAudioRef.current) {
-                dubAudioRef.current.pause()
-                dubAudioRef.current.src = ''
+            console.log('[DUB DEBUG] Disabling dub. Muted state returning to:', isMuted)
+            if (dubAudio) {
+                dubAudio.pause()
+                dubAudio.removeAttribute('src')
+                dubAudio.load()
             }
-            if (videoRef.current) {
-                videoRef.current.muted = isMuted
-                videoRef.current.volume = isMuted ? 0 : volume
+            if (videoEl) {
+                videoEl.muted = isMuted
+                videoEl.volume = isMuted ? 0 : volume
             }
             return
         }
-        if (dubAudioRef.current) {
-            dubAudioRef.current.src = `${SERVER_URL}/api/dub/audio/${video.id}?lang=${selectedDubLang}`
-            dubAudioRef.current.currentTime = videoRef.current?.currentTime || 0
-            dubAudioRef.current.playbackRate = videoRef.current?.playbackRate || playbackSpeed || 1
-            dubAudioRef.current.volume = isMuted ? 0 : volume
-            dubAudioRef.current.muted = isMuted
-            if (videoRef.current) videoRef.current.muted = true
-            if (isPlaying) {
-                dubAudioRef.current.play().catch(e => console.error('Dub play err:', e))
+
+        if (!dubAudio || !videoEl) {
+            console.log('[DUB DEBUG] Missing dubAudio or videoEl refs')
+            return
+        }
+
+        // Always mute the underlying video so only the dubbed audio is heard
+        console.log('[DUB DEBUG] Muting underlying video element')
+        videoEl.muted = true
+
+        const audioUrl = `${SERVER_URL}/api/dub/audio/${video.id}?lang=${encodeURIComponent(selectedDubLang)}&t=${Date.now()}`
+        console.log('[DUB DEBUG] Setting dubAudio src to:', audioUrl)
+        dubAudio.src = audioUrl
+        dubAudio.playbackRate = videoEl.playbackRate || playbackSpeed || 1
+        dubAudio.volume = isMuted ? 0 : volume
+        dubAudio.muted = isMuted
+
+        const syncAndPlay = () => {
+            if (!dubAudio || !videoRef.current) return
+            try {
+                console.log('[DUB DEBUG] Syncing dub audio. Video time:', videoRef.current.currentTime)
+                dubAudio.currentTime = videoRef.current.currentTime || 0
+                dubAudio.playbackRate = videoRef.current.playbackRate || playbackSpeed || 1
+                dubAudio.volume = isMuted ? 0 : volume
+                dubAudio.muted = isMuted
+                if (!videoRef.current.paused) {
+                    console.log('[DUB DEBUG] Playing dub audio...')
+                    dubAudio.play().then(() => console.log('[DUB DEBUG] Dub audio playing successfully')).catch(e => console.warn('[VideoPlayer] Dub play caught:', e))
+                }
+            } catch (err) {
+                console.warn('[VideoPlayer] Dub sync err:', err)
             }
         }
-    }, [selectedDubLang, video?.id])
+
+        dubAudio.addEventListener('loadedmetadata', syncAndPlay, { once: true })
+        dubAudio.addEventListener('canplay', syncAndPlay, { once: true })
+
+        if (dubAudio.readyState >= 1) {
+            syncAndPlay()
+        }
+
+        return () => {
+            dubAudio.removeEventListener('loadedmetadata', syncAndPlay)
+            dubAudio.removeEventListener('canplay', syncAndPlay)
+        }
+    }, [selectedDubLang, video?.id]) // Removed volume/isMuted/playbackSpeed to prevent restarting dub on volume change
 
     // Load video when video prop changes
     useEffect(() => {
@@ -1012,9 +1081,11 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
                 if (spaceHoldTimerRef.current) clearTimeout(spaceHoldTimerRef.current)
                 spaceHoldTimerRef.current = setTimeout(() => {
                     isHoldingSpaceRef.current = true
-                    const isYt = video?.youtubeId || video?.url?.startsWith('http')
-                    if (videoRef.current && !isYt) {
-                        speedBeforeBoostRef.current = videoRef.current.playbackRate || playbackSpeed || 1
+                    if (videoRef.current && !isEmbeddedPlayer) {
+                        setPlaybackSpeed(currentSpeed => {
+                            speedBeforeBoostRef.current = videoRef.current.playbackRate || currentSpeed || 1
+                            return currentSpeed
+                        })
                         videoRef.current.playbackRate = 2
                         setIsSpeedBoosting(true)
                         if (videoRef.current.paused) {
@@ -1024,7 +1095,7 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
                     if (dubAudioRef.current) {
                         dubAudioRef.current.playbackRate = 2
                     }
-                }, 280)
+                }, 220)
                 return
             }
 
@@ -1032,8 +1103,12 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
             if (!e.shiftKey && !e.ctrlKey && key >= '0' && key <= '9') {
                 e.preventDefault()
                 const percent = parseInt(key) * 10
-                if (videoRef.current && duration) {
-                    videoRef.current.currentTime = (percent / 100) * duration
+                if (videoRef.current && durationRef.current) {
+                    const t = (percent / 100) * durationRef.current
+                    videoRef.current.currentTime = t
+                    if (selectedDubLang !== 'none' && dubAudioRef.current) {
+                        dubAudioRef.current.currentTime = t
+                    }
                 }
                 return
             }
@@ -1046,25 +1121,41 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
                 case 'arrowleft':
                     e.preventDefault()
                     if (videoRef.current) {
-                        videoRef.current.currentTime = Math.max(0, currentTime - 5)
+                        const t = Math.max(0, currentTimeRef.current - 5)
+                        videoRef.current.currentTime = t
+                        if (selectedDubLang !== 'none' && dubAudioRef.current) {
+                            dubAudioRef.current.currentTime = t
+                        }
                     }
                     break
                 case 'arrowright':
                     e.preventDefault()
                     if (videoRef.current) {
-                        videoRef.current.currentTime = Math.min(duration, currentTime + 5)
+                        const t = Math.min(durationRef.current, currentTimeRef.current + 5)
+                        videoRef.current.currentTime = t
+                        if (selectedDubLang !== 'none' && dubAudioRef.current) {
+                            dubAudioRef.current.currentTime = t
+                        }
                     }
                     break
                 case 'j':
                     e.preventDefault()
                     if (videoRef.current) {
-                        videoRef.current.currentTime = Math.max(0, currentTime - 10)
+                        const t = Math.max(0, currentTimeRef.current - 10)
+                        videoRef.current.currentTime = t
+                        if (selectedDubLang !== 'none' && dubAudioRef.current) {
+                            dubAudioRef.current.currentTime = t
+                        }
                     }
                     break
                 case 'l':
                     e.preventDefault()
                     if (videoRef.current) {
-                        videoRef.current.currentTime = Math.min(duration, currentTime + 10)
+                        const t = Math.min(durationRef.current, currentTimeRef.current + 10)
+                        videoRef.current.currentTime = t
+                        if (selectedDubLang !== 'none' && dubAudioRef.current) {
+                            dubAudioRef.current.currentTime = t
+                        }
                     }
                     break
                 case 'arrowup':
@@ -1090,20 +1181,20 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
                 case ',':
                 case '<':
                     e.preventDefault()
-                    // Decrease speed
-                    const currentIdx = speedOptions.indexOf(playbackSpeed)
-                    if (currentIdx > 0) {
-                        changeSpeed(speedOptions[currentIdx - 1])
-                    }
+                    setPlaybackSpeed(currentSpeed => {
+                        const idx = speedOptions.indexOf(currentSpeed)
+                        if (idx > 0) changeSpeed(speedOptions[idx - 1])
+                        return currentSpeed // changeSpeed will update it anyway
+                    })
                     break
                 case '.':
                 case '>':
                     e.preventDefault()
-                    // Increase speed
-                    const currentSpeedIdx = speedOptions.indexOf(playbackSpeed)
-                    if (currentSpeedIdx < speedOptions.length - 1) {
-                        changeSpeed(speedOptions[currentSpeedIdx + 1])
-                    }
+                    setPlaybackSpeed(currentSpeed => {
+                        const idx = speedOptions.indexOf(currentSpeed)
+                        if (idx < speedOptions.length - 1) changeSpeed(speedOptions[idx + 1])
+                        return currentSpeed
+                    })
                     break
                 case 'n':
                     if (e.shiftKey) {
@@ -1144,12 +1235,17 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
                     // Was holding space for 2x boost -> restore original speed
                     isHoldingSpaceRef.current = false
                     setIsSpeedBoosting(false)
-                    const isYt = video?.youtubeId || video?.url?.startsWith('http')
-                    if (videoRef.current && !isYt) {
-                        videoRef.current.playbackRate = speedBeforeBoostRef.current || playbackSpeed || 1
+                    if (videoRef.current && !isEmbeddedPlayer) {
+                        setPlaybackSpeed(currentSpeed => {
+                            videoRef.current.playbackRate = speedBeforeBoostRef.current || currentSpeed || 1
+                            return currentSpeed
+                        })
                     }
                     if (dubAudioRef.current) {
-                        dubAudioRef.current.playbackRate = speedBeforeBoostRef.current || playbackSpeed || 1
+                        setPlaybackSpeed(currentSpeed => {
+                            dubAudioRef.current.playbackRate = speedBeforeBoostRef.current || currentSpeed || 1
+                            return currentSpeed
+                        })
                     }
                 } else {
                     // Short tap -> toggle play/pause
@@ -1165,7 +1261,7 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
             window.removeEventListener('keyup', handleKeyUp)
             if (spaceHoldTimerRef.current) clearTimeout(spaceHoldTimerRef.current)
         }
-    }, [currentTime, duration, settings.keyboardShortcuts, playbackSpeed, video?.youtubeId, video?.url])
+    }, [settings.keyboardShortcuts, isEmbeddedPlayer, selectedDubLang])
 
     // Auto-hide controls
     const hasOpenMenu = showSettingsMenu || showAudioSubMenu || showSpeedMenu
@@ -1239,18 +1335,20 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
     // Update volume when it changes
     useEffect(() => {
         if (videoRef.current) {
-            /* [DUB FEATURE HIDDEN] — simplified volume logic (no dub branch)
             if (selectedDubLang !== 'none') {
+                console.log('[DUB DEBUG] Volume effect: enforcing muted on video')
                 videoRef.current.muted = true
+                videoRef.current.volume = 0
                 if (dubAudioRef.current) {
+                    dubAudioRef.current.muted = isMuted
                     dubAudioRef.current.volume = isMuted ? 0 : volume
                 }
-            } else { */
+            } else {
                 videoRef.current.muted = isMuted
                 videoRef.current.volume = isMuted ? 0 : volume
-            /* } */
+            }
         }
-    }, [volume, isMuted])
+    }, [volume, isMuted, selectedDubLang])
 
     // Sync internal video state with props/state (only when DOM state is mismatched)
     useEffect(() => {
@@ -1284,7 +1382,7 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
         if (!isYt) {
             const rate = isSpeedBoosting ? 2 : playbackSpeed
             if (videoRef.current) videoRef.current.playbackRate = rate
-            // [DUB FEATURE HIDDEN] if (dubAudioRef.current) dubAudioRef.current.playbackRate = rate
+            if (dubAudioRef.current) dubAudioRef.current.playbackRate = rate
         }
     }, [playbackSpeed, isSpeedBoosting, videoUrl])
 
@@ -1444,7 +1542,7 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
                 setSpeedBeforeBoost(playbackSpeed)
                 setPlaybackSpeed(2)
                 setIsSpeedBoosting(true)
-                if (videoRef.current && !(video?.youtubeId || video?.url?.startsWith('http'))) {
+                if (videoRef.current && !isEmbeddedPlayer) {
                     videoRef.current.playbackRate = 2
                 }
                 if (dubAudioRef.current) {
@@ -1467,7 +1565,7 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
             setIsSpeedBoosting(false)
             // Set flag to prevent click from pausing video
             wasSpeedBoostingRef.current = true
-            if (videoRef.current && !(video?.youtubeId || video?.url?.startsWith('http'))) {
+            if (videoRef.current && !isEmbeddedPlayer) {
                 videoRef.current.playbackRate = speedBeforeBoost
             }
             if (dubAudioRef.current) {
@@ -1486,12 +1584,6 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
     }
 
     const speedOptions = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2]
-
-    // YouTube and Google Drive videos are embedded in cross-origin iframes
-    // whose play/pause/seek/volume can't be controlled from outside.
-    // We still show TutIn's prev/next, fullscreen, settings, and captions controls.
-    const isEmbeddedPlayer = !!(video?.youtubeId || video?.driveFileId ||
-        (video?.url && (video.url.includes('youtube.com') || video.url.includes('youtu.be') || video.url.includes('drive.google.com'))))
 
     return (
         <div
@@ -1573,6 +1665,37 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
                     onPause={handlePause}
                     onEnded={handleEnded}
                     onClick={handleVideoClick}
+                    onSeeking={() => {
+                        if (selectedDubLang !== 'none' && dubAudioRef.current && videoRef.current) {
+                            dubAudioRef.current.currentTime = videoRef.current.currentTime
+                        }
+                    }}
+                    onSeeked={() => {
+                        if (selectedDubLang !== 'none' && dubAudioRef.current && videoRef.current) {
+                            dubAudioRef.current.currentTime = videoRef.current.currentTime
+                            if (!videoRef.current.paused) {
+                                dubAudioRef.current.play().catch(() => {})
+                            }
+                        }
+                    }}
+                    onRateChange={() => {
+                        if (selectedDubLang !== 'none' && dubAudioRef.current && videoRef.current) {
+                            dubAudioRef.current.playbackRate = videoRef.current.playbackRate
+                        }
+                    }}
+                    onWaiting={() => {
+                        if (selectedDubLang !== 'none' && dubAudioRef.current) {
+                            dubAudioRef.current.pause()
+                        }
+                    }}
+                    onPlaying={() => {
+                        if (selectedDubLang !== 'none' && dubAudioRef.current && videoRef.current) {
+                            const diff = Math.abs(videoRef.current.currentTime - dubAudioRef.current.currentTime)
+                            if (diff > 0.15) dubAudioRef.current.currentTime = videoRef.current.currentTime
+                            dubAudioRef.current.playbackRate = videoRef.current.playbackRate
+                            dubAudioRef.current.play().catch(() => {})
+                        }
+                    }}
                     onError={(e) => {
                         // For .ts files, mpegts.js manages playback via MSE —
                         // the native <video> error is expected and should be ignored.
@@ -1858,7 +1981,7 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
                                                             >
                                                                 {SUPPORTED_LANGUAGES.map((l) => (
                                                                     <option key={l.code} value={l.code} className="bg-[#1f1f1f] text-white">
-                                                                        {l.flag} {l.name}
+                                                                        {l.nativeName ? `${l.nativeName} (${l.name})` : l.name}
                                                                     </option>
                                                                 ))}
                                                             </select>
@@ -1954,8 +2077,8 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
                                                             }}
                                                             className="w-full px-2 py-1 text-xs text-left hover:bg-white/10 rounded-lg text-white/80 hover:text-white flex items-center gap-2 transition-colors"
                                                         >
-                                                            <Languages className="w-3.5 h-3.5 opacity-75" />
-                                                            <span>Translate...</span>
+                                                            <Captions className="w-3.5 h-3.5 opacity-75" />
+                                                            <span>Transcript & Translate...</span>
                                                         </button>
                                                         <label className="w-full px-2 py-1 text-xs text-left hover:bg-white/10 rounded-lg text-white/80 hover:text-white cursor-pointer flex items-center gap-2 transition-colors">
                                                             <Upload className="w-3.5 h-3.5 opacity-75" />
@@ -2200,7 +2323,34 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
             />
 
             {/* Audio element for dubbed audio playback */}
-            <audio ref={dubAudioRef} preload="auto" />
+            <audio
+                ref={dubAudioRef}
+                preload="auto"
+                onLoadedMetadata={(e) => {
+                    if (videoRef.current) {
+                        e.target.currentTime = videoRef.current.currentTime
+                        e.target.playbackRate = videoRef.current.playbackRate || playbackSpeed || 1
+                        e.target.volume = isMuted ? 0 : volume
+                        e.target.muted = isMuted
+                        if (!videoRef.current.paused) {
+                            e.target.play().catch(() => {})
+                        }
+                    }
+                }}
+                onPlay={() => {
+                    if (videoRef.current && selectedDubLang !== 'none') {
+                        videoRef.current.muted = true
+                    }
+                }}
+                onError={(e) => {
+                    console.warn('[VideoPlayer] Dubbed audio load error:', e)
+                    // If dubbing is disabled, restore original video volume
+                    if (videoRef.current && selectedDubLang === 'none') {
+                        videoRef.current.muted = isMuted
+                        videoRef.current.volume = isMuted ? 0 : volume
+                    }
+                }}
+            />
         </div>
     )
 })

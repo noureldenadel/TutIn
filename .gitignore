@@ -1,7 +1,18 @@
 # Dependencies
+node_modules/
 node_modules
 .pnp
 .pnp.js
+.venv/
+.venv
+venv/
+venv
+ENV/
+env/
+**/__pycache__/
+__pycache__/
+*.py[cod]
+*$py.class
 
 # Build outputs
 dist

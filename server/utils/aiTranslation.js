@@ -53,6 +53,9 @@ export async function translateChunks(chunks, targetLanguage, apiKey, modelParam
         throw new Error(`Unsupported language code: ${targetLanguage}`)
     }
     
+    console.log(`[NLLB-200] 🌐 Initializing translation: ${chunks.length} chunks | ${sourceLanguage} (${src_lang}) ➔ ${targetLanguage} (${tgt_lang})`)
+    const startTime = Date.now()
+
     onProgress?.({
         step: 'loading',
         message: `Loading NLLB-200 model (1.2GB, downloads once)...`,
@@ -79,7 +82,7 @@ export async function translateChunks(chunks, targetLanguage, apiKey, modelParam
             }
         })
     } catch (err) {
-        console.error("Failed to load local model:", err)
+        console.error("[NLLB-200] ❌ Failed to load local model:", err)
         throw new Error(`Failed to load translation model for '${targetLanguage}'. Model ${modelId} might not exist. Error: ${err.message}`)
     }
 
@@ -89,6 +92,7 @@ export async function translateChunks(chunks, targetLanguage, apiKey, modelParam
 
     for (let i = 0; i < chunks.length; i += BATCH_SIZE) {
         if (req && req.socket && req.socket.destroyed) {
+            console.log('[NLLB-200] 🛑 Translation cancelled by client')
             throw new Error("Translation cancelled by client")
         }
 
@@ -106,14 +110,16 @@ export async function translateChunks(chunks, targetLanguage, apiKey, modelParam
 
         try {
             // Local translation using NLLB
+            const batchStart = Date.now()
             const output = await translator(batchTexts, {
                 src_lang: src_lang,
                 tgt_lang: tgt_lang
             })
+            const batchElapsed = Date.now() - batchStart
+            console.log(`[NLLB-200] ⚡ Batch ${batchNum}/${totalBatches} (${batch.length} lines) translated in ${batchElapsed}ms`)
 
             // Reconstruct chunks
             for (let j = 0; j < batch.length; j++) {
-                // The output is either an array of objects or an array of arrays of objects depending on input shape
                 const translatedText = Array.isArray(output[j]) ? output[j][0].translation_text : output[j].translation_text
                 
                 translatedChunks.push({
@@ -122,10 +128,13 @@ export async function translateChunks(chunks, targetLanguage, apiKey, modelParam
                 })
             }
         } catch (err) {
-            console.error(`Local translation batch ${batchNum} failed:`, err)
+            console.error(`[NLLB-200] ❌ Local translation batch ${batchNum} failed:`, err)
             throw new Error(`Translation engine crashed on batch ${batchNum}: ${err.message}`)
         }
     }
+
+    const totalSeconds = ((Date.now() - startTime) / 1000).toFixed(2)
+    console.log(`[NLLB-200] ✅ Translation complete in ${totalSeconds}s: ${translatedChunks.length} chunks generated for '${targetLanguage}'`)
 
     onProgress?.({
         step: 'done',

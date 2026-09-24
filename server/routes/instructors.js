@@ -24,7 +24,7 @@ router.get('/', (req, res) => {
 router.get('/:id', (req, res) => {
     try {
         const inst = getOne('SELECT * FROM instructors WHERE id = ?', [req.params.id])
-        if (!inst) return res.status(404).json({ error: 'Instructor not found' })
+        if (!inst) return res.json({ id: req.params.id, avatarData: null })
         
         res.json({
             id: inst.id,

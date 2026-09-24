@@ -231,7 +231,7 @@ async function transcribeOnMainThread(audioData, onProgress, device = 'auto', la
         const options = {
             chunk_length_s: 30,
             stride_length_s: 5,
-            return_timestamps: 'word',
+            return_timestamps: true,
             force_full_sequences: false
         }
         if (cleanLang !== 'en') {
@@ -356,6 +356,10 @@ Create detailed study notes from the transcript below. Write as if you're taking
 
 ${truncatedTranscript}`
 
+    const selectedModel = model || 'google/gemini-2.0-flash-exp:free'
+    console.log(`[AI Summary] 🤖 Requesting summary from model: ${selectedModel} | Input transcript length: ${transcript.length} chars`)
+    const startTime = performance.now()
+
     try {
         onProgress?.({ stage: 'summarizing', progress: 0.3, message: 'Generating summary...' })
 
@@ -374,7 +378,7 @@ ${truncatedTranscript}`
                         'X-Title': 'TutIn Course Player'
                     },
                     body: JSON.stringify({
-                        model: model || 'google/gemini-2.0-flash-exp:free',
+                        model: selectedModel,
                         messages: [
                             {
                                 role: 'user',
@@ -389,6 +393,7 @@ ${truncatedTranscript}`
                 if (response.status === 429) {
                     // Rate limited - wait and retry
                     const waitTime = Math.pow(2, attempt) * 2000 // 4s, 8s, 16s
+                    console.warn(`[AI Summary] ⚠️ Rate limit 429 encountered, retrying in ${waitTime/1000}s... (Attempt ${attempt}/${maxRetries})`)
                     onProgress?.({
                         stage: 'summarizing',
                         progress: 0.3,
@@ -413,6 +418,9 @@ ${truncatedTranscript}`
                     throw new Error('No summary content received from API')
                 }
 
+                const elapsed = ((performance.now() - startTime) / 1000).toFixed(2)
+                console.log(`[AI Summary] ✅ Summary received in ${elapsed}s: ${summary.length} characters generated.`)
+
                 return summary
             } catch (err) {
                 lastError = err
@@ -432,7 +440,7 @@ ${truncatedTranscript}`
 
         throw lastError || new Error('Max retries exceeded')
     } catch (err) {
-        console.error('Gemini API summarization failed:', err)
+        console.error('[AI Summary] ❌ Summarization failed:', err)
         // Fallback to simple summary if API fails
         return generateFallbackSummary(transcript, err.message)
     }
@@ -514,15 +522,83 @@ export function chunksToVTT(chunks) {
 }
 
 /**
+ * Transcribe a video to generate or regenerate timestamped captions (VTT chunks).
+ * Runs Whisper AI speech-to-text in the video's spoken language.
+ */
+export async function transcribeVideoCaptions(video, onProgress, device = 'auto', language = 'en') {
+    const { SERVER_URL } = await import('./api')
+    let fileSource = video?.fileHandle || (video?.filePath ? `${SERVER_URL}/video/${encodeURIComponent(video.filePath)}` : video?.url)
+    if (!fileSource) {
+        throw new Error('Video source file not accessible for transcription')
+    }
+    if (fileSource.getFile) {
+        const { verifyPermission } = await import('./fileSystem')
+        const hasPerm = await verifyPermission(fileSource)
+        if (!hasPerm) throw new Error('File access permission was denied')
+    }
+
+    // Step 1: Extract audio
+    const audioData = await extractAndProcessAudio(fileSource, onProgress)
+
+    // Step 2: Transcribe using Whisper Web Worker or main thread
+    const transcription = await transcribeAudio(audioData, onProgress, device, language)
+    const transcript = transcription.text
+    const captionChunks = transcription.chunks
+
+    // Step 3: Save timestamped caption chunks to server / course folder
+    const { isServerAvailable, put } = await import('./api')
+    const serverAvailable = await isServerAvailable()
+    
+    if (serverAvailable) {
+        await put(`/api/transcripts/${video.id}`, { chunks: captionChunks, language: language || 'en' })
+    } else {
+        await updateVideo(video.id, {
+            transcript: transcript,
+            captionChunks: captionChunks,
+            transcriptGeneratedAt: new Date().toISOString()
+        })
+    }
+
+    onProgress?.({ stage: 'complete', progress: 1, message: 'Captions generated successfully!' })
+
+    return { transcript, captionChunks }
+}
+
+/**
  * Process a video for transcription and summarization
  */
-export async function processVideoForSummary(videoId, fileSource, onProgress, apiKey, model, device = 'auto', language = 'en') {
+export async function processVideoForSummary(videoIdOrVideo, fileSourceOrOnProgress, onProgressOrCourse, apiKey, model, device = 'auto', language = 'en') {
+    let videoId = videoIdOrVideo
+    let fileSource = fileSourceOrOnProgress
+    let onProgress = onProgressOrCourse
+    let lang = language
+
+    // Handle when first argument is video object: processVideoForSummary(video, onProgress, course)
+    if (typeof videoIdOrVideo === 'object' && videoIdOrVideo !== null) {
+        const video = videoIdOrVideo
+        videoId = video.id
+        onProgress = fileSourceOrOnProgress
+        const course = onProgressOrCourse
+        lang = course?.language || video?.language || 'en'
+        const { SERVER_URL } = await import('./api')
+        fileSource = video?.fileHandle || (video?.filePath ? `${SERVER_URL}/video/${encodeURIComponent(video.filePath)}` : video?.url)
+    }
+
+    if (!fileSource) {
+        throw new Error('Video source file not accessible for transcription')
+    }
+    if (fileSource.getFile) {
+        const { verifyPermission } = await import('./fileSystem')
+        const hasPerm = await verifyPermission(fileSource)
+        if (!hasPerm) throw new Error('File access permission was denied')
+    }
+
     try {
         // Step 1: Extract audio
         const audioData = await extractAndProcessAudio(fileSource, onProgress)
 
-        // Step 2: Transcribe using Whisper (now returns { text, chunks })
-        const transcription = await transcribeAudio(audioData, onProgress, device, language)
+        // Step 2: Transcribe using Whisper (returns { text, chunks })
+        const transcription = await transcribeAudio(audioData, onProgress, device, lang)
         const transcript = transcription.text
         const captionChunks = transcription.chunks
 
@@ -531,7 +607,7 @@ export async function processVideoForSummary(videoId, fileSource, onProgress, ap
         const serverAvailable = await isServerAvailable()
         
         if (serverAvailable) {
-            await put(`/api/transcripts/${videoId}`, { chunks: captionChunks })
+            await put(`/api/transcripts/${videoId}`, { chunks: captionChunks, language: lang || 'en' })
         } else {
             await updateVideo(videoId, {
                 transcript: transcript,

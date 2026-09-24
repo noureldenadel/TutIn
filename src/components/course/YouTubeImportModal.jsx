@@ -298,7 +298,7 @@ function YouTubeImportModal({ isOpen, onClose, onImport }) {
                                 >
                                     {SUPPORTED_LANGUAGES.map((lang) => (
                                         <option key={lang.code} value={lang.code}>
-                                            {lang.flag} {lang.name} ({lang.native})
+                                            {lang.nativeName ? `${lang.nativeName} (${lang.name})` : lang.name}
                                         </option>
                                     ))}
                                 </select>

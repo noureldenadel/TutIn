@@ -1,5 +1,6 @@
 import { spawn } from 'child_process'
 import path from 'path'
+import fs from 'fs'
 import { fileURLToPath } from 'url'
 import { getPythonEnv } from '../utils/modelManager.js'
 
@@ -47,32 +48,40 @@ export async function ensureServiceRunning() {
     return false
 }
 
+function getPythonExecutable() {
+    const venvPythonWin = path.join(__dirname, '..', '..', '.venv', 'Scripts', 'python.exe')
+    const venvPythonPosix = path.join(__dirname, '..', '..', '.venv', 'bin', 'python')
+    if (fs.existsSync(venvPythonWin)) return venvPythonWin
+    if (fs.existsSync(venvPythonPosix)) return venvPythonPosix
+    return 'python'
+}
+
 function startPythonService() {
     return new Promise((resolve, reject) => {
-        const pythonPath = 'python' // assumes python is in PATH
+        const pythonPath = getPythonExecutable()
         const scriptPath = path.join(__dirname, '..', '..', 'python', 'dubbing_server.py')
         
-        console.log(`[DubbingService] Starting python server at ${scriptPath}...`)
+        console.log(`[XTTS Dubbing] Starting python server using "${pythonPath}" at ${scriptPath}...`)
         pythonProcess = spawn(pythonPath, [scriptPath], {
             env: getPythonEnv()
         })
         
         pythonProcess.stdout.on('data', (data) => {
-            console.log(`[Python] ${data.toString().trim()}`)
+            console.log(`[XTTS Dubbing] ${data.toString().trim()}`)
         })
         
         pythonProcess.stderr.on('data', (data) => {
-            console.error(`[Python] ${data.toString().trim()}`)
+            console.error(`[XTTS Dubbing:stderr] ${data.toString().trim()}`)
         })
         
         pythonProcess.on('close', (code) => {
-            console.log(`[DubbingService] Python process exited with code ${code}`)
+            console.log(`[XTTS Dubbing] Python process exited with code ${code}`)
             pythonProcess = null
             isStarting = false
         })
         
         pythonProcess.on('error', (err) => {
-            console.error('[DubbingService] Failed to start python process:', err)
+            console.error('[XTTS Dubbing] Failed to start python process:', err)
             pythonProcess = null
             reject(err)
         })
@@ -81,21 +90,24 @@ function startPythonService() {
     })
 }
 
-export async function submitDubJob(videoId, videoPath, chunks, lang, voiceReferencePath = null) {
+export async function submitDubJob(videoId, videoPath, chunks, lang, voiceReferencePath = null, device = null) {
     const isRunning = await ensureServiceRunning()
     if (!isRunning) {
         throw new Error("Dubbing backend service is not running and could not be started.")
     }
     
+    const body = {
+        videoPath,
+        chunks,
+        targetLang: lang,
+        voiceReferencePath
+    }
+    if (device) body.device = device
+
     const res = await fetch('http://127.0.0.1:9475/dub', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            videoPath,
-            chunks,
-            targetLang: lang,
-            voiceReferencePath
-        })
+        body: JSON.stringify(body)
     })
     
     if (!res.ok) {
