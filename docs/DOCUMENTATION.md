@@ -48,7 +48,7 @@ Welcome to the **TutIn Comprehensive Documentation**. This document covers every
 5. **Start AI Dubbing Service (Optional)**:
    If using the voice cloning feature:
    ```bash
-   pip install TTS fastapi uvicorn pydub
+   pip install -r python/requirements.txt
    python python/dubbing_server.py
    ```
 
@@ -67,7 +67,7 @@ TutIn is designed as an **Offline-First**, local-first application built with mo
 
 ### Backend / Local Services
 - **Companion Server**: Express.js + SQLite. Runs locally on port `9474` to handle persistent file streaming and overcome browser origin isolation limits.
-- **Dubbing Server**: Python-based FastAPI server utilizing `Coqui XTTS v2` for local AI voice cloning and audio generation.
+- **Dubbing Server**: Python-based FastAPI server running on port `9475`. Utilizes `Coqui XTTS v2` for local AI voice cloning, Demucs for stem separation, and FFmpeg for Rubber Band time-fitting and sidechain ducking.
 
 ### Local Storage & Persistence
 - **IndexedDB**: Primary client-side database storing all course metadata, module trees, progress arrays, notes, and roadmaps.
@@ -77,7 +77,12 @@ TutIn is designed as an **Offline-First**, local-first application built with mo
 ### AI & Machine Learning
 - **Transcription**: `Transformers.js` (WebGPU accelerated) running `Xenova/whisper-tiny` completely inside a Web Worker.
 - **Summarization**: Gemini 2.0 Flash via OpenRouter REST API.
-- **Dubbing/Translation**: Local NLLB-200 distillation for subtitle translation, and XTTS v2 for voice cloning. Includes Bulk Dubbing and translation workflows processed via background jobs. The dubbing engine features intelligent audio processing: it uses FFmpeg `atempo` filters to time-stretch generated audio into the original caption window (clamped between 0.5x and 1.5x), prevents segment overlapping, and applies a 20ms fade-in/fade-out to eliminate harsh clipping.
+- **Dubbing & Translation Pipeline**:
+  - **Sentence Stitcher**: Aggregates fragmented subtitle cues into complete grammatical sentences before translation and speech synthesis, eliminating broken translations and unnatural micro-cue cadence.
+  - **Local Translation**: Distilled NLLB-200 (`Xenova/nllb-200-distilled-600M`) for offline translation; OpenRouter for dialectal Arabic (`ar-eg`, `ar-sa`). Translated full sentences are proportionally re-sliced back into original cue timestamps for visual on-screen captions.
+  - **Voice Cloning (Coqui XTTS v2)**: Synthesizes cloned voice in 16+ languages with native speed pre-biasing ($0.88\times$ to $1.25\times$).
+  - **Intelligent Time-Fitting**: Absorbs timing slack into natural silence gaps between cues (zero-stretch first), shaves internal non-speech pauses, and uses FFmpeg's `rubberband` filter (`transients=crisp:detector=compound`) for crisp, non-metallic speed corrections.
+  - **Background Audio Preservation (Demucs)**: Opt-in 2-stem separation (`htdemucs --two-stems=vocals`) isolates original music and sound effects, ducking them by ~16 dB under speech using FFmpeg's `sidechaincompress`, layered with a continuous crossfade-looped room-tone ambience bed.
 - **AI File Pipeline & Naming**: The pipeline operates in a sequence: *Whisper* -> *NLLB-200* -> *XTTS*. AI-generated files explicitly carry a `-generated.[lang]` suffix (e.g., `01-generated.en.vtt`), distinguishing them from user-uploaded captions (e.g., `01.es.vtt`).
 
 ---
@@ -95,8 +100,10 @@ graph TD
     CompanionServer --> SQLite[(SQLite DB)]
     CompanionServer --> Stream[Video Streaming]
     UI --> WebWorker[Whisper AI Web Worker]
-    UI --> PythonServer[Python Dubbing Server :8000]
-    PythonServer --> AI[XTTS v2 Voice Cloning]
+    UI --> PythonServer[Python Dubbing Server :9475]
+    PythonServer --> XTTS[XTTS v2 Voice Cloning]
+    PythonServer --> Demucs[Demucs Stem Separation]
+    PythonServer --> RubberBand[FFmpeg Rubber Band & Ducking]
 ```
 
 ### Course Import Workflow
@@ -155,8 +162,10 @@ stateDiagram-v2
 
 ### 🧠 AI Toolkit
 - **Offline Transcription**: Converts speech to text locally in your browser with smart transcript autocomplete. Generates clickable timestamps that seek the video.
+- **Modular On-Demand Punctuation Restoration**: Solves unpunctuated subtitle files (automated ASR dumps, YouTube auto-captions). Downloads specialized per-language neural models strictly on-demand (~35MB English, ~42MB Arabic Naqta) while unused models consume 0MB. Word-to-timestamp alignment preserves video playback sync. Resilient fallback to acoustic pause gaps (>= 550ms) and discourse transition boundaries guarantees zero runtime failures.
+- **Audio & Subtitle Language Decoupling**: Fully separates spoken course audio from the active AI Source transcript language. If English subtitles are selected for a Spanish-speaking video, punctuation runs on English, translation translates from English, and users can dub/translate back into the native course language.
 - **Gemini Summaries**: Generates Markdown-formatted study notes from transcripts.
-- **Local Voice Dubbing**: Auto-translates captions to 16+ languages and generates cloned audio tracks. Queue bulk tasks to dub entire modules in the background.
+- **Local Voice Dubbing**: Auto-translates captions to 16+ languages and generates cloned audio tracks with Demucs stem isolation, sidechain ducking, and rubberband time-stretching. Queue bulk tasks to dub entire modules in the background.
 
 ### 📝 Notes & Annotations
 - **Timestamped Markdown Notes**: Take rich-text markdown notes that lock to the current video timestamp. 
@@ -202,7 +211,7 @@ npm run dev -- --port 3001
 ### AI Dubbing Server Fails to Start
 **Cause:** Missing Python dependencies or FFmpeg not found in system PATH.
 **Solution:**
-Verify FFmpeg is installed by typing `ffmpeg -version` in your terminal. Ensure Python dependencies are installed using `pip install TTS fastapi uvicorn pydub`.
+Verify FFmpeg is installed by typing `ffmpeg -version` in your terminal. Ensure Python dependencies are installed using `pip install -r python/requirements.txt`.
 
 ---
 

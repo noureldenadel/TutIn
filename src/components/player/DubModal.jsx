@@ -8,12 +8,22 @@ import { SUPPORTED_LANGUAGES, getLanguageInfo } from '../../utils/languages'
 
 export default function DubModal({ isOpen, onClose, video, course, sourceLanguage: propSourceLang, onSuccess }) {
     const { settings } = useSettings()
-    const sourceLang = (propSourceLang || course?.language || 'en').toLowerCase().trim()
+
+    // Decouple transcript source language from video spoken audio language
+    const parsedSources = typeof video?.subtitle_sources === 'string'
+        ? JSON.parse(video.subtitle_sources || '[]')
+        : (video?.subtitle_sources || [])
+    const aiSource = parsedSources.find(s => s.is_ai_source)
+    const effectiveTranscriptLang = (aiSource?.lang && aiSource.lang !== 'source')
+        ? aiSource.lang
+        : (propSourceLang || course?.language || 'en').toLowerCase().trim()
+    const spokenAudioLang = (course?.language || 'en').toLowerCase().trim()
+    const sourceLang = effectiveTranscriptLang
     const sourceInfo = getLanguageInfo(sourceLang)
 
-    // Filter available target languages (exclude source language)
-    const availableTargets = SUPPORTED_LANGUAGES.filter(l => l.code !== sourceLang)
-    const defaultTarget = sourceLang === 'ar' ? 'es' : 'ar'
+    // Filter available target languages (exclude transcript language, NOT spoken audio)
+    const availableTargets = SUPPORTED_LANGUAGES.filter(l => l.code !== effectiveTranscriptLang)
+    const defaultTarget = effectiveTranscriptLang === 'ar' ? (spokenAudioLang !== 'es' ? 'es' : 'en') : 'ar'
 
     const [targetLang, setTargetLang] = useState(defaultTarget)
     const [isDubbing, setIsDubbing] = useState(false)
@@ -24,6 +34,7 @@ export default function DubModal({ isOpen, onClose, video, course, sourceLanguag
     const [isStartingService, setIsStartingService] = useState(false)
     const [existingLangs, setExistingLangs] = useState({ sourceExists: false, translatedLangs: [], existingLangs: [] })
     const [dubbedLangs, setDubbedLangs] = useState([])
+    const [preserveBackgroundAudio, setPreserveBackgroundAudio] = useState(false)
 
     const pollRef = useRef(null)
     const activeAbortController = useRef(null)
@@ -246,7 +257,10 @@ export default function DubModal({ isOpen, onClose, video, course, sourceLanguag
             const res = await fetch(`${SERVER_URL}/api/dub/video/${video.id}`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ targetLanguage: targetLang })
+                body: JSON.stringify({ 
+                    targetLanguage: targetLang,
+                    preserveBackgroundAudio: Boolean(preserveBackgroundAudio)
+                })
             })
 
             if (!res.ok) {
@@ -431,6 +445,12 @@ export default function DubModal({ isOpen, onClose, video, course, sourceLanguag
 
                     {/* Language Selector */}
                     <div className="space-y-2">
+                        {effectiveTranscriptLang !== spokenAudioLang && (
+                            <div className="flex items-center justify-between text-xs px-3 py-2 bg-blue-500/10 text-blue-700 dark:text-blue-300 rounded-lg border border-blue-500/20">
+                                <span>AI Source Subtitles: <strong>{sourceInfo.name}</strong></span>
+                                <span>Original Audio: <strong>{getLanguageInfo(spokenAudioLang).name}</strong></span>
+                            </div>
+                        )}
                         <label className="text-sm font-medium text-light-text-secondary dark:text-dark-text-secondary block">
                             Target Language
                         </label>
@@ -446,6 +466,32 @@ export default function DubModal({ isOpen, onClose, video, course, sourceLanguag
                                 </option>
                             ))}
                         </select>
+                    </div>
+
+                    {/* Preserve Background Audio (Demucs) Toggle */}
+                    <div className="bg-light-bg dark:bg-dark-bg p-3.5 rounded-lg border border-light-border dark:border-dark-border space-y-2">
+                        <div className="flex items-center justify-between">
+                            <label htmlFor="preserveBackgroundAudio" className="flex items-center gap-2 cursor-pointer select-none">
+                                <input
+                                    type="checkbox"
+                                    id="preserveBackgroundAudio"
+                                    checked={preserveBackgroundAudio}
+                                    onChange={(e) => setPreserveBackgroundAudio(e.target.checked)}
+                                    disabled={isDubbing || isDone}
+                                    className="w-4 h-4 rounded text-primary-fg border-light-border dark:border-dark-border focus:ring-primary-fg cursor-pointer"
+                                />
+                                <span className="text-sm font-medium">Preserve Background Music & Effects</span>
+                                <span className="text-[10px] uppercase font-bold tracking-wider px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-600 dark:text-purple-400">
+                                    Demucs AI
+                                </span>
+                            </label>
+                            <span className="text-[11px] text-light-text-secondary dark:text-dark-text-secondary opacity-75">
+                                GPU Recommended
+                            </span>
+                        </div>
+                        <p className="text-xs text-light-text-secondary dark:text-dark-text-secondary opacity-75 pl-6">
+                            Isolates original background music and SFX with Demucs, ducking them smoothly under the dubbed voice and adding a subtle room-tone ambience.
+                        </p>
                     </div>
 
                     {/* Feature Highlights & Pipeline Status */}
@@ -471,8 +517,14 @@ export default function DubModal({ isOpen, onClose, video, course, sourceLanguag
                             </span>
                         </div>
                         <div className="flex justify-between items-center">
-                            <span className="opacity-70">Timeline Fit:</span>
-                            <span className="font-medium">Adaptive atempo compression</span>
+                            <span className="opacity-70">Cadence & Timing:</span>
+                            <span className="font-medium">Rubber Band + Pause Absorption</span>
+                        </div>
+                        <div className="flex justify-between items-center">
+                            <span className="opacity-70">Background Audio:</span>
+                            <span className={`text-xs px-2 py-0.5 rounded ${preserveBackgroundAudio ? 'bg-purple-500/20 text-purple-600 dark:text-purple-400' : 'opacity-70'}`}>
+                                {preserveBackgroundAudio ? 'Demucs Ducking + Room Tone' : 'Clean Voiceover (Fast)'}
+                            </span>
                         </div>
                     </div>
 

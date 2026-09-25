@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 import {
     X, Sun, Moon, Monitor, Palette, Layout, Type, Settings,
-    Play, SkipForward, FastForward, Check, Download, Upload, Database, AlertTriangle, KeyRound, Eye, EyeOff, ExternalLink, Sparkles, Clock, PictureInPicture, MessageSquare, Send, Bug, Lightbulb, MessageCircle, Cpu, Zap
+    Play, SkipForward, FastForward, Check, Download, Upload, Database, AlertTriangle, KeyRound, Eye, EyeOff, ExternalLink, Sparkles, Clock, PictureInPicture, MessageSquare, Send, Bug, Lightbulb, MessageCircle, Cpu, Zap, Trash2, RefreshCw
 } from 'lucide-react'
 import { useSettings } from '../../contexts/SettingsContext'
 import { useTheme } from '../../contexts/ThemeContext'
@@ -43,9 +43,40 @@ function SettingsModal({ isOpen, onClose }) {
     const [gpuInfo, setGpuInfo] = useState(null)
     const [gpuLoading, setGpuLoading] = useState(false)
     const [deviceSwitching, setDeviceSwitching] = useState(false)
+    const [punctModels, setPunctModels] = useState(null)
+    const [punctLoading, setPunctLoading] = useState(false)
     const { showNotification } = useNotification()
 
-    // Fetch GPU info when AI tab is active
+    function loadPunctModels() {
+        setPunctLoading(true)
+        api.get('/api/settings/punctuation-models').then(data => {
+            setPunctModels(data)
+        }).catch(() => {
+            setPunctModels({ models: [], totalSizeMb: 0 })
+        }).finally(() => setPunctLoading(false))
+    }
+
+    async function handleDeletePunctModel(lang) {
+        try {
+            await api.del(`/api/settings/punctuation-models/${lang}`)
+            showNotification({ type: 'success', message: `Deleted ${lang} punctuation model` })
+            loadPunctModels()
+        } catch (err) {
+            showNotification({ type: 'error', message: err.message })
+        }
+    }
+
+    async function handlePurgeAllPunctModels() {
+        try {
+            await api.del('/api/settings/punctuation-models')
+            showNotification({ type: 'success', message: 'Purged all punctuation models' })
+            loadPunctModels()
+        } catch (err) {
+            showNotification({ type: 'error', message: err.message })
+        }
+    }
+
+    // Fetch GPU info and punctuation models when AI tab is active
     useEffect(() => {
         if (isOpen && activeTab === 'ai_keys') {
             setGpuLoading(true)
@@ -54,6 +85,8 @@ function SettingsModal({ isOpen, onClose }) {
             }).catch(() => {
                 setGpuInfo({ gpu_available: false, service_running: false })
             }).finally(() => setGpuLoading(false))
+
+            loadPunctModels()
         }
     }, [isOpen, activeTab])
 
@@ -560,6 +593,75 @@ function SettingsModal({ isOpen, onClose }) {
                                                 {showApiKeys.openRouter ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                                             </button>
                                         </div>
+                                    </div>
+
+                                    {/* Local Punctuation Models Card */}
+                                    <div className="p-4 rounded-lg border border-light-border dark:border-dark-border bg-light-surface dark:bg-dark-bg space-y-3">
+                                        <div className="flex items-center justify-between">
+                                            <div className="flex items-center gap-2.5">
+                                                <div className="w-7 h-7 rounded-lg bg-blue-500/10 flex items-center justify-center">
+                                                    <Sparkles className="w-4 h-4 text-blue-500" />
+                                                </div>
+                                                <div>
+                                                    <div className="text-sm font-semibold">Local Punctuation Models</div>
+                                                    <div className="text-xs text-light-text-secondary dark:text-dark-text-secondary">
+                                                        Modular on-demand neural models (~35MB–42MB)
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            <div className="flex items-center gap-2">
+                                                <button
+                                                    type="button"
+                                                    onClick={loadPunctModels}
+                                                    disabled={punctLoading}
+                                                    className="p-1.5 rounded hover:bg-black/5 dark:hover:bg-white/5 transition-colors opacity-70 hover:opacity-100"
+                                                    title="Refresh models"
+                                                >
+                                                    <RefreshCw className={`w-3.5 h-3.5 ${punctLoading ? 'animate-spin' : ''}`} />
+                                                </button>
+                                                {punctModels?.models?.length > 0 && (
+                                                    <button
+                                                        type="button"
+                                                        onClick={handlePurgeAllPunctModels}
+                                                        className="px-2 py-1 text-xs rounded bg-red-500/10 text-red-600 dark:text-red-400 hover:bg-red-500/20 transition-colors"
+                                                    >
+                                                        Purge All ({punctModels.totalSizeMb} MB)
+                                                    </button>
+                                                )}
+                                            </div>
+                                        </div>
+
+                                        {(!punctModels || punctModels.models.length === 0) ? (
+                                            <p className="text-xs text-light-text-secondary dark:text-dark-text-secondary leading-relaxed bg-black/5 dark:bg-white/5 p-3 rounded-lg">
+                                                No models cached on disk (0 MB used). Language-specific models are downloaded strictly on-demand when unpunctuated subtitles in that language are encountered.
+                                            </p>
+                                        ) : (
+                                            <div className="space-y-1.5">
+                                                {punctModels.models.map(m => (
+                                                    <div key={m.lang} className="flex items-center justify-between px-3 py-2 bg-white dark:bg-dark-surface rounded-lg border border-light-border dark:border-dark-border text-xs">
+                                                        <div className="flex items-center gap-2">
+                                                            <span className="font-semibold uppercase">{m.lang}</span>
+                                                            <span className="text-light-text-secondary dark:text-dark-text-secondary">
+                                                                {m.sizeMb} MB
+                                                            </span>
+                                                            {m.isLoaded && (
+                                                                <span className="text-[10px] bg-green-500/10 text-green-600 dark:text-green-400 px-1.5 py-0.5 rounded font-medium">
+                                                                    Active in RAM
+                                                                </span>
+                                                            )}
+                                                        </div>
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => handleDeletePunctModel(m.lang)}
+                                                            className="p-1 rounded text-red-500 hover:bg-red-500/10 transition-colors"
+                                                            title={`Delete ${m.lang} model`}
+                                                        >
+                                                            <Trash2 className="w-3.5 h-3.5" />
+                                                        </button>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        )}
                                     </div>
 
                                     {/* Security Notice */}

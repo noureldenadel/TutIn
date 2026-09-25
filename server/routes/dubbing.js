@@ -2,6 +2,7 @@ import express from 'express'
 import { getDb, getOne, run, getAll, getDataDir } from '../database.js'
 import { submitDubJob, pollJobStatus, cancelJob, isServiceRunning } from '../services/dubbingService.js'
 import { getDubsDir, getDubFilePath, loadCaptionChunks, listDubLanguages, getDubFilePathForPlayback } from '../utils/courseAssets.js'
+import { stitchCuesIntoSentences } from '../utils/aiTranslation.js'
 import fs from 'fs'
 import path from 'path'
 
@@ -60,7 +61,7 @@ router.post('/service/start', async (req, res) => {
 // POST /api/dub/video/:videoId
 router.post('/video/:videoId', async (req, res) => {
     try {
-        const { targetLanguage, voiceReferencePath, device } = req.body
+        const { targetLanguage, voiceReferencePath, device, preserveBackgroundAudio } = req.body
         if (!targetLanguage) return res.status(400).json({ error: 'targetLanguage required' })
         
         const { video, videoPath, coursePath, relModPath, videoBaseName } = getVideoInfo(req.params.videoId)
@@ -87,14 +88,14 @@ router.post('/video/:videoId', async (req, res) => {
             console.log(`[Dub] No '${targetLanguage}' captions found — auto-translating from source first...`)
             
             // Load source captions (respecting primary_transcript or ai_source or 'source')
+            const aiSource = subtitleSources.find(s => s.is_ai_source)
             let actualSourceLang = 'source'
             if (video.primary_transcript) {
                 const [pLang] = video.primary_transcript.split(':')
                 const isSourcePrim = pLang === 'source' || subtitleSources.some(s => s.lang === pLang && s.is_ai_source)
                 if (isSourcePrim) actualSourceLang = video.primary_transcript
-            } else {
-                const aiSource = subtitleSources.find(s => s.is_ai_source)
-                if (aiSource) actualSourceLang = aiSource.lang
+            } else if (aiSource?.lang) {
+                actualSourceLang = aiSource.lang
             }
             
             const sourceChunks = loadCaptionChunks(video.id, actualSourceLang, subtitleSources, coursePath, relModPath, videoBaseName)
@@ -106,7 +107,8 @@ router.post('/video/:videoId', async (req, res) => {
             }
 
             // Check if source language is the same as target — no translation needed
-            const normalizedSource = (actualSourceLang === 'source' ? (aiSource?.lang || 'en') : actualSourceLang).toLowerCase()
+            const effectiveSource = (actualSourceLang === 'source' ? (aiSource?.lang || 'en') : actualSourceLang).split(':')[0]
+            const normalizedSource = effectiveSource.toLowerCase()
             const normalizedTarget = targetLanguage.toLowerCase()
 
             if (normalizedSource === normalizedTarget) {
@@ -157,8 +159,36 @@ router.post('/video/:videoId', async (req, res) => {
             } catch {}
         }
 
-        // 3. Submit to python backend
-        const jobId = await submitDubJob(video.id, videoPath, chunks, targetLanguage, voiceReferencePath, devicePref)
+        // 3. Auto-restore punctuation if cues lack sentence boundaries prior to TTS synthesis
+        const { needsPunctuationRestoration, restorePunctuation } = await import('../utils/punctuationService.js')
+        if (needsPunctuationRestoration(chunks)) {
+            console.log(`[Dub] Dubbing captions lack punctuation. Restoring for '${targetLanguage}'...`)
+            try {
+                chunks = await restorePunctuation(chunks, targetLanguage)
+            } catch (pErr) {
+                console.warn(`[Dub] Punctuation restoration warning: ${pErr.message}`)
+            }
+        }
+
+        // 4. Stitch cues into full sentences for natural TTS prosody & pacing
+        const stitchedSegments = stitchCuesIntoSentences(chunks).map(s => ({
+            start: s.start,
+            end: s.end,
+            timestamp: [s.start, s.end],
+            text: s.text
+        }))
+        const dubSegments = stitchedSegments.length > 0 ? stitchedSegments : chunks
+
+        // 4. Submit to python backend
+        const jobId = await submitDubJob(
+            video.id,
+            videoPath,
+            dubSegments,
+            targetLanguage,
+            voiceReferencePath,
+            devicePref,
+            Boolean(preserveBackgroundAudio)
+        )
         
         // 4. Save job to DB
         const now = new Date().toISOString()

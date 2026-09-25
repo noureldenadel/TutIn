@@ -333,7 +333,7 @@ Here you can configure:
 #### Backend Services (Companion Servers)
 - **Node.js + Express**: Local API server handling data routing and heavy filesystem ops
 - **SQLite 3**: Robust, scalable local database for course metadata and analytics
-- **Python + FastAPI**: Dedicated dubbing server running Coqui XTTS v2 for voice cloning
+- **Python + FastAPI**: Dedicated dubbing server running Coqui XTTS v2, Demucs stem separation, and FFmpeg Rubber Band & ducking
 - **Better-SQLite3**: High-performance synchronous SQLite driver for Node.js
 
 #### Storage & Persistence
@@ -343,7 +343,9 @@ Here you can configure:
 
 #### AI & Machine Learning
 - **Transformers.js 2.17**: In-browser ML with Whisper Tiny model
-- **Coqui XTTS v2**: High-quality zero-shot voice cloning for 16+ languages (via Python server)
+- **NLLB-200 Distillation**: Local offline translation with intelligent sentence stitching
+- **Coqui XTTS v2**: High-quality zero-shot voice cloning for 16+ languages with native speed pre-biasing
+- **Demucs (htdemucs)**: 2-stem vocal/music separation for background audio preservation and sidechain ducking
 - **OpenRouter API**: Cloud AI models (Gemini 2.0 Flash / Claude) for summarization
 
 #### Video Playback
@@ -521,7 +523,7 @@ Configure in **Settings → Playback**:
 
 - **Transcription Model**: Built-in `Xenova/whisper-tiny` (40MB, cached locally)
 - **Summarization Model**: Configurable in UI (defaults to Gemini 2.0 Flash via OpenRouter)
-- **Dubbing Model**: Local Coqui XTTS v2 running via the Python companion server
+- **Dubbing Engine**: Local Coqui XTTS v2 with Rubber Band time-fitting and Demucs background audio preservation via the Python companion server
 
 To configure AI keys:
 1. Open the TutIn App in your browser.

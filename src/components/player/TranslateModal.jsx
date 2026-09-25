@@ -7,13 +7,24 @@ import { transcribeVideoCaptions } from '../../utils/aiSummarization'
 
 export default function TranslateModal({ isOpen, onClose, video, course, sourceLanguage: propSourceLang, onSuccess, chunkCount = 0 }) {
     const { settings, updateSettings } = useSettings()
-    const sourceLang = (propSourceLang || course?.language || video?.language || 'en').toLowerCase().trim()
+
+    // Decouple transcript source language from video spoken audio language
+    const parsedSources = typeof video?.subtitle_sources === 'string'
+        ? JSON.parse(video.subtitle_sources || '[]')
+        : (video?.subtitle_sources || [])
+    const aiSource = parsedSources.find(s => s.is_ai_source)
+    const effectiveTranscriptLang = (aiSource?.lang && aiSource.lang !== 'source')
+        ? aiSource.lang
+        : (propSourceLang || course?.language || video?.language || 'en').toLowerCase().trim()
+    const spokenAudioLang = (course?.language || video?.language || 'en').toLowerCase().trim()
+    const sourceLang = effectiveTranscriptLang
     const sourceInfo = getLanguageInfo(sourceLang)
 
-    // Available target languages
-    const availableTargets = SUPPORTED_LANGUAGES.filter(l => l.code !== sourceLang)
+    // Available target languages: exclude transcript language, NOT spoken audio
+    const availableTargets = SUPPORTED_LANGUAGES.filter(l => l.code !== effectiveTranscriptLang)
+    const defaultTarget = effectiveTranscriptLang === 'ar' ? (spokenAudioLang !== 'es' ? 'es' : 'en') : 'ar'
 
-    const [targetLang, setTargetLang] = useState(sourceLang)
+    const [targetLang, setTargetLang] = useState(defaultTarget)
     const [hasSourceCaptions, setHasSourceCaptions] = useState(false)
     const [isLoadingStatus, setIsLoadingStatus] = useState(false)
     const [isProcessing, setIsProcessing] = useState(false)
@@ -261,12 +272,12 @@ export default function TranslateModal({ isOpen, onClose, video, course, sourceL
                 </div>
 
                 <div className="p-6 space-y-5">
-                    {/* Course Language Indicator Banner */}
+                    {/* Language Indicator Banner */}
                     <div className="flex items-center justify-between p-3.5 bg-primary-fg/5 dark:bg-primary-fg/10 border border-primary-fg/20 rounded-xl">
                         <div className="flex items-center gap-3">
                             <div>
                                 <div className="text-[11px] font-medium text-light-text-secondary dark:text-dark-text-secondary uppercase tracking-wider">
-                                    Language
+                                    Source Transcript
                                 </div>
                                 <div className="text-sm font-semibold text-light-text dark:text-dark-text flex items-center gap-1.5">
                                     <span>{sourceInfo.nativeName}</span>
@@ -275,7 +286,7 @@ export default function TranslateModal({ isOpen, onClose, video, course, sourceL
                             </div>
                         </div>
                         <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-primary-fg/15 text-primary-fg border border-primary-fg/20">
-                            Audio
+                            {effectiveTranscriptLang !== spokenAudioLang ? 'AI Source Subtitle' : 'Audio & Subtitle'}
                         </span>
                     </div>
 
@@ -290,16 +301,16 @@ export default function TranslateModal({ isOpen, onClose, video, course, sourceL
                             disabled={isProcessing || isDone}
                             className="w-full px-3 py-2.5 bg-light-bg dark:bg-dark-bg border border-light-border dark:border-dark-border rounded-lg focus:outline-none focus:border-primary-fg transition-colors text-sm font-medium"
                         >
-                            {/* Spoken Language Option */}
+                            {/* Current Transcript Option */}
                             <option value={sourceLang}>
-                                {sourceInfo.nativeName} ({sourceInfo.name}) — Course Spoken Language
+                                {sourceInfo.nativeName} ({sourceInfo.name}) — Current Subtitles
                             </option>
                             
                             {/* Translation Options */}
                             <optgroup label="Translate to other languages">
                                 {availableTargets.map(lang => (
                                     <option key={lang.code} value={lang.code}>
-                                        {lang.nativeName} ({lang.name})
+                                        {lang.nativeName} ({lang.name}) {lang.code === spokenAudioLang ? '— (Course Audio Lang)' : ''}
                                     </option>
                                 ))}
                             </optgroup>
@@ -309,11 +320,19 @@ export default function TranslateModal({ isOpen, onClose, video, course, sourceL
                     {/* AI Pipeline Details Card */}
                     <div className="bg-light-bg dark:bg-dark-bg p-4 rounded-xl border border-light-border dark:border-dark-border space-y-2 text-xs">
                         <div className="flex justify-between items-center">
-                            <span className="opacity-70">Source Audio:</span>
+                            <span className="opacity-70">Source Subtitles:</span>
                             <span className="font-semibold text-primary-fg">
                                 <span>{sourceInfo.nativeName} ({sourceInfo.name})</span>
                             </span>
                         </div>
+                        {effectiveTranscriptLang !== spokenAudioLang && (
+                            <div className="flex justify-between items-center">
+                                <span className="opacity-70">Spoken Audio:</span>
+                                <span className="font-medium text-light-text dark:text-dark-text">
+                                    <span>{getLanguageInfo(spokenAudioLang).name}</span>
+                                </span>
+                            </div>
+                        )}
                         <div className="flex justify-between items-center">
                             <span className="opacity-70">AI Engine:</span>
                             <span className="font-medium text-light-text dark:text-dark-text">

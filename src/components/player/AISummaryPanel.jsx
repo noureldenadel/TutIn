@@ -663,7 +663,9 @@ function AISummaryPanel({ video, courseId, course, onSeek, onVideoDataChange, cu
                                                                 <div className="flex items-center gap-2 truncate mr-2">
                                                                     <span className="truncate">{track.label}</span>
                                                                     {track.sources.some(s => s.is_ai_source) && (
-                                                                        <span className="text-[9px] bg-primary-fg/10 text-primary-fg px-1.5 py-0.5 rounded-sm font-semibold">AI Source</span>
+                                                                        <span className="text-[9px] bg-primary-fg/10 text-primary-fg px-1.5 py-0.5 rounded-sm font-semibold">
+                                                                            AI Source {course?.language && track.lang !== course.language ? `(${track.lang.toUpperCase()} • Spoken ${course.language.toUpperCase()})` : ''}
+                                                                        </span>
                                                                     )}
                                                                     {!track.sources.some(s => s.is_ai_source) && (track.sources.length > 0 || track.badge) && (
                                                                         <span className={`text-[10px] ${isActive ? 'opacity-80' : 'opacity-50'}`}>

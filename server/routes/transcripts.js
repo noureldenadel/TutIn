@@ -6,6 +6,7 @@ import { getOne, run, getAll, getDataDir } from '../database.js'
 import { parseSubtitleFile, chunksToSRT, chunksToVTT, extractLangCode, detectFormat } from '../utils/captionParser.js'
 import { saveCaptionFile, loadCaptionChunks, listVideoLanguages } from '../utils/courseAssets.js'
 import { translateChunks } from '../utils/aiTranslation.js'
+import { needsPunctuationRestoration, restorePunctuation } from '../utils/punctuationService.js'
 
 const router = express.Router()
 
@@ -176,7 +177,7 @@ function detectCourseSiblingCaptions(videoId, targetLang) {
 // ── Routes ────────────────────────────────────────────────────
 
 // POST /api/transcripts/:videoId/upload
-router.post('/:videoId/upload', upload.any(), (req, res) => {
+router.post('/:videoId/upload', upload.any(), async (req, res) => {
     try {
         const uploadedFile = req.file || (req.files && req.files[0])
         if (!uploadedFile) return res.status(400).json({ error: 'No file uploaded' })
@@ -191,8 +192,20 @@ router.post('/:videoId/upload', upload.any(), (req, res) => {
         const reqLang = req.body.lang || extractLangCode(originalName, videoMeta.videoBaseName) || videoMeta.courseLanguage || 'en'
         
         // Parse the file
-        const chunks = parseSubtitleFile(fileContent, originalName)
+        let chunks = parseSubtitleFile(fileContent, originalName)
         if (!chunks.length) return res.status(400).json({ error: 'Could not parse caption file' })
+
+        // Check if punctuation restoration is needed on the uploaded file
+        let punctuationRestored = false
+        if (needsPunctuationRestoration(chunks)) {
+            console.log(`[Upload] Uploaded subtitle file lacks punctuation. Restoring for '${reqLang}'...`)
+            try {
+                chunks = await restorePunctuation(chunks, reqLang)
+                punctuationRestored = true
+            } catch (pErr) {
+                console.warn(`[Upload] Punctuation restoration warning: ${pErr.message}`)
+            }
+        }
 
         // Save to .tutin/captions/ without -uploaded (e.g. 01 - Intro.es.vtt)
         const filePath = saveCaptionFile(videoMeta, reqLang, chunks, 'uploaded')
@@ -225,6 +238,7 @@ router.post('/:videoId/upload', upload.any(), (req, res) => {
             format,
             language: reqLang,
             languageName: LANG_DISPLAY_MAP[reqLang] || reqLang,
+            punctuationRestored,
             detectedMatches
         })
     } catch (err) {
@@ -351,7 +365,17 @@ router.post('/:videoId/translate', async (req, res) => {
         
         let actualSourceLang = 'source'
         const aiSource = videoMeta.subtitleSources?.find(s => s.is_ai_source)
-        if (aiSource) actualSourceLang = aiSource.lang
+        if (aiSource && aiSource.lang) {
+            actualSourceLang = aiSource.lang
+        }
+
+        // Decouple spoken audio from transcript text:
+        // Priority: AI Source lang -> req.body.sourceLanguage -> courseLanguage -> 'en'
+        const effectiveSourceLang = (aiSource && aiSource.lang && aiSource.lang !== 'source')
+            ? aiSource.lang
+            : (req.body.sourceLanguage && req.body.sourceLanguage !== 'source' 
+                ? req.body.sourceLanguage 
+                : (videoMeta.courseLanguage || 'en'))
 
         let sourceChunks = loadCaptionChunks(
             req.params.videoId,
@@ -371,7 +395,17 @@ router.post('/:videoId/translate', async (req, res) => {
             return res.end()
         }
 
-        // Start translation
+        // Restore punctuation on source subtitles if needed prior to translation
+        if (needsPunctuationRestoration(sourceChunks)) {
+            sendEvent({ step: 'punctuation', message: `Restoring punctuation for ${effectiveSourceLang}...`, percent: 5 })
+            try {
+                sourceChunks = await restorePunctuation(sourceChunks, effectiveSourceLang, {}, sendEvent)
+            } catch (pErr) {
+                console.warn(`[Translate] Punctuation restoration warning: ${pErr.message}`)
+            }
+        }
+
+        // Start translation with effective source text language
         const translatedChunks = await translateChunks(
             sourceChunks,
             targetLanguage,
@@ -379,7 +413,7 @@ router.post('/:videoId/translate', async (req, res) => {
             null, // model unused
             sendEvent,
             req,
-            sourceLanguage
+            effectiveSourceLang
         )
 
         // Save translation with origin 'generated' (e.g. 01 - Intro-generated.es.vtt)

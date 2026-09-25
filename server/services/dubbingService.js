@@ -90,7 +90,7 @@ function startPythonService() {
     })
 }
 
-export async function submitDubJob(videoId, videoPath, chunks, lang, voiceReferencePath = null, device = null) {
+export async function submitDubJob(videoId, videoPath, chunks, lang, voiceReferencePath = null, device = null, preserveBackgroundAudio = false) {
     const isRunning = await ensureServiceRunning()
     if (!isRunning) {
         throw new Error("Dubbing backend service is not running and could not be started.")
@@ -100,7 +100,8 @@ export async function submitDubJob(videoId, videoPath, chunks, lang, voiceRefere
         videoPath,
         chunks,
         targetLang: lang,
-        voiceReferencePath
+        voiceReferencePath,
+        preserveBackgroundAudio: Boolean(preserveBackgroundAudio)
     }
     if (device) body.device = device
 

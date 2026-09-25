@@ -81,21 +81,31 @@ TutIn's AI features run locally and privately. The AI pipeline is designed seque
 1. Once a video is transcribed, click **Generate Summary**.
 2. Gemini AI will analyze the text and output a rich, Markdown-formatted summary containing learning objectives, bullet points, and action items.
 
+### Automatic Punctuation Restoration & Smart Alignment
+If you upload subtitle files (`.srt` or `.vtt`) that lack punctuation (e.g. raw speech-to-text dumps, YouTube auto-captions):
+- TutIn automatically detects low punctuation density and restores punctuation marks (`.`, `?`, `!`, `،`, `؟`) and proper capitalization.
+- **On-Demand Downloads:** Downloads only the specialized model for that language (~35MB for English, ~42MB for Arabic), keeping disk usage minimal.
+- **Timestamp Accuracy:** Restored words are remapped back to original cue timestamps with millisecond precision, ensuring video captions never drift out of sync.
+- **Audio vs Subtitle Decoupling:** If you upload an English subtitle file for a Spanish course video and set it as the AI Source, TutIn processes the text as English, translates from English, and allows dubbing/translating back into Spanish.
+- **Cache Management:** Open **Settings → AI & API Keys** to view cached punctuation models, check disk usage, or delete models to free up storage.
+
 ### AI Dubbing (Voice Cloning)
 TutIn can automatically dub videos into 16+ languages, cloning the original speaker's voice using Coqui XTTS v2.
 
 **Advanced Audio Processing**:
-- **Smart Speed Adjustment:** The engine automatically applies FFmpeg `atempo` filters (clamped between 0.5x and 1.5x) to compress generated audio to fit the original caption window, preventing robotic artifacts.
-- **Overlap Prevention & Fading:** It intelligently shifts segment start times if a previous segment is still playing to avoid audio overlap, and applies a 20ms fade-in/fade-out to eliminate harsh clicks between sentences.
+- **Natural Sentence Prosody:** The engine stitches fragmented subtitle cues into complete grammatical sentences before translation and speech synthesis, ensuring fluent cadence, proper breathing, and natural vocal intonation.
+- **Intelligent Time-Fitting & Rubber Band:** Speech duration is fitted using a 4-tier engine: inter-cue silence gap absorption (zero-stretch first), native XTTS speed pre-biasing ($0.88\times$ to $1.25\times$), internal pause trimming, and FFmpeg `rubberband` filtering for crisp, artifact-free speech.
+- **Background Audio Preservation (Demucs AI):** Check the **"Preserve Background Music & Effects"** toggle to isolate original background music and SFX with Demucs. The pipeline ducks background music by ~16 dB under speech using sidechain compression and adds a subtle continuous room-tone ambience bed.
+- **Overlap Prevention & Fading:** Segments automatically avoid collisions on the timeline, with a 20ms fade-in/fade-out eliminating harsh clicks between sentences.
 
-1. Generate a transcript for the video.
-2. Click the **Translate** button in the AI panel to translate the captions into your target language.
+1. Generate or upload a transcript for the video.
+2. Click the **Translate** button in the AI panel to translate the captions into your target language (or allow the dubbing engine to auto-translate).
 3. Click the **Dubbing** icon (headphones) on the video player controls.
-4. Select your target language and click **Start Dubbing**. 
+4. Select your target language, toggle **Preserve Background Music & Effects** if desired, and click **Start Dubbing**. 
 5. The audio will process and automatically play alongside the video when finished.
 
 > [!WARNING]
-> Dubbing requires the Python backend service to be running. If it isn't running, TutIn will prompt you to Auto-Start it from the UI. Ensure you have installed the required Python dependencies (`pip install TTS fastapi uvicorn pydub`).
+> Dubbing requires the Python backend service to be running. If it isn't running, TutIn will prompt you to Auto-Start it from the UI. Ensure you have installed the required Python dependencies (`pip install -r python/requirements.txt`).
 
 ---
 
