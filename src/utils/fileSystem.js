@@ -1,9 +1,14 @@
 import * as api from './api.js'
+import {
+    getVideosByCourse, getModulesByCourse, getCourse,
+    addVideo, deleteVideo, updateVideo, addModule,
+    deleteModule, updateCourse
+} from './db.js'
 
 /**
- * File System Manager (v4 Server-Only)
+ * File System Manager (v5 Server-Only)
  * 
- * In v4, all file operations are handled by the TutIn Companion Server.
+ * In v5, all file operations are handled by the TutIn Companion Server.
  * Browser-side File System Access API fallbacks have been removed.
  */
 
@@ -133,7 +138,6 @@ function flattenScannedModules(modules, parentTitle = null, parentPath = '') {
  * Compare scanned filesystem data with database state (v4)
  */
 export async function syncCoursePreview(courseId, scannedData) {
-    const { getVideosByCourse, getModulesByCourse, getCourse } = await import('./db')
     const existingVideos = await getVideosByCourse(courseId)
     const existingModules = await getModulesByCourse(courseId)
     const course = await getCourse(courseId)
@@ -164,6 +168,17 @@ export async function syncCoursePreview(courseId, scannedData) {
     const updated = []
     const moved = []
     const unchanged = []
+    const assetUpdates = []
+
+    // Helper to calculate new dubs/captions/summary for a video
+    const checkAssetChanges = (existing, sv) => {
+        const existingDubs = existing.dubbedTracks || []
+        const existingSubs = existing.subtitleSources || []
+        const newDubs = (sv.availableDubs || []).filter(d => !existingDubs.some(ed => ed.lang === d.lang))
+        const newSubs = (sv.subtitleFiles || []).filter(s => !existingSubs.some(es => es.filePath === s.filePath || (es.lang === s.lang && es.origin === s.origin)))
+        const newSummary = Boolean(sv.hasSummary && !existing.hasSummary)
+        return { newDubs, newSubs, newSummary, hasAny: newDubs.length > 0 || newSubs.length > 0 || newSummary }
+    }
 
     // Find new, updated, moved videos
     for (const sv of scannedVideos) {
@@ -172,11 +187,17 @@ export async function syncCoursePreview(courseId, scannedData) {
             added.push({
                 ...sv,
                 module: sv.moduleTitle,
-                modulePath: sv.modulePath
+                modulePath: sv.modulePath,
+                dubs: sv.availableDubs || [],
+                subtitles: sv.subtitleFiles || [],
+                hasSummary: Boolean(sv.hasSummary)
             })
         } else {
             // Check for metadata changes (duration)
             const isChanged = Math.abs(existing.duration - sv.duration) > 1
+
+            // Check for asset diffs
+            const assetDiff = checkAssetChanges(existing, sv)
 
             // Check for moved videos (different module)
             const existingModulePath = existingModuleIdToPath.get(existing.moduleId) || ''
@@ -187,17 +208,44 @@ export async function syncCoursePreview(courseId, scannedData) {
                     title: existing.title,
                     fromModule: existingModulePath,
                     toModule: sv.modulePath,
-                    toModuleTitle: sv.moduleTitle
+                    toModuleTitle: sv.moduleTitle,
+                    dubs: sv.availableDubs || [],
+                    subtitles: sv.subtitleFiles || [],
+                    hasSummary: Boolean(sv.hasSummary),
+                    assetDiff
                 })
             } else {
-                unchanged.push(existing)
+                unchanged.push({
+                    ...existing,
+                    dubs: sv.availableDubs || [],
+                    subtitles: sv.subtitleFiles || [],
+                    hasSummary: Boolean(sv.hasSummary),
+                    assetDiff
+                })
             }
 
             if (isChanged) {
                 updated.push({
                     ...existing,
                     newDuration: sv.duration,
-                    oldDuration: existing.duration
+                    oldDuration: existing.duration,
+                    dubs: sv.availableDubs || [],
+                    subtitles: sv.subtitleFiles || [],
+                    hasSummary: Boolean(sv.hasSummary),
+                    assetDiff
+                })
+            }
+
+            if (assetDiff.hasAny) {
+                assetUpdates.push({
+                    ...existing,
+                    title: existing.title,
+                    dubs: sv.availableDubs || [],
+                    subtitles: sv.subtitleFiles || [],
+                    hasSummary: Boolean(sv.hasSummary),
+                    newDubs: assetDiff.newDubs,
+                    newSubs: assetDiff.newSubs,
+                    newSummary: assetDiff.newSummary
                 })
             }
         }
@@ -227,6 +275,66 @@ export async function syncCoursePreview(courseId, scannedData) {
     // Check for thumbnail change
     const thumbnailChanged = scannedData.thumbnailData && scannedData.thumbnailData !== course.thumbnailData
 
+    // Process Vault Data & Indicators
+    const vaultData = scannedData.vaultData || {}
+    const vaultSummary = vaultData.vaultSummary || vaultData || {}
+    
+    // Existing DB counts
+    const dbTotalDubs = existingVideos.reduce((acc, v) => acc + (v.dubbedTracks?.length || 0), 0)
+    const dbTotalSubs = existingVideos.reduce((acc, v) => acc + (v.subtitleSources?.length || 0), 0)
+    const dbTotalSummaries = existingVideos.filter(v => v.hasSummary).length
+
+    // Disk / Vault counts
+    const diskDubsCount = vaultSummary.dubs?.count ?? scannedVideos.reduce((acc, v) => acc + (v.availableDubs?.length || 0), 0)
+    const diskSubsCount = vaultSummary.transcripts?.count ?? scannedVideos.reduce((acc, v) => acc + (v.subtitleFiles?.length || 0), 0)
+    const diskSummariesCount = vaultSummary.summaries?.count ?? scannedVideos.filter(v => v.hasSummary).length
+
+    const newDubsDiscovered = assetUpdates.reduce((acc, v) => acc + v.newDubs.length, 0) +
+        added.reduce((acc, v) => acc + (v.dubs?.length || 0), 0)
+    const newSubsDiscovered = assetUpdates.reduce((acc, v) => acc + v.newSubs.length, 0) +
+        added.reduce((acc, v) => acc + (v.subtitles?.length || 0), 0)
+    const newSummariesDiscovered = assetUpdates.filter(v => v.newSummary).length +
+        added.filter(v => v.hasSummary).length
+
+    const vaultStats = {
+        hasVault: Boolean(vaultSummary.hasVault),
+        vaultPath: vaultSummary.vaultPath || null,
+        totalSizeBytes: vaultSummary.totalSizeBytes || 0,
+        totalFileCount: vaultSummary.totalFileCount || 0,
+        dubs: {
+            diskCount: diskDubsCount,
+            dbCount: dbTotalDubs,
+            newCount: newDubsDiscovered,
+            languages: vaultSummary.dubs?.languages || [],
+            sizeBytes: vaultSummary.dubs?.sizeBytes || 0,
+            files: vaultSummary.dubs?.files || []
+        },
+        transcripts: {
+            diskCount: diskSubsCount,
+            dbCount: dbTotalSubs,
+            newCount: newSubsDiscovered,
+            languages: vaultSummary.transcripts?.languages || [],
+            generatedCount: vaultSummary.transcripts?.generatedCount || 0,
+            uploadedCount: vaultSummary.transcripts?.uploadedCount || 0,
+            files: vaultSummary.transcripts?.files || []
+        },
+        summaries: {
+            diskCount: diskSummariesCount,
+            dbCount: dbTotalSummaries,
+            newCount: newSummariesDiscovered,
+            files: vaultSummary.summaries?.files || []
+        },
+        canvas: {
+            exists: Boolean(vaultSummary.canvas?.exists),
+            nodeCount: vaultSummary.canvas?.nodeCount || 0,
+            edgeCount: vaultSummary.canvas?.edgeCount || 0
+        },
+        notes: {
+            count: vaultSummary.notes?.count || 0,
+            screenshotsCount: vaultSummary.notes?.screenshotsCount || 0
+        }
+    }
+
     return {
         course,
         added,
@@ -234,12 +342,14 @@ export async function syncCoursePreview(courseId, scannedData) {
         updated,
         moved,
         unchanged,
+        assetUpdates,
         newModules,
         removedModules,
         flatScannedModules,
         thumbnailChanged,
         totalBefore: existingVideos.length,
         totalAfter: scannedVideos.length,
+        vaultStats,
         scannedData,
         scannedVideos
     }
@@ -249,7 +359,6 @@ export async function syncCoursePreview(courseId, scannedData) {
  * Apply sync changes to the database (v4)
  */
 export async function applySyncChanges(courseId, preview) {
-    const { addVideo, deleteVideo, updateVideo, addModule, getModulesByCourse, deleteModule, updateCourse } = await import('./db')
     const { added, removed, updated, moved, removedModules, flatScannedModules, scannedData } = preview
 
     // 0. Update course thumbnail and metadata if found during scan
@@ -278,15 +387,22 @@ export async function applySyncChanges(courseId, preview) {
         await updateVideo(video.id, { duration: video.newDuration })
     }
 
-    // 2.5 Update all existing videos with latest AI assets (subtitles & dubs) from disk
+    // 2.5 Update all existing videos with latest AI assets (subtitles, dubs, summaries) from disk
     const existingVideosToUpdate = [...preview.unchanged, ...moved, ...updated]
     for (const video of existingVideosToUpdate) {
         const sv = preview.scannedVideos.find(v => v.filePath === video.filePath)
         if (sv) {
-            await updateVideo(video.id, {
+            const updates = {
                 subtitleSources: sv.subtitleFiles || [],
                 dubbedTracks: sv.availableDubs || []
-            })
+            }
+            if (sv.hasSummary !== undefined) {
+                updates.hasSummary = Boolean(sv.hasSummary)
+            }
+            if ((sv.subtitleFiles || []).length > 0) {
+                updates.hasTranscript = true
+            }
+            await updateVideo(video.id, updates)
         }
     }
 
@@ -352,6 +468,8 @@ export async function applySyncChanges(courseId, preview) {
                 duration: nv.duration,
                 subtitleSources: nv.subtitleFiles || [],
                 dubbedTracks: nv.availableDubs || [],
+                hasSummary: Boolean(nv.hasSummary),
+                hasTranscript: (nv.subtitleFiles || []).length > 0,
                 order: nv.order !== undefined ? nv.order : 999
             })
         }

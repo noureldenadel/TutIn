@@ -1,4 +1,5 @@
 import { createContext, useContext, useState, useEffect, useRef } from 'react'
+import * as api from '../utils/api.js'
 
 const defaultSettings = {
     // Appearance
@@ -119,15 +120,13 @@ export function SettingsProvider({ children }) {
     useEffect(() => {
         try {
             localStorage.setItem('tutin_settings', JSON.stringify(settings))
-            
+
             // Don't sync to server during initial load to avoid a feedback loop
             if (!isInitializedRef.current) return
 
             // Sync with backend
-            import('../utils/api.js').then(api => {
-                api.put('/api/settings', settings).catch(err => {
-                    console.warn('Settings sync to server delayed:', err.message)
-                })
+            api.put('/api/settings', settings).catch(err => {
+                console.warn('Settings sync to server delayed:', err.message)
             })
         } catch (e) {
             console.error('Failed to save settings:', e)
@@ -136,16 +135,14 @@ export function SettingsProvider({ children }) {
 
     // Initial load from server
     useEffect(() => {
-        import('../utils/api.js').then(api => {
-            api.get('/api/settings').then(serverSettings => {
-                if (serverSettings && Object.keys(serverSettings).length > 0) {
-                    setSettings(prev => ({ ...prev, ...serverSettings }))
-                }
-            }).catch(err => {
-                console.warn('Initial settings load from server failed:', err.message)
-            }).finally(() => {
-                isInitializedRef.current = true
-            })
+        api.get('/api/settings').then(serverSettings => {
+            if (serverSettings && Object.keys(serverSettings).length > 0) {
+                setSettings(prev => ({ ...prev, ...serverSettings }))
+            }
+        }).catch(err => {
+            console.warn('Initial settings load from server failed:', err.message)
+        }).finally(() => {
+            isInitializedRef.current = true
         })
     }, [])
 

@@ -47,7 +47,7 @@ function EditCourseModal({ course, isOpen, onClose, onSave, onSync }) {
     }, [course, isOpen])
 
     if (!isOpen || !course) return null
-    
+
     const isExternalCourse = course.sourceType === 'external-link' || !!course.courseUrl
 
     function handleChange(field, value) {
@@ -174,7 +174,7 @@ function EditCourseModal({ course, isOpen, onClose, onSave, onSync }) {
 
         try {
             setIsSaving(true)
-            
+
             const updateData = {
                 title: titleValidation.sanitized,
                 description: course.description || '',
@@ -184,7 +184,7 @@ function EditCourseModal({ course, isOpen, onClose, onSave, onSync }) {
                 thumbnailData: formData.thumbnailData,
                 updatedAt: new Date().toISOString()
             }
-            
+
             if (isExternalCourse) {
                 if (!formData.courseUrl?.trim()) {
                     setErrors({ courseUrl: 'Course URL is required' })
@@ -192,19 +192,19 @@ function EditCourseModal({ course, isOpen, onClose, onSave, onSync }) {
                     return
                 }
                 updateData.courseUrl = formData.courseUrl.trim()
-                
+
                 const hours = parseInt(formData.hours) || 0
                 const minutes = parseInt(formData.minutes) || 0
                 updateData.totalDuration = (hours * 3600) + (minutes * 60)
-                
+
                 updateData.totalVideos = Math.max(parseInt(formData.totalVideos) || 1, 1)
                 updateData.completedVideos = Math.max(0, Math.min(parseInt(formData.completedVideos) || 0, updateData.totalVideos))
-                
+
                 updateData.customMetadata = {
                     ...(course.customMetadata || {}),
                     totalModules: Math.max(parseInt(formData.totalModules) || 1, 1)
                 }
-                
+
                 if (updateData.totalVideos > 0 && updateData.completedVideos >= 0) {
                     updateData.completionPercentage = Math.min((updateData.completedVideos / updateData.totalVideos) * 100, 100)
                 } else {
@@ -377,7 +377,7 @@ function EditCourseModal({ course, isOpen, onClose, onSave, onSync }) {
                     {isExternalCourse ? (
                         <div className="space-y-4 p-4 border border-light-border dark:border-dark-border rounded-lg bg-light-surface/50 dark:bg-dark-bg/50">
                             <h3 className="font-medium text-sm">External Course Metadata</h3>
-                            
+
                             {/* URL */}
                             <div>
                                 <label className="block text-xs font-medium mb-1">Course URL *</label>
@@ -395,24 +395,24 @@ function EditCourseModal({ course, isOpen, onClose, onSave, onSync }) {
                                 {/* Modules */}
                                 <div className="flex items-center gap-2">
                                     <Folder className="w-5 h-5 text-primary" />
-                                    <input 
-                                        type="number" 
+                                    <input
+                                        type="number"
                                         min="1"
-                                        value={formData.totalModules} 
+                                        value={formData.totalModules}
                                         onChange={(e) => handleChange('totalModules', e.target.value)}
                                         className="no-spinner w-12 bg-white dark:bg-black/20 border border-light-border dark:border-dark-border rounded px-1 py-0.5 focus:border-primary flex-shrink-0 outline-none text-center font-medium transition-colors"
                                         placeholder="1"
                                     />
                                 </div>
-                                
+
                                 {/* Videos */}
                                 <div className="flex items-center gap-2">
                                     <Video className="w-5 h-5 text-primary" />
                                     <div className="flex items-center bg-white dark:bg-black/20 border border-light-border dark:border-dark-border rounded px-1 py-0.5 focus-within:border-primary transition-colors">
-                                        <input 
-                                            type="number" 
+                                        <input
+                                            type="number"
                                             min="0"
-                                            value={formData.completedVideos} 
+                                            value={formData.completedVideos}
                                             onChange={(e) => {
                                                 const max = parseInt(formData.totalVideos) || 1;
                                                 let val = parseInt(e.target.value);
@@ -426,35 +426,35 @@ function EditCourseModal({ course, isOpen, onClose, onSave, onSync }) {
                                             placeholder="0"
                                         />
                                         <span className="mx-0.5 font-medium text-gray-400">/</span>
-                                        <input 
-                                            type="number" 
+                                        <input
+                                            type="number"
                                             min="1"
-                                            value={formData.totalVideos} 
+                                            value={formData.totalVideos}
                                             onChange={(e) => handleChange('totalVideos', e.target.value)}
                                             className="no-spinner w-8 bg-transparent outline-none text-left font-medium"
                                             placeholder="1"
                                         />
                                     </div>
                                 </div>
-                                
+
                                 {/* Duration */}
                                 <div className="flex items-center gap-2">
                                     <Clock className="w-5 h-5 text-primary" />
                                     <div className="flex items-center bg-white dark:bg-black/20 border border-light-border dark:border-dark-border rounded px-1 py-0.5 focus-within:border-primary transition-colors">
-                                        <input 
-                                            type="number" 
+                                        <input
+                                            type="number"
                                             min="0"
-                                            value={formData.hours} 
+                                            value={formData.hours}
                                             onChange={(e) => handleChange('hours', e.target.value)}
                                             className="no-spinner w-8 bg-transparent outline-none text-right font-medium"
                                             placeholder="0"
                                         />
                                         <span className="mx-0.5 font-medium text-gray-400">:</span>
-                                        <input 
-                                            type="number" 
+                                        <input
+                                            type="number"
                                             min="0"
                                             max="59"
-                                            value={formData.minutes} 
+                                            value={formData.minutes}
                                             onChange={(e) => handleChange('minutes', e.target.value)}
                                             className="no-spinner w-8 bg-transparent outline-none text-left font-medium"
                                             placeholder="00"

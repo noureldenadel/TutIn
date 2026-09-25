@@ -35,6 +35,7 @@ function mapVideoRow(video) {
         youtubeId: video.youtube_id,
         url: video.url,
         hasTranscript: video.has_transcript === 1,
+        hasSummary: video.has_summary === 1,
         primaryTranscript: video.primary_transcript,
         subtitleSources: JSON.parse(video.subtitle_sources || '[]').filter(s => !s.filePath || fs.existsSync(s.filePath)),
         dubbedTracks: JSON.parse(video.dubbed_tracks || '[]').filter(t => t.filePath && fs.existsSync(t.filePath))
@@ -75,8 +76,8 @@ router.post('/', (req, res) => {
                 file_name, file_path, file_size, duration, thumbnail_data,
                 "order", is_required, is_completed, is_favorite, watch_progress,
                 last_watched_position, tags, bookmarks, youtube_id, url,
-                subtitle_sources, dubbed_tracks
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                subtitle_sources, dubbed_tracks, has_transcript, has_summary
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `, [
             data.id, data.courseId, data.moduleId, data.title, data.originalTitle || null,
             data.description || '', data.fileName || '', data.filePath || null,
@@ -86,7 +87,8 @@ router.post('/', (req, res) => {
             data.watchProgress || 0, data.lastWatchedPosition || 0,
             JSON.stringify(data.tags || []), JSON.stringify(data.bookmarks || []),
             data.youtubeId || null, data.url || null,
-            JSON.stringify(data.subtitleSources || []), JSON.stringify(data.dubbedTracks || [])
+            JSON.stringify(data.subtitleSources || []), JSON.stringify(data.dubbedTracks || []),
+            data.hasTranscript ? 1 : 0, data.hasSummary ? 1 : 0
         ])
         res.status(201).json({ success: true, id: data.id })
     } catch (err) {
@@ -138,7 +140,9 @@ router.put('/:id', (req, res) => {
             watchCount: 'watch_count',
             youtubeId: 'youtube_id',
             url: 'url',
-            primaryTranscript: 'primary_transcript'
+            primaryTranscript: 'primary_transcript',
+            hasTranscript: 'has_transcript',
+            hasSummary: 'has_summary'
         }
 
         for (const [key, dbField] of Object.entries(fieldMap)) {

@@ -65,18 +65,37 @@ router.post('/video/:videoId', async (req, res) => {
         
         const { video, videoPath, coursePath, relModPath, videoBaseName } = getVideoInfo(req.params.videoId)
         
-        // 1. Get captions for target language
+        if (!videoPath || !fs.existsSync(videoPath)) {
+            return res.status(400).json({ 
+                error: 'Dubbing requires a local video file on disk. YouTube and cloud streaming videos are not supported.' 
+            })
+        }
+        
+        // 1. Get captions for target language (respecting primary_transcript if specified)
         const subtitleSources = JSON.parse(video.subtitle_sources || '[]')
-        let chunks = loadCaptionChunks(video.id, targetLanguage, subtitleSources, coursePath, relModPath, videoBaseName)
+        let langToLoad = targetLanguage
+        if (video.primary_transcript) {
+            const [pLang] = video.primary_transcript.split(':')
+            if (pLang === targetLanguage || (targetLanguage === 'source' && pLang === 'source')) {
+                langToLoad = video.primary_transcript
+            }
+        }
+        let chunks = loadCaptionChunks(video.id, langToLoad, subtitleSources, coursePath, relModPath, videoBaseName)
         
         // If no target-language captions exist, auto-translate from source before dubbing
         if (!chunks || chunks.length === 0) {
             console.log(`[Dub] No '${targetLanguage}' captions found — auto-translating from source first...`)
             
-            // Load source captions (use the ai_source lang or 'source')
+            // Load source captions (respecting primary_transcript or ai_source or 'source')
             let actualSourceLang = 'source'
-            const aiSource = subtitleSources.find(s => s.is_ai_source)
-            if (aiSource) actualSourceLang = aiSource.lang
+            if (video.primary_transcript) {
+                const [pLang] = video.primary_transcript.split(':')
+                const isSourcePrim = pLang === 'source' || subtitleSources.some(s => s.lang === pLang && s.is_ai_source)
+                if (isSourcePrim) actualSourceLang = video.primary_transcript
+            } else {
+                const aiSource = subtitleSources.find(s => s.is_ai_source)
+                if (aiSource) actualSourceLang = aiSource.lang
+            }
             
             const sourceChunks = loadCaptionChunks(video.id, actualSourceLang, subtitleSources, coursePath, relModPath, videoBaseName)
             

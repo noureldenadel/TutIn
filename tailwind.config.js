@@ -75,17 +75,17 @@ export default {
                 success: {
                     DEFAULT: 'var(--success)',
                     bg: 'var(--success-bg)',
-                    light: '#34D399',
+                    light: '#10B981',
                 },
                 warning: {
                     DEFAULT: 'var(--warning)',
                     bg: 'var(--warning-bg)',
-                    light: '#FBBF24',
+                    light: '#F59E0B',
                 },
                 error: {
                     DEFAULT: 'var(--error)',
                     bg: 'var(--error-bg)',
-                    light: '#F87171',
+                    light: '#EF4444',
                 },
                 info: {
                     DEFAULT: 'var(--info)',
@@ -126,9 +126,20 @@ export default {
                     hover: '#D4D4D4'
                 },
                 accent: {
-                    DEFAULT: '#38bdf8',
-                    glow: 'rgba(56, 189, 248, 0.5)'
+                    DEFAULT: '#6366f1', // Softer indigo instead of saturated sky blue
+                    glow: 'rgba(99, 102, 241, 0.25)' // Reduced opacity for subtle glow
                 },
+            },
+            borderRadius: {
+                none: '0',
+                sm: '0.25rem',     // 4px - Inputs, badges
+                DEFAULT: '0.5rem', // 8px - Buttons, standard elements
+                md: '0.5rem',      // 8px - (Alias for DEFAULT)
+                lg: '0.75rem',     // 12px - Cards, small panels
+                xl: '1rem',        // 16px - Standard Modals
+                '2xl': '1.25rem',  // 20px - Large Modals/Overlays
+                '3xl': '1.5rem',   // 24px - Featured components
+                full: '9999px',
             },
             fontFamily: {
                 sans: ['-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'Roboto', 'Helvetica Neue', 'Arial', 'sans-serif']

@@ -249,7 +249,7 @@ export default function TranslateModal({ isOpen, onClose, video, course, sourceL
                 <div className="flex items-center justify-between p-4 border-b border-light-border dark:border-dark-border">
                     <h2 className="text-lg font-semibold flex items-center gap-2">
                         <Captions className="w-5 h-5 text-primary-fg" />
-                        Generate Captions & Subtitles
+                        Subtitles
                     </h2>
                     <button
                         onClick={handleCancel}
@@ -266,7 +266,7 @@ export default function TranslateModal({ isOpen, onClose, video, course, sourceL
                         <div className="flex items-center gap-3">
                             <div>
                                 <div className="text-[11px] font-medium text-light-text-secondary dark:text-dark-text-secondary uppercase tracking-wider">
-                                    Course Spoken Language
+                                    Language
                                 </div>
                                 <div className="text-sm font-semibold text-light-text dark:text-dark-text flex items-center gap-1.5">
                                     <span>{sourceInfo.nativeName}</span>
@@ -275,14 +275,14 @@ export default function TranslateModal({ isOpen, onClose, video, course, sourceL
                             </div>
                         </div>
                         <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-primary-fg/15 text-primary-fg border border-primary-fg/20">
-                            Spoken Audio
+                            Audio
                         </span>
                     </div>
 
                     {/* Language Selector */}
                     <div className="space-y-2">
                         <label className="text-sm font-medium text-light-text-secondary dark:text-dark-text-secondary block">
-                            Generate Subtitles In
+                            Translate To
                         </label>
                         <select
                             value={targetLang}

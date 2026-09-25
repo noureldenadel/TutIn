@@ -24,7 +24,7 @@ export default function DubModal({ isOpen, onClose, video, course, sourceLanguag
     const [isStartingService, setIsStartingService] = useState(false)
     const [existingLangs, setExistingLangs] = useState({ sourceExists: false, translatedLangs: [], existingLangs: [] })
     const [dubbedLangs, setDubbedLangs] = useState([])
-    
+
     const pollRef = useRef(null)
     const activeAbortController = useRef(null)
 
@@ -90,17 +90,17 @@ export default function DubModal({ isOpen, onClose, video, course, sourceLanguag
     async function handleStartService() {
         setIsStartingService(true)
         setError(null)
-        
+
         try {
             const res = await fetch(`${SERVER_URL}/api/dub/service/start`, { method: 'POST' })
             const data = await res.json()
-            
+
             if (data.error) {
                 setError(data.error)
                 setIsStartingService(false)
                 return
             }
-            
+
             // Poll until service is ready (up to 60s for model download)
             for (let i = 0; i < 30; i++) {
                 await new Promise(r => setTimeout(r, 2000))
@@ -112,7 +112,7 @@ export default function DubModal({ isOpen, onClose, video, course, sourceLanguag
                     return
                 }
             }
-            
+
             setError('Service did not start within 60 seconds. Check console for details.')
         } catch (err) {
             setError(`Failed to start service: ${err.message}`)
@@ -143,7 +143,7 @@ export default function DubModal({ isOpen, onClose, video, course, sourceLanguag
         const hasSource = currentLangs.sourceExists || currentLangs.existingLangs.length > 0
         if (!hasSource) {
             setStatus({ step: `Transcribing audio with Whisper (${sourceInfo.nativeName})...`, progress: 10 })
-            
+
             // Get file source
             let fileSource = video?.fileHandle || (video?.filePath ? `${SERVER_URL}/video/${encodeURIComponent(video.filePath)}` : null)
             if (!fileSource) {
@@ -176,7 +176,7 @@ export default function DubModal({ isOpen, onClose, video, course, sourceLanguag
         // Now translate to target language if not source language
         if (targetLang !== 'source' && targetLang !== sourceLang) {
             setStatus({ step: `Translating subtitles to ${langName}...`, progress: 45 })
-            
+
             activeAbortController.current = new AbortController()
             const transResponse = await fetch(`${SERVER_URL}/api/transcripts/${video.id}/translate`, {
                 method: 'POST',
@@ -275,7 +275,7 @@ export default function DubModal({ isOpen, onClose, video, course, sourceLanguag
                         setStatus({ step: 'Dubbing completed successfully!', progress: 100 })
                         setIsDone(true)
                         setDubbedLangs(prev => Array.from(new Set([...prev, targetLang])))
-                        
+
                         window.dispatchEvent(new CustomEvent('tutin:dub-updated', {
                             detail: { videoId: video.id, lang: targetLang }
                         }))
@@ -378,7 +378,7 @@ export default function DubModal({ isOpen, onClose, video, course, sourceLanguag
                             Checking dubbing service...
                         </div>
                     )}
-                    
+
                     {serviceRunning === false && !isStartingService && (
                         <div className="bg-amber-500/10 border border-amber-500/30 p-4 rounded-lg space-y-3">
                             <div className="flex items-start gap-2 text-amber-600 dark:text-amber-400">
@@ -390,7 +390,7 @@ export default function DubModal({ isOpen, onClose, video, course, sourceLanguag
                                     </p>
                                 </div>
                             </div>
-                            
+
                             <div className="bg-black/10 dark:bg-white/5 rounded-md p-2 font-mono text-xs">
                                 <p className="opacity-60 mb-1"># Setup requirements (one-time):</p>
                                 <p>pip install -r python/requirements.txt</p>
@@ -519,7 +519,7 @@ export default function DubModal({ isOpen, onClose, video, course, sourceLanguag
                                         <span>{status?.progress || 0}%</span>
                                     </div>
                                     <div className="h-2 w-full bg-light-border dark:border-dark-border rounded-full overflow-hidden">
-                                        <div 
+                                        <div
                                             className={`h-full transition-all duration-300 ${isDone ? 'bg-green-500' : 'bg-primary-fg'}`}
                                             style={{ width: `${status?.progress || 0}%` }}
                                         />

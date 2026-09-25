@@ -144,36 +144,37 @@ function PlaylistSidebar({
 
     async function handleBulkSave(updatedModules) {
         try {
-            async function saveDeep(mods, parentId = null) {
+            const moduleUpdates = []
+            const videoUpdates = []
+
+            function collectUpdates(mods, parentId = null) {
                 for (let i = 0; i < mods.length; i++) {
                     const mod = mods[i]
-                    // Update module order and parent
-                    await updateModule(mod.id, {
+                    moduleUpdates.push(updateModule(mod.id, {
                         title: mod.title,
                         order: i,
                         parentModuleId: parentId
-                    })
+                    }))
 
-                    // Update videos in this module
                     if (mod.videos) {
                         for (let j = 0; j < mod.videos.length; j++) {
                             const vid = mod.videos[j]
-                            await updateVideo(vid.id, {
+                            videoUpdates.push(updateVideo(vid.id, {
                                 title: vid.title,
                                 order: j,
                                 moduleId: mod.id
-                            })
+                            }))
                         }
                     }
 
-                    // Recurse into sub-modules
                     if (mod.subModules && mod.subModules.length > 0) {
-                        await saveDeep(mod.subModules, mod.id)
+                        collectUpdates(mod.subModules, mod.id)
                     }
                 }
             }
 
-            await saveDeep(updatedModules)
+            collectUpdates(updatedModules)
+            await Promise.all([...moduleUpdates, ...videoUpdates])
 
             setIsBulkEditing(false)
             onRefresh?.(false)

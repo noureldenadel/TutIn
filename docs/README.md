@@ -18,7 +18,7 @@ The easiest way to launch TutIn is using the automated setup script for Windows.
 
 📖 **New to TutIn?** Check out the [User Guide](docs/USER_GUIDE.md) for detailed instructions.
 
-📝 **What's New?** TutIn v4 introduces a native SQLite companion server for absolute data safety and no browser limits!
+📝 **What's New?** TutIn v5 introduces a native SQLite companion server for absolute data safety and no browser limits!
 
 ## ✨ Why TutIn?
 

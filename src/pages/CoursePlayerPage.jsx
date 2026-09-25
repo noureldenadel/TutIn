@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
 import { ChevronLeft, Menu } from 'lucide-react'
-import { getCourse, getModulesByCourse, getVideosByModule, updateCourse, getInstructorAvatarAsync, buildModuleTree } from '../utils/db'
+import { getCourse, getModulesByCourse, getVideosByCourse, getVideo, updateCourse, getInstructorAvatarAsync, buildModuleTree } from '../utils/db'
+import { fetchYoutubeTranscript, put } from '../utils/api'
 import { useSettings } from '../contexts/SettingsContext'
 import LoadingSpinner from '../components/common/LoadingSpinner'
 import VideoPlayer from '../components/player/VideoPlayer'
@@ -39,16 +40,47 @@ function getAllVideosFlat(mods) {
 
 /**
  * Fetch all modules for a course with their videos attached, and build the tree.
+ * Queries modules and all course videos in parallel (eliminating N+1 waterfall).
  */
 async function fetchModulesWithVideos(courseId) {
-    const modulesData = await getModulesByCourse(courseId)
-    const modulesWithVideos = await Promise.all(
-        modulesData.map(async (module) => {
-            const videos = await getVideosByModule(module.id)
-            return { ...module, videos }
-        })
-    )
-    return { flat: modulesWithVideos, tree: buildModuleTree(modulesWithVideos) }
+    const [modulesData, allVideos] = await Promise.all([
+        getModulesByCourse(courseId),
+        getVideosByCourse(courseId)
+    ])
+
+    const videosByModule = new Map()
+    for (const v of (allVideos || [])) {
+        if (v.moduleId) {
+            if (!videosByModule.has(v.moduleId)) {
+                videosByModule.set(v.moduleId, [])
+            }
+            videosByModule.get(v.moduleId).push(v)
+        }
+    }
+
+    const modulesWithVideos = (modulesData || []).map(module => ({
+        ...module,
+        videos: (videosByModule.get(module.id) || []).sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+    }))
+
+    const tree = buildModuleTree(modulesWithVideos)
+
+    // Catch any unassigned videos so they are never lost or invisible
+    const knownModuleIds = new Set((modulesData || []).map(m => m.id))
+    const orphanVideos = (allVideos || []).filter(v => !v.moduleId || !knownModuleIds.has(v.moduleId))
+    if (orphanVideos.length > 0) {
+        const unassignedMod = {
+            id: '__unassigned__',
+            courseId,
+            title: 'General / Unassigned Videos',
+            videos: orphanVideos.sort((a, b) => (a.order ?? 0) - (b.order ?? 0)),
+            subModules: []
+        }
+        modulesWithVideos.push(unassignedMod)
+        tree.push(unassignedMod)
+    }
+
+    return { flat: modulesWithVideos, tree }
 }
 
 function CoursePlayerPage() {
@@ -292,7 +324,6 @@ function CoursePlayerPage() {
     async function refreshCurrentVideoOnly() {
         if (!currentVideo) return
         try {
-            const { getVideo } = await import('../utils/db')
             const updatedVideo = await getVideo(currentVideo.id)
             if (updatedVideo) {
                 setCurrentVideo(prev => ({ ...prev, ...updatedVideo }))
@@ -320,16 +351,14 @@ function CoursePlayerPage() {
 
         if (isYouTube && !currentVideo.hasTranscript) {
             const videoIdOrUrl = currentVideo.youtubeId || currentVideo.url
-            import('../utils/api').then(({ fetchYoutubeTranscript, put }) => {
-                fetchYoutubeTranscript(videoIdOrUrl)
-                    .then(async (data) => {
-                        if (data.chunks && data.chunks.length > 0) {
-                            await put(`/api/transcripts/${currentVideo.id}`, { chunks: data.chunks })
-                            refreshCurrentVideoOnly()
-                        }
-                    })
-                    .catch(err => console.log('Notice: Could not auto-fetch YouTube transcript:', err.message))
-            })
+            fetchYoutubeTranscript(videoIdOrUrl)
+                .then(async (data) => {
+                    if (data.chunks && data.chunks.length > 0) {
+                        await put(`/api/transcripts/${currentVideo.id}`, { chunks: data.chunks })
+                        refreshCurrentVideoOnly()
+                    }
+                })
+                .catch(err => console.log('Notice: Could not auto-fetch YouTube transcript:', err.message))
         }
     }, [currentVideo?.id, currentVideo?.hasTranscript])
 

@@ -14,44 +14,10 @@ import TranslateModal from './TranslateModal'
 import SmartCaptionsModal from './SmartCaptionsModal'
 import DubModal from './DubModal'
 import mpegts from 'mpegts.js'
-import { SUPPORTED_LANGUAGES, getLanguageLabel, getLanguageInfo } from '../../utils/languages'
+import { SUPPORTED_LANGUAGES, getLanguageLabel, getLanguageInfo, LANGUAGE_LABEL_MAP } from '../../utils/languages'
 
-export const LANGUAGE_LABEL_MAP = {
-    source: 'Original',
-    en: 'English',
-    es: 'Español',
-    fr: 'Français',
-    de: 'Deutsch',
-    it: 'Italiano',
-    pt: 'Português',
-    ru: 'Русский',
-    ar: 'العربية',
-    zh: '中文',
-    ja: '日本語',
-    ko: '한국어',
-    hi: 'हिन्दी',
-    tr: 'Türkçe',
-    nl: 'Nederlands',
-    pl: 'Polski',
-    vi: 'Tiếng Việt',
-    th: 'ไทย',
-    cs: 'Čeština',
-    hu: 'Magyar',
-    uk: 'Українська',
-    id: 'Bahasa Indonesia',
-    sv: 'Svenska',
-    da: 'Dansk',
-    no: 'Norsk',
-    fi: 'Suomi',
-    el: 'Ελληνικά',
-    he: 'עברית'
-}
-
-export function getLangLabel(code) {
-    if (!code) return 'Unknown'
-    const clean = code.toLowerCase().trim()
-    return LANGUAGE_LABEL_MAP[clean] || code.toUpperCase()
-}
+export { LANGUAGE_LABEL_MAP }
+export const getLangLabel = getLanguageLabel
 
 const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext, onPrevious, courseId, course, onCourseUpdate, onTimeUpdate, autoPlay, onAspectRatioChange, onVideoDataChange }, ref) {
     const { settings, updateSettings } = useSettings()
@@ -523,10 +489,14 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
                 }).catch(err => console.warn('Failed to persist video duration:', err))
             }
 
-            // Ensure playback speed is applied to new source
+            // Ensure playback speed is applied to new source and dub audio
             const isYt = video?.youtubeId || video?.url?.startsWith('http')
+            const effectiveSpeed = isSpeedBoosting ? 2 : playbackSpeed
             if (!isYt) {
-                videoRef.current.playbackRate = isSpeedBoosting ? 2 : playbackSpeed
+                videoRef.current.playbackRate = effectiveSpeed
+            }
+            if (dubAudioRef.current) {
+                dubAudioRef.current.playbackRate = effectiveSpeed
             }
 
             // Auto-resume from last watched position
@@ -555,11 +525,27 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
             setCurrentTime(videoRef.current.currentTime)
             onTimeUpdate?.(videoRef.current.currentTime)
             
-            // Sync dub audio with drift correction (>0.3s)
+            // Sync dub audio with smooth rate-nudging drift correction (prevents audio pops/clicks)
             if (selectedDubLang !== 'none' && dubAudioRef.current) {
-                const diff = Math.abs(videoRef.current.currentTime - dubAudioRef.current.currentTime)
-                if (diff > 0.3) {
-                    dubAudioRef.current.currentTime = videoRef.current.currentTime
+                const videoTime = videoRef.current.currentTime
+                const dubTime = dubAudioRef.current.currentTime
+                const diff = videoTime - dubTime
+                const absDiff = Math.abs(diff)
+                const baseSpeed = isSpeedBoosting ? 2 : (playbackSpeed || 1)
+
+                if (absDiff > 1.0) {
+                    // Large drift (scrub or jump): hard snap
+                    dubAudioRef.current.currentTime = videoTime
+                    dubAudioRef.current.playbackRate = baseSpeed
+                } else if (absDiff > 0.08) {
+                    // Micro-drift: smoothly nudge speed by ±4% to realign without pops
+                    const nudge = diff > 0 ? 1.04 : 0.96
+                    dubAudioRef.current.playbackRate = baseSpeed * nudge
+                } else {
+                    // In lockstep: lock to exact base speed
+                    if (Math.abs(dubAudioRef.current.playbackRate - baseSpeed) > 0.01) {
+                        dubAudioRef.current.playbackRate = baseSpeed
+                    }
                 }
             }
         }

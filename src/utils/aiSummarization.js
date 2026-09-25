@@ -6,6 +6,8 @@
  */
 
 import { updateVideo, getVideo } from './db'
+import { SERVER_URL, isServerAvailable, put } from './api'
+import { verifyPermission } from './fileSystem'
 
 // Transformers.js pipeline (loaded on demand)
 let transcriptionPipeline = null
@@ -124,6 +126,22 @@ async function extractAndProcessAudio(fileOrHandle, onProgress) {
  * Returns both plain text and timestamped chunks for CC support
  */
 let whisperWorker = null
+let workerQueuePromise = Promise.resolve()
+
+function getOrCreateWhisperWorker() {
+    if (!whisperWorker) {
+        console.log('[AI] Creating new Whisper worker...')
+        const workerUrl = new URL('./whisperWorker.js', import.meta.url)
+        whisperWorker = new Worker(workerUrl, {
+            type: 'module',
+            name: 'whisper-worker'
+        })
+        whisperWorker.onerror = (err) => {
+            console.error('[AI] Global Whisper Worker error:', err)
+        }
+    }
+    return whisperWorker
+}
 
 export async function transcribeAudio(audioData, onProgress, device = 'auto', language = 'en') {
     // Try Web Worker first for non-blocking transcription
@@ -141,81 +159,76 @@ export async function transcribeAudio(audioData, onProgress, device = 'auto', la
 }
 
 /**
- * Transcribe using Web Worker (non-blocking)
+ * Transcribe using Web Worker (non-blocking with queue mutex)
  */
 async function transcribeWithWorker(audioData, onProgress, device = 'auto', language = 'en') {
-    return new Promise((resolve, reject) => {
-        console.log('[AI] Starting transcribeWithWorker, samples:', audioData.length, 'lang:', language)
+    // Chain to queue to ensure only one worker transcription runs at a time (WebGPU safe)
+    const resultPromise = workerQueuePromise.then(() => {
+        return new Promise((resolve, reject) => {
+            console.log('[AI] Starting transcribeWithWorker, samples:', audioData.length, 'lang:', language)
+            const worker = getOrCreateWhisperWorker()
+            const requestId = `req_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`
 
-        // Create worker if not exists
-        if (!whisperWorker) {
-            console.log('[AI] Creating new Whisper worker...')
+            function handleMessage(e) {
+                const { type, id, stage, progress, message, text, chunks, error } = e.data || {}
 
-            // Use Vite's worker import syntax - creates a proper ES module worker
-            const workerUrl = new URL('./whisperWorker.js', import.meta.url)
-            whisperWorker = new Worker(workerUrl, {
-                type: 'module',
-                name: 'whisper-worker'
+                // Filter out messages that don't belong to this request
+                if (id && id !== requestId) return
+
+                if (type === 'progress') {
+                    onProgress?.({ stage, progress, message })
+                    return
+                }
+
+                if (type === 'result') {
+                    cleanup()
+                    resolve({ text, chunks })
+                } else if (type === 'error') {
+                    cleanup()
+                    reject(new Error(error || 'Worker transcription failed'))
+                }
+            }
+
+            function handleError(err) {
+                cleanup()
+                reject(new Error('Worker error: ' + (err?.message || 'Unknown worker error')))
+            }
+
+            function cleanup() {
+                worker.removeEventListener('message', handleMessage)
+                worker.removeEventListener('error', handleError)
+            }
+
+            worker.addEventListener('message', handleMessage)
+            worker.addEventListener('error', handleError)
+
+            onProgress?.({ stage: 'preparing', progress: 0, message: 'Preparing audio data...' })
+
+            requestAnimationFrame(() => {
+                try {
+                    const audioBuffer = new ArrayBuffer(audioData.length * 4)
+                    const view = new Float32Array(audioBuffer)
+                    view.set(audioData)
+
+                    worker.postMessage({
+                        type: 'transcribe',
+                        audioBuffer: audioBuffer,
+                        device: device,
+                        language: language || 'en',
+                        id: requestId
+                    }, [audioBuffer])
+                } catch (postErr) {
+                    cleanup()
+                    reject(postErr)
+                }
             })
-
-            // Handle worker-level errors
-            whisperWorker.onerror = (err) => {
-                console.error('[AI] Worker error:', err)
-                reject(new Error('Worker failed to load: ' + (err.message || 'Unknown error')))
-            }
-        }
-
-        const requestId = Date.now().toString()
-
-        function handleMessage(e) {
-            const { type, id, stage, progress, message, text, chunks, error } = e.data
-
-            // Progress updates (may not have id)
-            if (type === 'progress') {
-                onProgress?.({ stage, progress, message })
-                return
-            }
-
-            // Only process messages for our request
-            if (id !== requestId) return
-
-            if (type === 'result') {
-                whisperWorker.removeEventListener('message', handleMessage)
-                resolve({ text, chunks })
-            } else if (type === 'error') {
-                whisperWorker.removeEventListener('message', handleMessage)
-                reject(new Error(error))
-            }
-        }
-
-        whisperWorker.addEventListener('message', handleMessage)
-
-        // Show progress while preparing data
-        onProgress?.({ stage: 'preparing', progress: 0, message: 'Preparing audio data...' })
-
-        // Use requestAnimationFrame to let UI update, then send data
-        requestAnimationFrame(() => {
-            console.log('[AI] Copying audio to transferable buffer...')
-
-            // Create a copy of the audio data buffer for transfer
-            // This is necessary because audioData.buffer might be shared with AudioContext
-            const audioBuffer = new ArrayBuffer(audioData.length * 4)
-            const view = new Float32Array(audioBuffer)
-            view.set(audioData)
-
-            console.log('[AI] Posting to worker, buffer size:', audioBuffer.byteLength)
-
-            whisperWorker.postMessage({
-                type: 'transcribe',
-                audioBuffer: audioBuffer,
-                device: device,
-                language: language || 'en',
-                id: requestId
-            }, [audioBuffer])  // Transfer ownership - no copy over to worker!
-
-            console.log('[AI] Message posted to worker successfully')
         })
     })
+
+    // Advance queue, catching error so subsequent queued items can still proceed
+    workerQueuePromise = resultPromise.catch(() => {})
+
+    return resultPromise
 }
 
 /**
@@ -526,13 +539,11 @@ export function chunksToVTT(chunks) {
  * Runs Whisper AI speech-to-text in the video's spoken language.
  */
 export async function transcribeVideoCaptions(video, onProgress, device = 'auto', language = 'en') {
-    const { SERVER_URL } = await import('./api')
     let fileSource = video?.fileHandle || (video?.filePath ? `${SERVER_URL}/video/${encodeURIComponent(video.filePath)}` : video?.url)
     if (!fileSource) {
         throw new Error('Video source file not accessible for transcription')
     }
     if (fileSource.getFile) {
-        const { verifyPermission } = await import('./fileSystem')
         const hasPerm = await verifyPermission(fileSource)
         if (!hasPerm) throw new Error('File access permission was denied')
     }
@@ -546,7 +557,6 @@ export async function transcribeVideoCaptions(video, onProgress, device = 'auto'
     const captionChunks = transcription.chunks
 
     // Step 3: Save timestamped caption chunks to server / course folder
-    const { isServerAvailable, put } = await import('./api')
     const serverAvailable = await isServerAvailable()
     
     if (serverAvailable) {
@@ -580,7 +590,6 @@ export async function processVideoForSummary(videoIdOrVideo, fileSourceOrOnProgr
         onProgress = fileSourceOrOnProgress
         const course = onProgressOrCourse
         lang = course?.language || video?.language || 'en'
-        const { SERVER_URL } = await import('./api')
         fileSource = video?.fileHandle || (video?.filePath ? `${SERVER_URL}/video/${encodeURIComponent(video.filePath)}` : video?.url)
     }
 
@@ -588,7 +597,6 @@ export async function processVideoForSummary(videoIdOrVideo, fileSourceOrOnProgr
         throw new Error('Video source file not accessible for transcription')
     }
     if (fileSource.getFile) {
-        const { verifyPermission } = await import('./fileSystem')
         const hasPerm = await verifyPermission(fileSource)
         if (!hasPerm) throw new Error('File access permission was denied')
     }
@@ -603,7 +611,6 @@ export async function processVideoForSummary(videoIdOrVideo, fileSourceOrOnProgr
         const captionChunks = transcription.chunks
 
         // Save transcript and caption chunks
-        const { isServerAvailable, put } = await import('./api')
         const serverAvailable = await isServerAvailable()
         
         if (serverAvailable) {
@@ -662,7 +669,6 @@ export async function regenerateSummaryOnly(videoId, existingTranscript, onProgr
         const summary = await generateAISummary(existingTranscript, apiKey, model, onProgress)
 
         // Save updated summary
-        const { isServerAvailable, put } = await import('./api')
         if (await isServerAvailable()) {
             await put(`/api/summaries/${videoId}`, { content: summary })
         } else {

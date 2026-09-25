@@ -444,6 +444,23 @@ router.post('/:id/hydrate-vault', (req, res) => {
                     }
                 }
             }
+
+            // 4. Hydrate Summaries
+            let hydratedSummaries = 0
+            if (vaultData.summaries?.files?.length > 0) {
+                const now = new Date().toISOString()
+                for (const s of vaultData.summaries.files) {
+                    const baseNameLower = (s.baseName || '').toLowerCase()
+                    const matchedVideo = videos.find(v => {
+                        const vBase = path.basename(v.file_name || '', path.extname(v.file_name || '')).toLowerCase()
+                        return vBase === baseNameLower
+                    })
+                    if (matchedVideo) {
+                        run(`UPDATE videos SET has_summary = 1, summary_generated_at = COALESCE(summary_generated_at, ?) WHERE id = ?`, [now, matchedVideo.id])
+                        hydratedSummaries++
+                    }
+                }
+            }
         })
 
         res.json({
@@ -451,11 +468,32 @@ router.post('/:id/hydrate-vault', (req, res) => {
             hydrated: {
                 notes: hydratedNotes,
                 nodes: hydratedNodes,
-                edges: hydratedEdges
+                edges: hydratedEdges,
+                summaries: hydratedSummaries
             }
         })
     } catch (err) {
         console.error('Failed to hydrate vault:', err)
+        res.status(500).json({ error: err.message })
+    }
+})
+
+// PUT /api/courses/reorder
+router.put('/reorder', (req, res) => {
+    const { updates } = req.body
+    if (!Array.isArray(updates)) {
+        return res.status(400).json({ error: 'updates must be an array' })
+    }
+    try {
+        transaction(() => {
+            for (const item of updates) {
+                if (item?.id && item?.order !== undefined) {
+                    run('UPDATE courses SET "order" = ? WHERE id = ?', [item.order, item.id])
+                }
+            }
+        })
+        res.json({ success: true })
+    } catch (err) {
         res.status(500).json({ error: err.message })
     }
 })

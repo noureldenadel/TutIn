@@ -1,5 +1,5 @@
 /**
- * TutIn API Client (v4)
+ * TutIn API Client (v5)
  * 
  * Communicates with the TutIn Companion Server (Express + SQLite).
  * Port 9474 is the default, but it may vary if the port is in use.

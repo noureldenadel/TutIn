@@ -1,9 +1,9 @@
 import * as api from './api.js'
 
 /**
- * Roadmap Database (v4 Server-Only)
+ * Roadmap Database (v5 Server-Only)
  * 
- * In v4, roadmaps are stored in the TutIn Companion Server (SQLite).
+ * In v5, roadmaps are stored in the TutIn Companion Server (SQLite).
  * LocalStorage fallback has been removed.
  */
 

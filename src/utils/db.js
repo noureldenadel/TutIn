@@ -1,7 +1,7 @@
 import * as api from './api.js'
 
 /**
- * TutIn Database — Server-only API client (v4)
+ * TutIn Database — Server-only API client (v5)
  * 
  * All data operations go through the TutIn Companion Server (SQLite).
  */

@@ -1,6 +1,6 @@
 {
   "name": "tutin-server",
-  "version": "4.0.0",
+  "version": "5.0.0",
   "description": "TutIn companion server — local API + video streaming",
   "type": "module",
   "main": "index.js",

@@ -7,6 +7,7 @@ import { useSettings } from '../../contexts/SettingsContext'
 import { useTheme } from '../../contexts/ThemeContext'
 import { useNotification } from '../../contexts/NotificationContext'
 import { exportAllData, clearAllData, importData, recalculateAllCoursesProgress, detectAllDurations } from '../../utils/db'
+import * as api from '../../utils/api.js'
 
 const accentColors = [
     { name: 'Classic / Glass', value: 'classic' },
@@ -48,13 +49,11 @@ function SettingsModal({ isOpen, onClose }) {
     useEffect(() => {
         if (isOpen && activeTab === 'ai_keys') {
             setGpuLoading(true)
-            import('../../utils/api.js').then(api => {
-                api.get('/api/dub/gpu-info').then(data => {
-                    setGpuInfo(data)
-                }).catch(() => {
-                    setGpuInfo({ gpu_available: false, service_running: false })
-                }).finally(() => setGpuLoading(false))
-            })
+            api.get('/api/dub/gpu-info').then(data => {
+                setGpuInfo(data)
+            }).catch(() => {
+                setGpuInfo({ gpu_available: false, service_running: false })
+            }).finally(() => setGpuLoading(false))
         }
     }, [isOpen, activeTab])
 
@@ -341,11 +340,10 @@ function SettingsModal({ isOpen, onClose }) {
                                                     <button
                                                         key={opt.value}
                                                         onClick={() => updateSettings({ aiDevice: opt.value })}
-                                                        className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${
-                                                            settings.aiDevice === opt.value
+                                                        className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${settings.aiDevice === opt.value
                                                                 ? 'bg-white dark:bg-dark-surface shadow-sm text-light-text dark:text-dark-text'
                                                                 : 'text-light-text-secondary dark:text-dark-text-secondary hover:text-light-text dark:hover:text-dark-text'
-                                                        }`}
+                                                            }`}
                                                     >
                                                         {opt.label}
                                                     </button>
@@ -384,7 +382,6 @@ function SettingsModal({ isOpen, onClose }) {
                                                             updateSettings({ dubbingDevice: opt.value })
                                                             setDeviceSwitching(true)
                                                             try {
-                                                                const api = await import('../../utils/api.js')
                                                                 const result = await api.post('/api/dub/set-device', { device: opt.value })
                                                                 if (result?.gpu_available !== undefined) setGpuInfo(prev => ({ ...prev, ...result }))
                                                                 showNotification(`Dubbing → ${opt.value.toUpperCase()}`, 'success')
@@ -392,13 +389,11 @@ function SettingsModal({ isOpen, onClose }) {
                                                                 showNotification(`Failed: ${err.message}`, 'error')
                                                             } finally { setDeviceSwitching(false) }
                                                         }}
-                                                        className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${
-                                                            opt.disabled ? 'opacity-35 cursor-not-allowed' : ''
-                                                        } ${
-                                                            settings.dubbingDevice === opt.value
+                                                        className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${opt.disabled ? 'opacity-35 cursor-not-allowed' : ''
+                                                            } ${settings.dubbingDevice === opt.value
                                                                 ? 'bg-white dark:bg-dark-surface shadow-sm text-light-text dark:text-dark-text'
                                                                 : 'text-light-text-secondary dark:text-dark-text-secondary hover:text-light-text dark:hover:text-dark-text'
-                                                        }`}
+                                                            }`}
                                                     >
                                                         {opt.label}
                                                         {deviceSwitching && settings.dubbingDevice === opt.value && (
@@ -581,7 +576,7 @@ function SettingsModal({ isOpen, onClose }) {
                         {/* Data Tab */}
                         {activeTab === 'data' && (
                             <div className="space-y-3">
-                                
+
                                 {/* Auto Detect Thumbnails */}
                                 <div className="p-4 rounded-lg border border-light-border dark:border-dark-border bg-light-surface dark:bg-dark-bg mb-4">
                                     <div className="flex items-center justify-between">
@@ -760,11 +755,10 @@ function SettingsModal({ isOpen, onClose }) {
                                                         <button
                                                             key={cat.value}
                                                             onClick={() => setFeedbackCategory(cat.value)}
-                                                            className={`flex-1 flex items-center justify-center gap-2 p-3 rounded-lg border-2 transition-all text-sm font-medium ${
-                                                                isSelected
+                                                            className={`flex-1 flex items-center justify-center gap-2 p-3 rounded-lg border-2 transition-all text-sm font-medium ${isSelected
                                                                     ? 'border-primary-fg/40 bg-primary-fg/5'
                                                                     : 'border-light-border dark:border-dark-border hover:border-primary-fg/30'
-                                                            }`}
+                                                                }`}
                                                         >
                                                             <div className={`w-6 h-6 rounded-md flex items-center justify-center ${cat.color}`}>
                                                                 <CatIcon className="w-3.5 h-3.5" />
@@ -810,7 +804,7 @@ function SettingsModal({ isOpen, onClose }) {
                                                     setSendingFeedback(true)
                                                     const res = await fetch('https://formspree.io/f/xojownzg', {
                                                         method: 'POST',
-                                                        headers: { 
+                                                        headers: {
                                                             'Content-Type': 'application/json',
                                                             'Accept': 'application/json'
                                                         },

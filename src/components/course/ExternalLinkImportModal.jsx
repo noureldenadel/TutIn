@@ -134,7 +134,7 @@ function ExternalLinkImportModal({ isOpen, onClose, onImport }) {
                 newErrors.courseUrl = 'Invalid URL format'
             }
         }
-        
+
         if (!formData.title.trim()) {
             newErrors.title = 'Title is required'
         }
@@ -353,47 +353,47 @@ function ExternalLinkImportModal({ isOpen, onClose, onImport }) {
                         {/* Modules */}
                         <div className="flex items-center gap-2">
                             <Folder className="w-5 h-5 text-primary" />
-                            <input 
-                                type="number" 
+                            <input
+                                type="number"
                                 min="1"
-                                value={formData.totalModules} 
+                                value={formData.totalModules}
                                 onChange={(e) => handleChange('totalModules', e.target.value)}
                                 className="no-spinner w-12 bg-white dark:bg-black/20 border border-light-border dark:border-dark-border rounded px-1 py-0.5 focus:border-primary flex-shrink-0 outline-none text-center font-medium transition-colors"
                                 placeholder="1"
                             />
                         </div>
-                        
+
                         {/* Videos */}
                         <div className="flex items-center gap-2">
                             <Video className="w-5 h-5 text-primary" />
-                            <input 
-                                type="number" 
+                            <input
+                                type="number"
                                 min="1"
-                                value={formData.totalVideos} 
+                                value={formData.totalVideos}
                                 onChange={(e) => handleChange('totalVideos', e.target.value)}
                                 className="no-spinner w-12 bg-white dark:bg-black/20 border border-light-border dark:border-dark-border rounded px-1 py-0.5 focus:border-primary flex-shrink-0 outline-none text-center font-medium transition-colors"
                                 placeholder="1"
                             />
                         </div>
-                        
+
                         {/* Duration */}
                         <div className="flex items-center gap-2">
                             <Clock className="w-5 h-5 text-primary" />
                             <div className="flex items-center bg-white dark:bg-black/20 border border-light-border dark:border-dark-border rounded px-1 py-0.5 focus-within:border-primary transition-colors">
-                                <input 
-                                    type="number" 
+                                <input
+                                    type="number"
                                     min="0"
-                                    value={formData.hours} 
+                                    value={formData.hours}
                                     onChange={(e) => handleChange('hours', e.target.value)}
                                     className="no-spinner w-8 bg-transparent outline-none text-right font-medium"
                                     placeholder="0"
                                 />
                                 <span className="mx-0.5 font-medium text-gray-400">:</span>
-                                <input 
-                                    type="number" 
+                                <input
+                                    type="number"
                                     min="0"
                                     max="59"
-                                    value={formData.minutes} 
+                                    value={formData.minutes}
                                     onChange={(e) => handleChange('minutes', e.target.value)}
                                     className="no-spinner w-8 bg-transparent outline-none text-left font-medium"
                                     placeholder="00"

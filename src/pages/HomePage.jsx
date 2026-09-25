@@ -11,8 +11,8 @@ import ImportPreviewModal from '../components/course/ImportPreviewModal'
 import EditCourseModal from '../components/course/EditCourseModal'
 import SyncPreviewModal from '../components/course/SyncPreviewModal'
 import { getDriveVideoUrl } from '../utils/googleDrive'
-import { 
-    syncCoursePreview, applySyncChanges, pickFolder, scanCourseFolder 
+import {
+    syncCoursePreview, applySyncChanges, pickFolder, scanCourseFolder
 } from '../utils/fileSystem'
 import * as api from '../utils/api'
 
@@ -40,7 +40,17 @@ function HomePage() {
 
     // Load courses on mount
     useEffect(() => {
-        loadCourses()
+        loadCourses(true) // Initial load
+
+        const handleCourseUpdated = (e) => {
+            const { courseId, updates } = e.detail
+            setCourses(prev => prev.map(c =>
+                c.id === courseId ? { ...c, ...updates } : c
+            ))
+        }
+
+        window.addEventListener('tutin:course-updated', handleCourseUpdated)
+        return () => window.removeEventListener('tutin:course-updated', handleCourseUpdated)
     }, [])
 
     // Debounce search
@@ -253,7 +263,7 @@ function HomePage() {
             setIsApplyingSync(true)
             const result = await applySyncChanges(syncPreview.course.id, syncPreview)
             console.log('Sync applied:', result)
-            
+
             await recalculateAllCoursesProgress(settings.progressCalculationMode)
             setSyncPreview(null)
             loadCourses() // Refresh the UI
@@ -294,83 +304,83 @@ function HomePage() {
         if (!pendingYouTube) return
         const courseData = pendingYouTube
         clearYouTube()
-        ;(async () => {
-            try {
-                const dupe = courses.find(c => c.title === courseData.title)
-                if (dupe) {
-                    if (!confirm(`A course named "${courseData.title}" already exists. Import anyway?`)) return
-                }
-
-                if (courseData.instructor && courseData.channelAvatar) {
-                    let finalAvatar = courseData.channelAvatar
-                    try {
-                        const { base64 } = await api.post('/api/data/download-image', { url: courseData.channelAvatar })
-                        if (base64) finalAvatar = base64
-                    } catch (e) {
-                        console.warn('Failed to download channel avatar for offline use', e)
+            ; (async () => {
+                try {
+                    const dupe = courses.find(c => c.title === courseData.title)
+                    if (dupe) {
+                        if (!confirm(`A course named "${courseData.title}" already exists. Import anyway?`)) return
                     }
-                    await setInstructorAvatar(courseData.instructor, finalAvatar)
-                }
 
-                let finalThumbnail = courseData.thumbnailData
-                if (finalThumbnail && finalThumbnail.startsWith('http')) {
-                    try {
-                        const { base64 } = await api.post('/api/data/download-image', { url: finalThumbnail })
-                        if (base64) finalThumbnail = base64
-                    } catch (e) {
-                        console.warn('Failed to download course thumbnail for offline use', e)
+                    if (courseData.instructor && courseData.channelAvatar) {
+                        let finalAvatar = courseData.channelAvatar
+                        try {
+                            const { base64 } = await api.post('/api/data/download-image', { url: courseData.channelAvatar })
+                            if (base64) finalAvatar = base64
+                        } catch (e) {
+                            console.warn('Failed to download channel avatar for offline use', e)
+                        }
+                        await setInstructorAvatar(courseData.instructor, finalAvatar)
                     }
-                }
 
-                let totalDuration = 0
-                let totalVideos = 0
-                if (courseData.modules?.[0]) {
-                    const videos = courseData.modules[0].videos || []
-                    totalDuration = videos.reduce((sum, v) => sum + (v.duration || 0), 0)
-                    totalVideos = videos.length
-                }
+                    let finalThumbnail = courseData.thumbnailData
+                    if (finalThumbnail && finalThumbnail.startsWith('http')) {
+                        try {
+                            const { base64 } = await api.post('/api/data/download-image', { url: finalThumbnail })
+                            if (base64) finalThumbnail = base64
+                        } catch (e) {
+                            console.warn('Failed to download course thumbnail for offline use', e)
+                        }
+                    }
 
-                const savedCourse = await addCourse({
-                    ...courseData,
-                    thumbnailData: finalThumbnail,
-                    totalDuration,
-                    totalVideos
-                })
+                    let totalDuration = 0
+                    let totalVideos = 0
+                    if (courseData.modules?.[0]) {
+                        const videos = courseData.modules[0].videos || []
+                        totalDuration = videos.reduce((sum, v) => sum + (v.duration || 0), 0)
+                        totalVideos = videos.length
+                    }
 
-                if (courseData.modules?.[0]) {
-                    const module = courseData.modules[0]
-                    const moduleDuration = module.videos.reduce((sum, v) => sum + (v.duration || 0), 0)
-
-                    const savedModule = await addModule({
-                        courseId: savedCourse.id,
-                        title: module.title,
-                        originalTitle: module.title,
-                        order: 0,
-                        totalDuration: moduleDuration,
-                        totalVideos: module.videos.length
+                    const savedCourse = await addCourse({
+                        ...courseData,
+                        thumbnailData: finalThumbnail,
+                        totalDuration,
+                        totalVideos
                     })
 
-                    for (let i = 0; i < module.videos.length; i++) {
-                        const video = module.videos[i]
-                        await addVideo({
-                            courseId: savedCourse.id,
-                            moduleId: savedModule.id,
-                            title: video.title,
-                            originalTitle: video.title,
-                            youtubeId: video.youtubeId,
-                            url: video.url,
-                            duration: video.duration || 0,
-                            order: i
-                        })
-                    }
-                }
+                    if (courseData.modules?.[0]) {
+                        const module = courseData.modules[0]
+                        const moduleDuration = module.videos.reduce((sum, v) => sum + (v.duration || 0), 0)
 
-                loadCourses()
-            } catch (err) {
-                console.error('Failed to save YouTube course:', err)
-                showNotification('Failed to save: ' + err.message, 'error')
-            }
-        })()
+                        const savedModule = await addModule({
+                            courseId: savedCourse.id,
+                            title: module.title,
+                            originalTitle: module.title,
+                            order: 0,
+                            totalDuration: moduleDuration,
+                            totalVideos: module.videos.length
+                        })
+
+                        for (let i = 0; i < module.videos.length; i++) {
+                            const video = module.videos[i]
+                            await addVideo({
+                                courseId: savedCourse.id,
+                                moduleId: savedModule.id,
+                                title: video.title,
+                                originalTitle: video.title,
+                                youtubeId: video.youtubeId,
+                                url: video.url,
+                                duration: video.duration || 0,
+                                order: i
+                            })
+                        }
+                    }
+
+                    loadCourses()
+                } catch (err) {
+                    console.error('Failed to save YouTube course:', err)
+                    showNotification('Failed to save: ' + err.message, 'error')
+                }
+            })()
     }, [pendingYouTube])
 
     // Handle Google Drive import
@@ -378,64 +388,64 @@ function HomePage() {
         if (!pendingGoogleDrive) return
         const courseData = pendingGoogleDrive
         clearGoogleDrive()
-        ;(async () => {
-            try {
-                const dupe = courses.find(c => c.title === courseData.title)
-                if (dupe) {
-                    if (!confirm(`A course named "${courseData.title}" already exists. Import anyway?`)) return
-                }
-
-                let finalThumbnail = courseData.thumbnailData
-                if (finalThumbnail && finalThumbnail.startsWith('http')) {
-                    try {
-                        const { base64 } = await api.post('/api/data/download-image', { url: finalThumbnail })
-                        if (base64) finalThumbnail = base64
-                    } catch (e) {
-                        console.warn('Failed to download drive course thumbnail for offline use', e)
+            ; (async () => {
+                try {
+                    const dupe = courses.find(c => c.title === courseData.title)
+                    if (dupe) {
+                        if (!confirm(`A course named "${courseData.title}" already exists. Import anyway?`)) return
                     }
-                }
 
-                const savedCourse = await addCourse({
-                    title: courseData.title,
-                    instructor: courseData.instructor || '',
-                    description: courseData.description || 'Imported from Google Drive',
-                    thumbnailData: finalThumbnail,
-                    totalDuration: courseData.totalDuration,
-                    totalVideos: courseData.totalVideos
-                })
+                    let finalThumbnail = courseData.thumbnailData
+                    if (finalThumbnail && finalThumbnail.startsWith('http')) {
+                        try {
+                            const { base64 } = await api.post('/api/data/download-image', { url: finalThumbnail })
+                            if (base64) finalThumbnail = base64
+                        } catch (e) {
+                            console.warn('Failed to download drive course thumbnail for offline use', e)
+                        }
+                    }
 
-                for (let i = 0; i < courseData.modules.length; i++) {
-                    const module = courseData.modules[i]
-                    const savedModule = await addModule({
-                        courseId: savedCourse.id,
-                        title: module.title,
-                        originalTitle: module.originalTitle,
-                        order: i,
-                        totalDuration: module.totalDuration,
-                        totalVideos: module.totalVideos
+                    const savedCourse = await addCourse({
+                        title: courseData.title,
+                        instructor: courseData.instructor || '',
+                        description: courseData.description || 'Imported from Google Drive',
+                        thumbnailData: finalThumbnail,
+                        totalDuration: courseData.totalDuration,
+                        totalVideos: courseData.totalVideos
                     })
 
-                    for (let j = 0; j < module.videos.length; j++) {
-                        const video = module.videos[j]
-                        await addVideo({
+                    for (let i = 0; i < courseData.modules.length; i++) {
+                        const module = courseData.modules[i]
+                        const savedModule = await addModule({
                             courseId: savedCourse.id,
-                            moduleId: savedModule.id,
-                            title: video.title,
-                            originalTitle: video.originalTitle,
-                            driveFileId: video.driveFileId,
-                            url: getDriveVideoUrl(video.driveFileId),
-                            duration: video.duration || 0,
-                            order: j
+                            title: module.title,
+                            originalTitle: module.originalTitle,
+                            order: i,
+                            totalDuration: module.totalDuration,
+                            totalVideos: module.totalVideos
                         })
-                    }
-                }
 
-                loadCourses()
-            } catch (err) {
-                console.error('Failed to save Google Drive course:', err)
-                showNotification('Failed to save: ' + err.message, 'error')
-            }
-        })()
+                        for (let j = 0; j < module.videos.length; j++) {
+                            const video = module.videos[j]
+                            await addVideo({
+                                courseId: savedCourse.id,
+                                moduleId: savedModule.id,
+                                title: video.title,
+                                originalTitle: video.originalTitle,
+                                driveFileId: video.driveFileId,
+                                url: getDriveVideoUrl(video.driveFileId),
+                                duration: video.duration || 0,
+                                order: j
+                            })
+                        }
+                    }
+
+                    loadCourses()
+                } catch (err) {
+                    console.error('Failed to save Google Drive course:', err)
+                    showNotification('Failed to save: ' + err.message, 'error')
+                }
+            })()
     }, [pendingGoogleDrive])
 
     // Handle External Link import
@@ -443,20 +453,20 @@ function HomePage() {
         if (!pendingExternalLink) return
         const courseData = pendingExternalLink
         clearExternalLink()
-        ;(async () => {
-            try {
-                const dupe = courses.find(c => c.title === courseData.title)
-                if (dupe) {
-                    if (!confirm(`A course named "${courseData.title}" already exists. Import anyway?`)) return
-                }
+            ; (async () => {
+                try {
+                    const dupe = courses.find(c => c.title === courseData.title)
+                    if (dupe) {
+                        if (!confirm(`A course named "${courseData.title}" already exists. Import anyway?`)) return
+                    }
 
-                await addCourse(courseData)
-                loadCourses()
-            } catch (err) {
-                console.error('Failed to save External Link course:', err)
-                showNotification('Failed to save: ' + err.message, 'error')
-            }
-        })()
+                    await addCourse(courseData)
+                    loadCourses()
+                } catch (err) {
+                    console.error('Failed to save External Link course:', err)
+                    showNotification('Failed to save: ' + err.message, 'error')
+                }
+            })()
     }, [pendingExternalLink])
 
     const sortOptions = [
@@ -614,7 +624,6 @@ function HomePage() {
                 course={editingCourse}
                 isOpen={!!editingCourse}
                 onClose={() => setEditingCourse(null)}
-                onSave={loadCourses}
                 onSync={handleSyncCourse}
             />
 

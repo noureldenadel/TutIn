@@ -1,5 +1,5 @@
 import { Link, useNavigate } from 'react-router-dom'
-import { Play, Clock, Video, MoreVertical, Pencil, Trash2, Link2, LayoutGrid } from 'lucide-react'
+import { Play, Clock, Video, MoreVertical, Pencil, Trash2, Link2, LayoutGrid, FolderSync } from 'lucide-react'
 import { formatDuration, deleteCourse, getInstructorAvatarAsync, updateCourse } from '../../utils/db'
 import { useState, useEffect } from 'react'
 import { useNotification } from '../../contexts/NotificationContext'
@@ -74,7 +74,14 @@ function CourseCard({ course, viewMode = 'grid', onRefresh, onEdit, onSync }) {
         onEdit?.(course)
     }
 
-    const isLocalCourse = !!(course.folderHandle || (course.originalTitle && !course.youtubePlaylistId && !course.driveFileId && course.sourceType !== 'external-link'))
+    function handleSync(e) {
+        e.preventDefault()
+        e.stopPropagation()
+        setShowMenu(false)
+        onSync?.(course)
+    }
+
+    const isLocalCourse = !course.courseUrl && course.sourceType !== 'external-link' && !course.youtubePlaylistId && !course.driveFileId
     const isExternalCourse = course.sourceType === 'external-link' || !!course.courseUrl
 
     async function handleExternalClick() {
@@ -88,7 +95,7 @@ function CourseCard({ course, viewMode = 'grid', onRefresh, onEdit, onSync }) {
     }
 
     const CardWrapper = isExternalCourse ? 'a' : Link
-    const wrapperProps = isExternalCourse 
+    const wrapperProps = isExternalCourse
         ? { href: course.courseUrl, target: '_blank', rel: 'noopener noreferrer', onClick: handleExternalClick }
         : { to: `/course/${course.id}` }
 
@@ -111,7 +118,7 @@ function CourseCard({ course, viewMode = 'grid', onRefresh, onEdit, onSync }) {
                             <Video className="w-10 h-10 text-gray-400 dark:text-neutral-600" />
                         </div>
                     )}
-                    
+
 
                     <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
                         {isExternalCourse ? (
@@ -153,14 +160,25 @@ function CourseCard({ course, viewMode = 'grid', onRefresh, onEdit, onSync }) {
                     </span>
                 </div>
 
-                {/* Edit Button for List View */}
-                <button
-                    onClick={handleEdit}
-                    className="p-2 hover:bg-gray-100 dark:hover:bg-white/10 rounded-full transition-colors text-gray-500 dark:text-neutral-400 hover:text-gray-900 dark:hover:text-white"
-                    title="Edit course metadata and progress"
-                >
-                    <Pencil className="w-4 h-4" />
-                </button>
+                <div className="flex items-center gap-1">
+                    {isLocalCourse && onSync && (
+                        <button
+                            onClick={handleSync}
+                            className="p-2 hover:bg-gray-100 dark:hover:bg-white/10 rounded-full transition-colors text-gray-500 dark:text-neutral-400 hover:text-primary dark:hover:text-primary-fg"
+                            title="Sync Course folder & vault"
+                        >
+                            <FolderSync className="w-4 h-4" />
+                        </button>
+                    )}
+                    {/* Edit Button for List View */}
+                    <button
+                        onClick={handleEdit}
+                        className="p-2 hover:bg-gray-100 dark:hover:bg-white/10 rounded-full transition-colors text-gray-500 dark:text-neutral-400 hover:text-gray-900 dark:hover:text-white"
+                        title="Edit course metadata and progress"
+                    >
+                        <Pencil className="w-4 h-4" />
+                    </button>
+                </div>
             </CardWrapper>
         )
     }
@@ -226,6 +244,15 @@ function CourseCard({ course, viewMode = 'grid', onRefresh, onEdit, onSync }) {
                                     className="absolute right-0 top-full mt-1 w-40 glass rounded-lg shadow-2xl border border-gray-100 dark:border-white/10 py-1 z-20"
                                     onClick={(e) => e.stopPropagation()}
                                 >
+                                    {isLocalCourse && onSync && (
+                                        <button
+                                            className="w-full px-3 py-2 text-left text-sm text-gray-700 dark:text-neutral-300 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-white/10 flex items-center gap-2"
+                                            onClick={handleSync}
+                                        >
+                                            <FolderSync className="w-3.5 h-3.5 text-primary-fg" />
+                                            Sync Course
+                                        </button>
+                                    )}
                                     <button
                                         className="w-full px-3 py-2 text-left text-sm text-gray-700 dark:text-neutral-300 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-white/10 flex items-center gap-2"
                                         onClick={(e) => {
@@ -296,7 +323,14 @@ function CourseCard({ course, viewMode = 'grid', onRefresh, onEdit, onSync }) {
 
                     {/* Stats */}
                     <div className="flex items-center justify-between text-xs text-gray-500 dark:text-neutral-500 font-medium">
-                        <span>{course.completedVideos} / {course.totalVideos} videos</span>
+                        <span className="flex items-center gap-1.5">
+                            {course.completedVideos} / {course.totalVideos} videos
+                            {isLocalCourse && (
+                                <span className="text-[10px] px-1.5 py-0.5 rounded bg-primary/10 text-primary dark:text-primary-fg font-medium tracking-tight">
+                                    .tutin
+                                </span>
+                            )}
+                        </span>
                         <span className="text-primary dark:text-white">{Math.round(completionPercentage)}%</span>
                     </div>
                 </div>

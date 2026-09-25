@@ -8,7 +8,7 @@ import {
     Search, HelpCircle, Move
 } from 'lucide-react'
 import {
-    getCourse, getModulesByCourse, getVideosByModule,
+    getCourse, getModulesByCourse, getVideosByCourse,
     getNotesByCourse, getCanvasData, saveCanvasData,
     generateId, formatDuration
 } from '../utils/db'
@@ -97,11 +97,12 @@ function CourseCanvasPage() {
         async function initCanvas() {
             try {
                 setIsLoading(true)
-                const [courseData, modulesData, notesData, canvasData] = await Promise.all([
+                const [courseData, modulesData, notesData, canvasData, allVideos] = await Promise.all([
                     getCourse(courseId),
                     getModulesByCourse(courseId),
                     getNotesByCourse(courseId),
-                    getCanvasData(courseId).catch(() => ({ nodes: [], edges: [], viewport: null }))
+                    getCanvasData(courseId).catch(() => ({ nodes: [], edges: [], viewport: null })),
+                    getVideosByCourse(courseId).catch(() => [])
                 ])
 
                 if (!isMounted) return
@@ -109,14 +110,12 @@ function CourseCanvasPage() {
                 setCourse(courseData)
                 setAllNotes(notesData || [])
 
-                // Fetch all videos from modules
-                const vids = []
-                for (const mod of (modulesData || [])) {
-                    const modVideos = await getVideosByModule(mod.id)
-                    for (const v of (modVideos || [])) {
-                        vids.push({ ...v, moduleTitle: mod.title })
-                    }
-                }
+                // Map module titles to videos
+                const modTitleMap = new Map((modulesData || []).map(m => [m.id, m.title]))
+                const vids = (allVideos || []).map(v => ({
+                    ...v,
+                    moduleTitle: modTitleMap.get(v.moduleId) || ''
+                }))
                 setVideos(vids)
 
                 const existingNodes = canvasData?.nodes || []

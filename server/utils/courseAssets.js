@@ -679,18 +679,213 @@ export function deleteVaultSummary(courseFolder, relModulePath, videoBaseName) {
 }
 
 /**
+ * Scan and return detailed metrics for the entire .tutin vault and all assets:
+ * Dubs, Transcripts, Summaries, Canvas, Notes, Screenshots, Metadata, and Disk Size.
+ */
+export function scanVaultSummary(courseFolder) {
+    if (!courseFolder || !fs.existsSync(courseFolder)) {
+        return { hasVault: false }
+    }
+
+    const vaultDir = path.join(courseFolder, '.tutin')
+    const hasVault = fs.existsSync(vaultDir)
+
+    let totalSizeBytes = 0
+    let totalFileCount = 0
+
+    function walkDir(dir) {
+        if (!fs.existsSync(dir)) return
+        try {
+            const entries = fs.readdirSync(dir, { withFileTypes: true })
+            for (const entry of entries) {
+                const fullPath = path.join(dir, entry.name)
+                if (entry.isFile()) {
+                    totalFileCount++
+                    try {
+                        const stat = fs.statSync(fullPath)
+                        totalSizeBytes += stat.size
+                    } catch { }
+                } else if (entry.isDirectory()) {
+                    walkDir(fullPath)
+                }
+            }
+        } catch { }
+    }
+
+    if (hasVault) {
+        walkDir(vaultDir)
+    }
+
+    // 1. Dubs (.tutin/dubs and legacy Dubs/)
+    const dubFiles = []
+    const dubLangs = new Set()
+    let dubsSizeBytes = 0
+    const scanDubsDir = (baseDir) => {
+        if (!fs.existsSync(baseDir)) return
+        function walk(dir) {
+            try {
+                for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+                    const p = path.join(dir, e.name)
+                    if (e.isDirectory()) walk(p)
+                    else if (e.isFile() && e.name.endsWith('.mp3')) {
+                        let size = 0
+                        try {
+                            const stat = fs.statSync(p)
+                            size = stat.size
+                            dubsSizeBytes += size
+                        } catch { }
+                        const parts = e.name.slice(0, -4).split('.')
+                        const lang = parts.length >= 2 ? parts[parts.length - 1] : 'unknown'
+                        dubLangs.add(lang)
+                        dubFiles.push({ fileName: e.name, filePath: p, lang, sizeBytes: size })
+                    }
+                }
+            } catch { }
+        }
+        walk(baseDir)
+    }
+    scanDubsDir(path.join(courseFolder, '.tutin', 'dubs'))
+    scanDubsDir(path.join(courseFolder, 'Dubs'))
+
+    // 2. Transcripts (.tutin/captions, legacy Captions, and sibling subs)
+    const captionFiles = []
+    const captionLangs = new Set()
+    let generatedCaptionsCount = 0
+    let uploadedCaptionsCount = 0
+    const scanCaptionsDir = (baseDir) => {
+        if (!fs.existsSync(baseDir)) return
+        function walk(dir) {
+            try {
+                for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+                    const p = path.join(dir, e.name)
+                    if (e.isDirectory()) walk(p)
+                    else if (e.isFile() && (e.name.endsWith('.vtt') || e.name.endsWith('.srt') || e.name.endsWith('.ass'))) {
+                        const parts = e.name.slice(0, e.name.lastIndexOf('.')).split('.')
+                        const lang = parts.length >= 2 ? parts[parts.length - 1].replace(/-generated$/, '') : 'source'
+                        const isGenerated = e.name.includes('-generated')
+                        if (isGenerated) generatedCaptionsCount++
+                        else uploadedCaptionsCount++
+                        captionLangs.add(lang)
+                        captionFiles.push({
+                            fileName: e.name,
+                            filePath: p,
+                            lang,
+                            format: path.extname(e.name).slice(1),
+                            isGenerated
+                        })
+                    }
+                }
+            } catch { }
+        }
+        walk(baseDir)
+    }
+    scanCaptionsDir(path.join(courseFolder, '.tutin', 'captions'))
+    scanCaptionsDir(path.join(courseFolder, 'Captions'))
+
+    // 3. Summaries (.tutin/summaries/)
+    const summaryFiles = []
+    const scanSummariesDir = (baseDir) => {
+        if (!fs.existsSync(baseDir)) return
+        function walk(dir) {
+            try {
+                for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+                    const p = path.join(dir, e.name)
+                    if (e.isDirectory()) walk(p)
+                    else if (e.isFile() && e.name.endsWith('.md')) {
+                        const baseName = e.name.replace(/\.md$/, '')
+                        summaryFiles.push({ fileName: e.name, filePath: p, baseName })
+                    }
+                }
+            } catch { }
+        }
+        walk(baseDir)
+    }
+    scanSummariesDir(path.join(courseFolder, '.tutin', 'summaries'))
+
+    // 4. Canvas Whiteboard
+    const canvasData = loadVaultCanvas(courseFolder)
+    const hasCanvas = Boolean(canvasData && (canvasData.nodes?.length > 0 || canvasData.edges?.length > 0))
+    const canvasNodeCount = canvasData?.nodes?.length || 0
+    const canvasEdgeCount = canvasData?.edges?.length || 0
+
+    // 5. Notes & Screenshots
+    const notes = loadVaultNotes(courseFolder)
+    const notesCount = notes?.length || 0
+    let screenshotsCount = 0
+    const screenshotsDir = path.join(courseFolder, '.tutin', 'notes', 'screenshots')
+    if (fs.existsSync(screenshotsDir)) {
+        try {
+            screenshotsCount = fs.readdirSync(screenshotsDir).filter(f => {
+                try { return !fs.statSync(path.join(screenshotsDir, f)).isDirectory() } catch { return false }
+            }).length
+        } catch { }
+    }
+
+    // 6. Metadata
+    const metadata = loadVaultMetadata(courseFolder)
+
+    return {
+        hasVault,
+        vaultPath: hasVault ? vaultDir : null,
+        totalSizeBytes,
+        totalFileCount,
+        dubs: {
+            count: dubFiles.length,
+            languages: Array.from(dubLangs).sort(),
+            sizeBytes: dubsSizeBytes,
+            files: dubFiles
+        },
+        transcripts: {
+            count: captionFiles.length,
+            languages: Array.from(captionLangs).sort(),
+            generatedCount: generatedCaptionsCount,
+            uploadedCount: uploadedCaptionsCount,
+            files: captionFiles
+        },
+        summaries: {
+            count: summaryFiles.length,
+            files: summaryFiles
+        },
+        canvas: {
+            exists: hasCanvas,
+            nodeCount: canvasNodeCount,
+            edgeCount: canvasEdgeCount,
+            viewport: canvasData?.viewport || null
+        },
+        notes: {
+            count: notesCount,
+            screenshotsCount,
+            notesList: notes
+        },
+        metadata
+    }
+}
+
+/**
  * Full Vault Loader: reads all existing vault data when a course folder is scanned / imported.
  */
 export function loadFullVaultData(courseFolder) {
-    if (!courseFolder || !fs.existsSync(path.join(courseFolder, '.tutin'))) {
+    if (!courseFolder || !fs.existsSync(courseFolder)) {
         return null
     }
 
+    const summary = scanVaultSummary(courseFolder)
+
     return {
-        hasVault: true,
-        metadata: loadVaultMetadata(courseFolder),
-        notes: loadVaultNotes(courseFolder),
-        canvas: loadVaultCanvas(courseFolder),
-        languages: listCourseLanguages(courseFolder)
+        hasVault: summary.hasVault,
+        vaultPath: summary.vaultPath,
+        metadata: summary.metadata,
+        notes: summary.notes?.notesList || [],
+        notesCount: summary.notes?.count || 0,
+        screenshotsCount: summary.notes?.screenshotsCount || 0,
+        canvas: summary.canvas,
+        languages: listCourseLanguages(courseFolder),
+        dubs: summary.dubs,
+        transcripts: summary.transcripts,
+        summaries: summary.summaries,
+        totalSizeBytes: summary.totalSizeBytes,
+        totalFileCount: summary.totalFileCount,
+        vaultSummary: summary
     }
 }
+

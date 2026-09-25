@@ -337,6 +337,11 @@ async function scanDirectoryRecursive(dirPath, onProgress, progressState, course
             return true
         })
 
+        // Check for existing video summary in .tutin/summaries/
+        const summaryInMod = path.join(courseRoot, '.tutin', 'summaries', relModulePath, `${videoBase}.md`)
+        const summaryInRoot = path.join(courseRoot, '.tutin', 'summaries', `${videoBase}.md`)
+        const hasSummary = fs.existsSync(summaryInMod) || fs.existsSync(summaryInRoot)
+
         videos.push({
             title: cleanVideoTitle(videoEntry.name),
             originalTitle: videoEntry.name,
@@ -347,6 +352,7 @@ async function scanDirectoryRecursive(dirPath, onProgress, progressState, course
             order: videoOrder++,
             subtitleFiles: allSubtitles,
             availableDubs,
+            hasSummary,
         })
     }
 
