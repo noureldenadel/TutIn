@@ -1,4 +1,4 @@
-# TutIn - Complete Technical Documentation
+# TutIn v5 - Complete Technical Documentation
 
 Welcome to the **TutIn Comprehensive Documentation**. This document covers everything from end-user installation instructions to the deep technical architecture, tech stack, data flows, and feature documentation. 
 
@@ -72,11 +72,13 @@ TutIn is designed as an **Offline-First**, local-first application built with mo
 ### Local Storage & Persistence
 - **IndexedDB**: Primary client-side database storing all course metadata, module trees, progress arrays, notes, and roadmaps.
 - **File System Access API**: Used to securely mount and traverse local directories without uploading files to a server.
+- **.tutin Folder**: Stores course-specific generated assets (like transcripts and dubbed audio files) directly inside the course directory. The Sync feature automatically picks up files placed here.
 
 ### AI & Machine Learning
 - **Transcription**: `Transformers.js` (WebGPU accelerated) running `Xenova/whisper-tiny` completely inside a Web Worker.
 - **Summarization**: Gemini 2.0 Flash via OpenRouter REST API.
-- **Dubbing/Translation**: Local NLLB-200 distillation for subtitle translation, and XTTS v2 for voice cloning.
+- **Dubbing/Translation**: Local NLLB-200 distillation for subtitle translation, and XTTS v2 for voice cloning. Includes Bulk Dubbing and translation workflows processed via background jobs. The dubbing engine features intelligent audio processing: it uses FFmpeg `atempo` filters to time-stretch generated audio into the original caption window (clamped between 0.5x and 1.5x), prevents segment overlapping, and applies a 20ms fade-in/fade-out to eliminate harsh clipping.
+- **AI File Pipeline & Naming**: The pipeline operates in a sequence: *Whisper* -> *NLLB-200* -> *XTTS*. AI-generated files explicitly carry a `-generated.[lang]` suffix (e.g., `01-generated.en.vtt`), distinguishing them from user-uploaded captions (e.g., `01.es.vtt`).
 
 ---
 
@@ -141,23 +143,29 @@ stateDiagram-v2
 - **Smart Directory Parsing**: Drop any folder into TutIn, and it will intelligently parse subfolders into Modules, sorting them alphanumerically.
 - **Universal Importing**: Supports loading courses from Local Storage, YouTube Playlists, and Google Drive links.
 - **Sync/Refresh**: Click the sync icon to automatically detect new videos added to your local folder or deleted files, without losing progress.
-- **Visual Roadmap**: An infinite canvas (node-based) editor to map out course prerequisites and learning paths.
+- **Visual Roadmap**: A global infinite canvas editor to map out course prerequisites and high-level learning paths.
+- **Course Canvas**: A dedicated, course-specific infinite canvas (`CourseCanvasPage`) that allows you to visually organize modules, connect concepts, and view notes spatially.
+- **Course Manager & Bulk Editor**: A dedicated bulk editor page (`CourseManagerPage`) to mass-manage playlists, edit titles, and queue bulk translation or dubbing tasks across multiple videos simultaneously.
 
 ### 🎬 Advanced Video Player
 - **Cinematic Ambient Mode**: Local videos feature a dynamic, glowing ambient blur that extends the video's colors into the background for a more immersive viewing experience.
 - **Resume Playback**: Remembers your exact timestamp when you close the app.
-- **Dynamic Subtitles**: Support for WebVTT/SRT with drag-and-drop repositioning and smart language detection from filenames (e.g. automatically categorizes `video_eng.srt` as English).
-- **Speed & PiP**: Quick speed toggles, hold-to-fast-forward, and Picture-in-Picture mode.
+- **Dynamic Subtitles & Smart Captions**: Support for WebVTT/SRT with drag-and-drop repositioning. Smart Captions auto-detects and suggests other subtitle files in the same folder.
+- **Speed & PiP**: Quick speed toggles, hold-to-fast-forward, and a custom Floating Mini Player for picture-in-picture mode inside the app while taking notes or navigating.
 
 ### 🧠 AI Toolkit
-- **Offline Transcription**: Converts speech to text locally in your browser. Generates clickable timestamps that seek the video.
+- **Offline Transcription**: Converts speech to text locally in your browser with smart transcript autocomplete. Generates clickable timestamps that seek the video.
 - **Gemini Summaries**: Generates Markdown-formatted study notes from transcripts.
-- **Local Voice Dubbing**: Auto-translates captions to 16+ languages and generates cloned audio tracks for non-native videos.
+- **Local Voice Dubbing**: Auto-translates captions to 16+ languages and generates cloned audio tracks. Queue bulk tasks to dub entire modules in the background.
 
 ### 📝 Notes & Annotations
-- **Timestamped Notes**: Take rich-text notes that lock to the current video timestamp. 
-- **Image Support**: Paste or drag screenshots directly into notes (auto-compressed and stored locally as Base64).
+- **Timestamped Markdown Notes**: Take rich-text markdown notes that lock to the current video timestamp. 
+- **Smart Pauser**: Automatically pauses the video when you start typing a note. Once you stop writing, a visual countdown timer initiates before seamlessly resuming playback.
+- **Image Support & Cropper**: Paste or drag screenshots directly into notes. Use the Inline Image Cropper to edit screenshots instantly (auto-compressed and stored locally as Base64).
 - **Persistent UI State**: The sidebar intelligently preserves your scroll position, active tabs, and unsaved note drafts when switching between the Playlist, AI, and Notes panels.
+
+### 💾 Data Storage & Backups
+- **Full JSON Backups**: Seamlessly export and import your entire database, notes, and progress to a local JSON file (e.g., `tutin_backup_2026.json`). This ensures you own your data and can migrate between devices easily.
 
 ---
 
@@ -173,6 +181,7 @@ TutIn relies on `IndexedDB` for local, fast operations. Below is a simplified re
 | `notes` | User annotations | `id`, `videoId`, `timestamp`, `content` |
 | `handles` | Persistent file permissions | `id`, `handle` |
 | `roadmaps` | Visual learning paths | `id`, `name`, `nodes`, `edges` |
+| `watch_sessions` | Granular viewing history | `id`, `videoId`, `startedAt`, `endedAt`, `durationWatched` |
 
 ---
 

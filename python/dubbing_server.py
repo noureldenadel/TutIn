@@ -441,6 +441,8 @@ def process_dubbing_job(job_id: str, req: DubRequest):
         # Create silent master canvas
         master_audio = AudioSegment.silent(duration=max_duration_ms + 3000)  # +3s safety buffer
         
+        last_end_ms = 0
+        
         print(f"[XTTS Dubbing] Starting job {job_id} | Segments: {len(segments)} | Target Lang: {target_lang}")
         for i, seg in enumerate(segments):
             if job["status"] == "cancelled":
@@ -495,8 +497,21 @@ def process_dubbing_job(job_id: str, req: DubRequest):
             else:
                 print(f"[XTTS Dubbing] Segment {i+1}/{total_segments} ({seg_latency}ms): Natural duration {natural_duration_sec:.2f}s (window: {target_window_sec:.2f}s)")
 
+            # Prevent overlapping by shifting start_ms if previous segment is still playing
+            if start_ms < last_end_ms:
+                start_ms = last_end_ms + 50
+                
+            # Ensure master canvas is long enough (in case we shifted past its end)
+            required_length = start_ms + len(final_segment_audio)
+            if required_length > len(master_audio):
+                master_audio += AudioSegment.silent(duration=(required_length - len(master_audio) + 1000))
+
+            # Apply a short 20ms fade in/out to remove clicking/harsh starts
+            final_segment_audio = final_segment_audio.fade_in(20).fade_out(20)
+
             # Place onto master audio canvas at target start time
             master_audio = master_audio.overlay(final_segment_audio, position=start_ms)
+            last_end_ms = start_ms + len(final_segment_audio)
             
             if os.path.exists(raw_chunk_path):
                 os.remove(raw_chunk_path)

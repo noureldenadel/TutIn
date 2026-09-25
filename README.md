@@ -1,6 +1,6 @@
 # TutIn - AI-Powered Course Learning Platform
 
-[![Version](https://img.shields.io/badge/version-4.0.0-blue.svg)](https://github.com/noureldenadel/TutIn/releases)
+[![Version](https://img.shields.io/badge/version-5.0.0-blue.svg)](https://github.com/noureldenadel/TutIn/releases)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
 > Your offline-first, AI-enhanced management system for local video courses and YouTube playlists.
@@ -20,8 +20,9 @@
 - **Privacy-First Data:** All course progress, custom roadmaps, and timestamped screenshot notes are stored entirely on your device using IndexedDB.
 - **Offline AI Transcription:** Transcribe speech directly in your browser without internet using WebGPU-accelerated `Transformers.js` (Whisper).
 - **AI Summaries:** Generate structured study notes from transcripts using Gemini.
-- **Immersive Player:** Features timestamped rich-text notes, drag-and-drop subtitles, speed controls, and a dynamic ambient glow mode.
-- **Visual Roadmap:** An interactive, drag-and-drop canvas to map out course prerequisites and learning paths.
+- **Immersive Player:** Features timestamped markdown notes with a Smart Pauser, drag-and-drop subtitles, speed controls, and a dynamic ambient glow mode.
+- **Visual Roadmap & Course Canvas:** Map out global course prerequisites using the Roadmap, or organize course-specific concepts spatially using the Course Canvas.
+- **Bulk Manager:** Mass-edit playlists and queue background tasks for bulk translation and dubbing.
 
 ## 📖 Usage
 

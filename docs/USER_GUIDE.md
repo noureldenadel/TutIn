@@ -9,7 +9,12 @@ Welcome to the **TutIn User Guide**! This document provides detailed, step-by-st
 
 ## 📚 Course Library Management
 
-The homepage is your central hub for all your learning materials. TutIn allows you to import courses from various sources, managing them under a single unified dashboard.
+The homepage is your central hub for all your learning materials. TutIn allows you to import courses from various sources, managing them under a single unified dashboard. You can also mass-manage your content using the **Course Manager**.
+
+### Course Manager (Bulk Editor)
+Click on the **Course Manager** icon to open the bulk editor. Here you can:
+- Edit video titles and playlist orders in bulk.
+- Select multiple videos and queue background tasks for **Bulk Translation** and **Bulk Dubbing**.
 
 ### Importing a Local Folder
 1. Click **Add Course** → **Import from Folder**.
@@ -59,13 +64,14 @@ Use these to navigate quickly without touching your mouse:
 
 ## 🤖 AI-Powered Features
 
-TutIn's AI features run locally and privately.
+TutIn's AI features run locally and privately. The AI pipeline is designed sequentially: generate transcript, translate it, and finally dub it.
 
 ### Transcription (Whisper AI)
 1. In the course player, click the **AI Summary** tab in the sidebar.
 2. Click **Transcribe Video**.
 3. **First-time use:** TutIn will download a lightweight Whisper AI model (~40MB). 
-4. The transcription runs entirely in your browser. Once complete, you will see a timestamped transcript.
+4. The transcription runs entirely in your browser. Once complete, you will see a timestamped transcript. 
+   > *Note on Files:* AI-generated transcripts are saved directly in your course folder under a `.tutin/transcripts` directory. They will carry a `-generated` tag along with their language code (e.g., `-generated.en.vtt`) to distinguish them from your own manually uploaded subtitle files.
 5. Click on any word in the transcript to jump to that specific point in the video!
 
 ### Generating Summaries (Gemini)
@@ -77,6 +83,10 @@ TutIn's AI features run locally and privately.
 
 ### AI Dubbing (Voice Cloning)
 TutIn can automatically dub videos into 16+ languages, cloning the original speaker's voice using Coqui XTTS v2.
+
+**Advanced Audio Processing**:
+- **Smart Speed Adjustment:** The engine automatically applies FFmpeg `atempo` filters (clamped between 0.5x and 1.5x) to compress generated audio to fit the original caption window, preventing robotic artifacts.
+- **Overlap Prevention & Fading:** It intelligently shifts segment start times if a previous segment is still playing to avoid audio overlap, and applies a 20ms fade-in/fade-out to eliminate harsh clicks between sentences.
 
 1. Generate a transcript for the video.
 2. Click the **Translate** button in the AI panel to translate the captions into your target language.
@@ -94,10 +104,11 @@ TutIn can automatically dub videos into 16+ languages, cloning the original spea
 Take contextual notes directly alongside your video. 
 
 1. Click the **Notes** tab in the sidebar.
-2. Click **Add Note** to create a note anchored to the current timestamp.
-3. Use the rich text editor to format your notes with bold, italic, lists, and links.
-4. **Images:** You can paste or drag-and-drop images directly into the note editor. TutIn automatically compresses and saves them locally.
-5. Clicking on a note's timestamp will immediately seek the video back to that exact moment.
+2. Click **Add Note** to create a Markdown-supported note anchored to the current timestamp.
+3. **Smart Pauser:** As soon as you start typing, the video will automatically pause. When you finish, a countdown visual will appear before resuming playback!
+4. Use the Markdown editor to format your notes with headers, bold, italic, lists, and links.
+5. **Images & Cropper:** You can paste or drag-and-drop images directly into the note editor. TutIn automatically compresses and saves them locally, and you can edit them instantly using the **Inline Image Cropper**.
+6. Clicking on a note's timestamp will immediately seek the video back to that exact moment.
 
 ---
 
@@ -118,15 +129,20 @@ Click the **Statistics** button in the sidebar to view:
 
 ---
 
-## 🗺️ Visual Roadmap Builder
+## 🗺️ Visual Roadmap & Course Canvas
 
-Design your own curriculum using the interactive roadmap canvas.
+Design your own curriculum using the interactive visual tools.
 
+### Global Roadmap
 1. Navigate to the **Roadmap** page.
 2. Click **Create New Roadmap**.
 3. Click **Add Course** to drop courses onto the infinite canvas.
 4. **Link Courses:** Drag connections from one course node to another to establish prerequisite relationships.
 5. Your roadmaps save automatically and can be exported as JSON files for backup or sharing.
+
+### Course Canvas
+1. Inside any course, navigate to the **Course Canvas** view.
+2. Use this dedicated infinite canvas to visually map out modules, connect concepts, and view your notes in a spatial, node-based layout.
 
 ---
 
