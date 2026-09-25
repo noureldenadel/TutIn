@@ -11,7 +11,7 @@ const router = express.Router()
 // Helper to fetch video + path info
 function getVideoInfo(videoId) {
     const video = getOne(`
-        SELECT v.*, c.folder_path as course_path, m.folder_path as module_path
+        SELECT v.*, c.folder_path as course_path, c.language as course_language, m.folder_path as module_path
         FROM videos v
         JOIN courses c ON v.course_id = c.id
         LEFT JOIN modules m ON v.module_id = m.id
@@ -34,7 +34,7 @@ function getVideoInfo(videoId) {
         }
     }
     
-    return { video, coursePath: video.course_path, relModPath: cleanRelMod, videoPath, videoBaseName }
+    return { video, coursePath: video.course_path, courseLanguage: video.course_language || 'en', relModPath: cleanRelMod, videoPath, videoBaseName }
 }
 
 // GET /api/dub/service/status
@@ -61,10 +61,10 @@ router.post('/service/start', async (req, res) => {
 // POST /api/dub/video/:videoId
 router.post('/video/:videoId', async (req, res) => {
     try {
-        const { targetLanguage, voiceReferencePath, device, preserveBackgroundAudio } = req.body
+        const { targetLanguage, voiceReferencePath, device, preserveBackgroundAudio, sourceLanguage } = req.body
         if (!targetLanguage) return res.status(400).json({ error: 'targetLanguage required' })
         
-        const { video, videoPath, coursePath, relModPath, videoBaseName } = getVideoInfo(req.params.videoId)
+        const { video, videoPath, coursePath, courseLanguage, relModPath, videoBaseName } = getVideoInfo(req.params.videoId)
         
         if (!videoPath || !fs.existsSync(videoPath)) {
             return res.status(400).json({ 
@@ -87,18 +87,15 @@ router.post('/video/:videoId', async (req, res) => {
         if (!chunks || chunks.length === 0) {
             console.log(`[Dub] No '${targetLanguage}' captions found — auto-translating from source first...`)
             
-            // Load source captions (respecting primary_transcript or ai_source or 'source')
+            // Load source captions (respecting explicit sourceLanguage, primary_transcript, ai_source, or 'source')
             const aiSource = subtitleSources.find(s => s.is_ai_source)
-            let actualSourceLang = 'source'
-            if (video.primary_transcript) {
-                const [pLang] = video.primary_transcript.split(':')
-                const isSourcePrim = pLang === 'source' || subtitleSources.some(s => s.lang === pLang && s.is_ai_source)
-                if (isSourcePrim) actualSourceLang = video.primary_transcript
-            } else if (aiSource?.lang) {
-                actualSourceLang = aiSource.lang
-            }
+            let actualSourceLang = sourceLanguage || (video.primary_transcript ? video.primary_transcript : (aiSource?.lang || 'source'))
             
-            const sourceChunks = loadCaptionChunks(video.id, actualSourceLang, subtitleSources, coursePath, relModPath, videoBaseName)
+            let sourceChunks = loadCaptionChunks(video.id, actualSourceLang, subtitleSources, coursePath, relModPath, videoBaseName)
+            if ((!sourceChunks || sourceChunks.length === 0) && actualSourceLang !== 'source') {
+                sourceChunks = loadCaptionChunks(video.id, 'source', subtitleSources, coursePath, relModPath, videoBaseName)
+                if (sourceChunks && sourceChunks.length > 0) actualSourceLang = 'source'
+            }
             
             if (!sourceChunks || sourceChunks.length === 0) {
                 return res.status(400).json({ 
@@ -107,7 +104,8 @@ router.post('/video/:videoId', async (req, res) => {
             }
 
             // Check if source language is the same as target — no translation needed
-            const effectiveSource = (actualSourceLang === 'source' ? (aiSource?.lang || 'en') : actualSourceLang).split(':')[0]
+            const fallbackLang = courseLanguage || 'en'
+            const effectiveSource = (actualSourceLang === 'source' ? (aiSource?.lang || fallbackLang) : actualSourceLang).split(':')[0]
             const normalizedSource = effectiveSource.toLowerCase()
             const normalizedTarget = targetLanguage.toLowerCase()
 
@@ -138,6 +136,13 @@ router.post('/video/:videoId', async (req, res) => {
                     }
                     const filePath = saveCaptionFile(videoMeta, targetLanguage, translated, 'generated')
                     
+                    // If auto-translation generated companion phonetic TTS segments, save them too
+                    if (translated.ttsSegments && translated.ttsSegments.length > 0) {
+                        const { saveTtsCompanionFile } = await import('../utils/courseAssets.js')
+                        saveTtsCompanionFile(videoMeta, targetLanguage, translated.ttsSegments)
+                        console.log(`[Dub] Saved auto-translated companion TTS phonetic text for '${targetLanguage}'.`)
+                    }
+
                     const currentSources = subtitleSources.filter(s => !(s.lang === targetLanguage && s.origin === 'generated'))
                     currentSources.push({ lang: targetLanguage, filePath, origin: 'generated', format: 'vtt' })
                     run(`UPDATE videos SET subtitle_sources = ? WHERE id = ?`, [JSON.stringify(currentSources), video.id])
@@ -170,14 +175,41 @@ router.post('/video/:videoId', async (req, res) => {
             }
         }
 
-        // 4. Stitch cues into full sentences for natural TTS prosody & pacing
-        const stitchedSegments = stitchCuesIntoSentences(chunks).map(s => ({
-            start: s.start,
-            end: s.end,
-            timestamp: [s.start, s.end],
-            text: s.text
-        }))
-        const dubSegments = stitchedSegments.length > 0 ? stitchedSegments : chunks
+        // 4. Check for phonetically-nudged TTS companion segments first
+        let dubSegments = null
+        try {
+            const { loadTtsCompanionSegments } = await import('../utils/courseAssets.js')
+            const courseRecord = getOne('SELECT folder_path FROM courses WHERE id = ?', [video.course_id])
+            const videoMeta = {
+                id: video.id,
+                courseFolder: courseRecord?.folder_path || null,
+                relModulePath: relModPath,
+                videoBaseName
+            }
+            const companionTts = loadTtsCompanionSegments(video.id, targetLanguage, videoMeta)
+            if (companionTts && Array.isArray(companionTts) && companionTts.length > 0) {
+                console.log(`[Dub] Using phonetically-nudged companion TTS text (${companionTts.length} segments) for '${targetLanguage}'.`)
+                dubSegments = companionTts.map(s => ({
+                    start: s.start,
+                    end: s.end,
+                    timestamp: [s.start, s.end],
+                    text: s.text || s.caption
+                }))
+            }
+        } catch (compErr) {
+            console.warn('[Dub] Could not load companion TTS segments:', compErr.message)
+        }
+
+        // If no companion TTS segments exist, stitch standard caption chunks
+        if (!dubSegments || dubSegments.length === 0) {
+            const stitchedSegments = stitchCuesIntoSentences(chunks).map(s => ({
+                start: s.start,
+                end: s.end,
+                timestamp: [s.start, s.end],
+                text: s.text
+            }))
+            dubSegments = stitchedSegments.length > 0 ? stitchedSegments : chunks
+        }
 
         // 4. Submit to python backend
         const jobId = await submitDubJob(
@@ -286,7 +318,7 @@ router.get('/video/:videoId/status', async (req, res) => {
                         console.error('Failed to update video.dubbed_tracks on complete:', e)
                     }
                     
-                    return res.json({ ...job, status: 'done', progress: 100, step: 'Complete', audio_path: finalPath })
+                    return res.json({ ...job, status: 'done', progress: 100, step: 'Complete', audio_path: finalPath, timings: liveStatus.timings })
                 }
                 
                 if (liveStatus.status === 'failed') {
@@ -313,6 +345,41 @@ router.get('/video/:videoId/status', async (req, res) => {
         }
         
         res.json(job)
+    } catch (err) {
+        res.status(500).json({ error: err.message })
+    }
+})
+
+// POST /api/dub/video/:videoId/cancel
+router.post('/video/:videoId/cancel', async (req, res) => {
+    try {
+        const job = getOne(`
+            SELECT * FROM dub_jobs 
+            WHERE video_id = ? AND status IN ('queued', 'running')
+            ORDER BY created_at DESC LIMIT 1
+        `, [req.params.videoId])
+        
+        if (!job) {
+            return res.json({ success: true, message: 'No active job to cancel' })
+        }
+
+        console.log(`[Dub] User requested cancellation of job ${job.id} for video ${req.params.videoId}`)
+        try {
+            await cancelJob(job.id)
+        } catch (backendErr) {
+            console.warn('[Dub] Backend cancel notification warning:', backendErr.message)
+        }
+
+        run(`UPDATE dub_jobs SET status = 'cancelled', step = 'Cancelled by user', error_message = 'Cancelled by user' WHERE id = ?`, [job.id])
+
+        try {
+            const { video } = getVideoInfo(req.params.videoId)
+            const existingTracks = JSON.parse(video.dubbed_tracks || '[]')
+            const updatedTracks = existingTracks.filter(t => t.language !== job.language || t.status === 'ready')
+            run(`UPDATE videos SET dubbed_tracks = ? WHERE id = ?`, [JSON.stringify(updatedTracks), video.id])
+        } catch {}
+
+        res.json({ success: true, status: 'cancelled' })
     } catch (err) {
         res.status(500).json({ error: err.message })
     }

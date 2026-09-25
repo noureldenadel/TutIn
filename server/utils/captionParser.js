@@ -30,6 +30,7 @@ export function detectFormat(filename) {
  * Supports: video.ar.srt | video.Arabic.srt | video - Arabic.srt
  */
 export function extractLangCode(filename, baseName = '') {
+    if (!filename || filename.toLowerCase().includes('.tts.')) return null
     const nameWithoutExt = filename.replace(/\.[a-z0-9]+$/i, '').toLowerCase()
 
     // 1. Try strict matching if the file starts with the video base name

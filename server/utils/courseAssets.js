@@ -139,6 +139,81 @@ export function getSummaryFilePath(courseFolder, relModulePath, videoBaseName) {
     return path.join(dir, `${videoBaseName}.md`)
 }
 
+/**
+ * Full path for an internal TTS companion file (contains phonetically-nudged text).
+ * e.g. /Course/.tutin/captions/Module 1/01 - Intro.ar-eg.tts.json
+ */
+export function getTtsCompanionFilePath(courseFolder, relModulePath, videoBaseName, lang) {
+    const dir = getCaptionsDir(courseFolder, relModulePath)
+    if (!dir) return null
+    const safeLang = (lang && lang !== 'source') ? lang : 'en'
+    return path.join(dir, `${videoBaseName}.${safeLang}.tts.json`)
+}
+
+/**
+ * Save TTS companion segments (phonetically nudged text for speech synthesis).
+ * Writes strictly as an internal artifact: <videoBaseName>.<lang>.tts.json
+ */
+export function saveTtsCompanionFile(videoMeta, lang, ttsSegments) {
+    if (!ttsSegments || !Array.isArray(ttsSegments) || ttsSegments.length === 0) return null
+    const { id, courseFolder, relModulePath = '', videoBaseName } = videoMeta
+
+    if (courseFolder && fs.existsSync(courseFolder)) {
+        const ttsPath = getTtsCompanionFilePath(courseFolder, relModulePath, videoBaseName, lang)
+        if (ttsPath) {
+            try {
+                fs.writeFileSync(ttsPath, JSON.stringify(ttsSegments, null, 2), 'utf8')
+                return ttsPath
+            } catch (err) {
+                console.warn('[CourseAssets] Failed to write TTS companion file in vault:', err.message)
+            }
+        }
+    }
+
+    // Cloud course fallback: save to AppData
+    const appDataDir = path.join(getTranscriptsDir(), 'tts_companion')
+    if (!fs.existsSync(appDataDir)) {
+        try { fs.mkdirSync(appDataDir, { recursive: true }) } catch {}
+    }
+    const cachePath = path.join(appDataDir, `${id}.${lang}.tts.json`)
+    try {
+        fs.writeFileSync(cachePath, JSON.stringify(ttsSegments, null, 2), 'utf8')
+        return cachePath
+    } catch {}
+
+    return null
+}
+
+/**
+ * Load TTS companion segments if available for this video and language.
+ */
+export function loadTtsCompanionSegments(videoId, lang, videoMeta = {}) {
+    const { courseFolder, relModulePath = '', videoBaseName } = videoMeta
+    const isLocalCourse = Boolean(courseFolder && fs.existsSync(courseFolder))
+
+    if (isLocalCourse && videoBaseName) {
+        const ttsPath = getTtsCompanionFilePath(courseFolder, relModulePath, videoBaseName, lang)
+        if (ttsPath && fs.existsSync(ttsPath)) {
+            try {
+                const data = JSON.parse(fs.readFileSync(ttsPath, 'utf8'))
+                if (Array.isArray(data) && data.length > 0) return data
+            } catch {}
+        }
+    }
+
+    // Check AppData fallback
+    const appDataDir = path.join(getTranscriptsDir(), 'tts_companion')
+    const cachePath = path.join(appDataDir, `${videoId}.${lang}.tts.json`)
+    if (fs.existsSync(cachePath)) {
+        try {
+            const data = JSON.parse(fs.readFileSync(cachePath, 'utf8'))
+            if (Array.isArray(data) && data.length > 0) return data
+        } catch {}
+    }
+
+    return null
+}
+
 // ── AppData Cache Helpers (used ONLY for Web / Cloud Stream Courses) ─────────────
 
 export function getTranscriptsDir() {
@@ -369,9 +444,11 @@ export function listCourseLanguages(courseFolder) {
                     if (entry.isDirectory()) {
                         walk(path.join(current, entry.name))
                     } else if (entry.name.endsWith('.vtt')) {
+                        if (entry.name.includes('.tts.')) continue
                         const parts = entry.name.split('.')
                         if (parts.length >= 3) {
-                            langs.add(parts[parts.length - 2])
+                            const l = parts[parts.length - 2]
+                            if (l && l !== 'source') langs.add(l)
                         }
                     }
                 }
@@ -403,6 +480,7 @@ export function listVideoLanguages(videoId, subtitleSources = [], courseFolder =
                 try {
                     const files = fs.readdirSync(modDir)
                     for (const f of files) {
+                        if (f.includes('.tts.')) continue
                         if (f.startsWith(videoBaseName) && f.endsWith('.vtt')) {
                             const parts = f.split('.')
                             if (parts.length >= 3) {
@@ -422,6 +500,7 @@ export function listVideoLanguages(videoId, subtitleSources = [], courseFolder =
         try {
             const files = fs.readdirSync(transcriptsDir)
             for (const f of files) {
+                if (f.includes('.tts.')) continue
                 if (!f.startsWith(videoId)) continue
                 const withoutId = f.slice(videoId.length)
                 const match = withoutId.match(/^\.([a-z]{2,3})\.json$/)

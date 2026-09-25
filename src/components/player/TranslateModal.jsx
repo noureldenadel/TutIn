@@ -3,7 +3,7 @@ import { X, Globe, Loader2, AlertCircle, CheckCircle2, Captions, Sparkles, Refre
 import { useSettings } from '../../contexts/SettingsContext'
 import { SERVER_URL } from '../../utils/api'
 import { SUPPORTED_LANGUAGES, getLanguageInfo, getLanguageLabel } from '../../utils/languages'
-import { transcribeVideoCaptions } from '../../utils/aiSummarization'
+import { transcribeVideoCaptions, cancelActiveTranscription, formatFriendlyDuration } from '../../utils/aiSummarization'
 
 export default function TranslateModal({ isOpen, onClose, video, course, sourceLanguage: propSourceLang, onSuccess, chunkCount = 0 }) {
     const { settings, updateSettings } = useSettings()
@@ -72,8 +72,8 @@ export default function TranslateModal({ isOpen, onClose, video, course, sourceL
                 // Does it have a generated track for targetLang?
                 setHasGeneratedTarget(sources.some(s => s.lang === targetLang && s.origin === 'generated'))
                 
-                // Keep hasSourceCaptions for knowing if we *can* translate
-                setHasSourceCaptions(data.sourceExists || sources.some(s => s.lang === 'source'))
+                // Keep hasSourceCaptions for knowing if we *can* translate (any source or uploaded track available)
+                setHasSourceCaptions(Boolean(data.sourceExists || (data.existingLangs && data.existingLangs.length > 0) || sources.length > 0))
             } else {
                 setHasSourceCaptions(false)
                 setHasGeneratedSource(false)
@@ -207,6 +207,14 @@ export default function TranslateModal({ isOpen, onClose, video, course, sourceL
                                     setProgress(Math.min(currentPct, 98))
                                     setStatusText(data.message)
                                 } else if (data.step === 'done') {
+                                    const totalTranslationSec = (performance.now() - t0) / 1000
+                                    console.group('%c[TutIn AI Translation Performance Debugger]', 'color: #8b5cf6; font-weight: bold; font-size: 13px;')
+                                    console.log(`Video ID: ${video.id} | ${sourceLang.toUpperCase()} -> ${targetLang.toUpperCase()} | Total Duration: ${formatFriendlyDuration(totalTranslationSec)}`)
+                                    console.table([
+                                        { Process: `NLLB-200 Neural Translation (${data.cuesCount || data.count || 'all'} cues)`, Time: formatFriendlyDuration(totalTranslationSec) }
+                                    ])
+                                    console.groupEnd()
+
                                     setProgress(100)
                                     setStatusText(`Subtitles ready in ${targetInfo.nativeName}!`)
                                     setIsDone(true)
@@ -228,8 +236,8 @@ export default function TranslateModal({ isOpen, onClose, video, course, sourceL
             }
         } catch (err) {
             if (err.name === 'AbortError') {
-                setStatusText('Cancelled.')
-                setTimeout(() => onClose(), 800)
+                setStatusText('Cancelled by user.')
+                setError('Process was cancelled.')
             } else {
                 console.error('Caption generation / translation failed:', err)
                 setError(err.message)
@@ -242,8 +250,15 @@ export default function TranslateModal({ isOpen, onClose, video, course, sourceL
     }
 
     function handleCancel() {
-        if (isProcessing && abortControllerRef.current) {
-            abortControllerRef.current.abort()
+        if (isProcessing) {
+            if (abortControllerRef.current) {
+                abortControllerRef.current.abort()
+            }
+            cancelActiveTranscription()
+            setIsProcessing(false)
+            setProgress(0)
+            setStatusText('Process cancelled by user.')
+            setError('Process was cancelled.')
         } else {
             onClose()
         }
@@ -391,13 +406,21 @@ export default function TranslateModal({ isOpen, onClose, video, course, sourceL
 
                 {/* Footer */}
                 <div className="p-4 border-t border-light-border dark:border-dark-border flex justify-end gap-2.5 bg-light-surface dark:bg-black/20">
-                    <button
-                        onClick={handleCancel}
-                        disabled={isDone}
-                        className="px-4 py-2 rounded-lg text-sm font-medium hover:bg-black/5 dark:hover:bg-white/5 transition-colors disabled:opacity-50"
-                    >
-                        {isProcessing ? 'Cancel' : 'Close'}
-                    </button>
+                    {isProcessing ? (
+                        <button
+                            onClick={handleCancel}
+                            className="px-4 py-2 rounded-lg text-sm font-medium bg-red-500/10 text-red-600 dark:text-red-400 hover:bg-red-500/20 border border-red-500/30 transition-colors flex items-center gap-1.5"
+                        >
+                            Cancel Process
+                        </button>
+                    ) : (
+                        <button
+                            onClick={onClose}
+                            className="px-4 py-2 rounded-lg text-sm font-medium hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
+                        >
+                            {isDone ? 'Close' : 'Cancel'}
+                        </button>
+                    )}
                     {!isProcessing && !isDone && (
                         <button
                             onClick={handleStart}

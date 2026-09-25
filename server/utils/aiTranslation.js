@@ -27,8 +27,101 @@ const NLLB_LANG_MAP = {
 }
 
 const DIALECT_PROMPTS = {
-    'ar-eg': 'You are a translator specializing in spoken Egyptian Arabic (العامية المصرية). Translate the following text to natural, conversational Egyptian Arabic dialect — NOT formal Modern Standard Arabic (MSA). Use colloquial vocabulary, contractions, and everyday phrasing that a native Egyptian speaker would use in casual conversation.',
-    'ar-sa': 'You are a translator specializing in spoken Gulf Arabic (اللهجة الخليجية). Translate the following text to natural, conversational Gulf/Saudi Arabic dialect — NOT formal Modern Standard Arabic (MSA). Use colloquial Gulf vocabulary and everyday phrasing that a native Saudi or Gulf speaker would use in casual conversation.'
+    'ar-eg': `You are an expert translator specializing in spoken Egyptian Arabic (العامية المصرية) and text-to-speech phonetic adaptation.
+Translate the input into authentic spoken Egyptian Arabic dialect — NOT formal Modern Standard Arabic (MSA). Use colloquial vocabulary, contractions, and everyday phrasing that a native Egyptian speaker would use in casual conversation.
+
+You MUST output a strict JSON object with EXACTLY two fields:
+{
+  "caption": "Natural, conversational Egyptian Arabic text in standard readable spelling. DO NOT include diacritics/tashkeel. Use standard everyday written spelling (e.g. use 'دلوقتي', 'قلتله', 'كده', 'علشان').",
+  "tts": "Phonetically optimized Egyptian Arabic for speech synthesis pronunciation. Add selective tashkeel (fatḥah, ḍammah, kasrah, shaddah) on ambiguous dialect words, and respell dialectal sounds phonetically where needed (e.g. use glottal hamza 'أ' for colloquial 'ق' in words like 'دِلْوَأْتي', 'أُلتِلُه', and lengthen dialect vowels like 'كِدا', 'عَشَان') so the voice synthesizer speaks authentic street Egyptian without Classical Arabic stiffness."
+}
+
+Do NOT wrap in markdown code blocks. Output ONLY the raw JSON object.`,
+
+    'ar-sa': `You are an expert translator specializing in spoken Gulf/Saudi Arabic (اللهجة الخليجية) and text-to-speech phonetic adaptation.
+Translate the input into natural, conversational Gulf/Saudi Arabic dialect — NOT formal Modern Standard Arabic (MSA). Use colloquial Gulf vocabulary and everyday phrasing that a native Saudi or Gulf speaker would use in casual conversation.
+
+You MUST output a strict JSON object with EXACTLY two fields:
+{
+  "caption": "Natural, conversational Gulf Arabic text in standard readable spelling. DO NOT include diacritics/tashkeel. Use standard everyday written spelling (e.g. use 'الحين', 'قلت له', 'شلونك', 'عشان').",
+  "tts": "Phonetically optimized Gulf Arabic for speech synthesis pronunciation. Add selective tashkeel (fatḥah, ḍammah, kasrah, shaddah) on ambiguous dialect words and phonetically nudged vowels so the voice synthesizer speaks authentic Gulf dialect without Classical Arabic stiffness."
+}
+
+Do NOT wrap in markdown code blocks. Output ONLY the raw JSON object.`
+}
+
+export const EGYPTIAN_PHONETIC_GLOSSARY = [
+    { pattern: /(?<=^|[^\p{L}\p{N}_])دلوقتي(?=[^\p{L}\p{N}_]|$)/gu, replace: 'دِلْوَأْتي' },
+    { pattern: /(?<=^|[^\p{L}\p{N}_])قلتله(?=[^\p{L}\p{N}_]|$)/gu, replace: 'أُلتِلُه' },
+    { pattern: /(?<=^|[^\p{L}\p{N}_])قلتلها(?=[^\p{L}\p{N}_]|$)/gu, replace: 'أُلتِلْهَا' },
+    { pattern: /(?<=^|[^\p{L}\p{N}_])قلتلك(?=[^\p{L}\p{N}_]|$)/gu, replace: 'أُلتِلَك' },
+    { pattern: /(?<=^|[^\p{L}\p{N}_])قلتلهم(?=[^\p{L}\p{N}_]|$)/gu, replace: 'أُلتِلْهُم' },
+    { pattern: /(?<=^|[^\p{L}\p{N}_])قلت(?=[^\p{L}\p{N}_]|$)/gu, replace: 'أُلت' },
+    { pattern: /(?<=^|[^\p{L}\p{N}_])قوي(?=[^\p{L}\p{N}_]|$)/gu, replace: 'أَوِي' },
+    { pattern: /(?<=^|[^\p{L}\p{N}_])يبقى(?=[^\p{L}\p{N}_]|$)/gu, replace: 'يِبْأَى' },
+    { pattern: /(?<=^|[^\p{L}\p{N}_])بقى(?=[^\p{L}\p{N}_]|$)/gu, replace: 'بَقَى' },
+    { pattern: /(?<=^|[^\p{L}\p{N}_])قريب(?=[^\p{L}\p{N}_]|$)/gu, replace: 'أُرَيِّب' },
+    { pattern: /(?<=^|[^\p{L}\p{N}_])طريق(?=[^\p{L}\p{N}_]|$)/gu, replace: 'طَرِيء' },
+    { pattern: /(?<=^|[^\p{L}\p{N}_])فوق(?=[^\p{L}\p{N}_]|$)/gu, replace: 'فُوء' },
+    { pattern: /(?<=^|[^\p{L}\p{N}_])قبل(?=[^\p{L}\p{N}_]|$)/gu, replace: 'أَبْل' },
+    { pattern: /(?<=^|[^\p{L}\p{N}_])قدام(?=[^\p{L}\p{N}_]|$)/gu, replace: 'أُدَّام' },
+    { pattern: /(?<=^|[^\p{L}\p{N}_])قدر(?=[^\p{L}\p{N}_]|$)/gu, replace: 'أِدِر' },
+    { pattern: /(?<=^|[^\p{L}\p{N}_])وقعت(?=[^\p{L}\p{N}_]|$)/gu, replace: 'وِئْعِت' },
+    { pattern: /(?<=^|[^\p{L}\p{N}_])وقع(?=[^\p{L}\p{N}_]|$)/gu, replace: 'وِئِع' },
+    { pattern: /(?<=^|[^\p{L}\p{N}_])قفل(?=[^\p{L}\p{N}_]|$)/gu, replace: 'أَفَل' },
+    { pattern: /(?<=^|[^\p{L}\p{N}_])قاعد(?=[^\p{L}\p{N}_]|$)/gu, replace: 'أَاعِد' },
+    { pattern: /(?<=^|[^\p{L}\p{N}_])علشان(?=[^\p{L}\p{N}_]|$)/gu, replace: 'عَشَان' },
+    { pattern: /(?<=^|[^\p{L}\p{N}_])عشان(?=[^\p{L}\p{N}_]|$)/gu, replace: 'عَشَان' },
+    { pattern: /(?<=^|[^\p{L}\p{N}_])كده(?=[^\p{L}\p{N}_]|$)/gu, replace: 'كِدا' },
+    { pattern: /(?<=^|[^\p{L}\p{N}_])إيه(?=[^\p{L}\p{N}_]|$)/gu, replace: 'إِيه' },
+    { pattern: /(?<=^|[^\p{L}\p{N}_])إزاي(?=[^\p{L}\p{N}_]|$)/gu, replace: 'إِزَّاي' },
+    { pattern: /(?<=^|[^\p{L}\p{N}_])فين(?=[^\p{L}\p{N}_]|$)/gu, replace: 'فِين' },
+    { pattern: /(?<=^|[^\p{L}\p{N}_])ليه(?=[^\p{L}\p{N}_]|$)/gu, replace: 'لِيه' },
+    { pattern: /(?<=^|[^\p{L}\p{N}_])مين(?=[^\p{L}\p{N}_]|$)/gu, replace: 'مِين' },
+    { pattern: /(?<=^|[^\p{L}\p{N}_])دي(?=[^\p{L}\p{N}_]|$)/gu, replace: 'دِي' },
+    { pattern: /(?<=^|[^\p{L}\p{N}_])ده(?=[^\p{L}\p{N}_]|$)/gu, replace: 'دَه' },
+    { pattern: /(?<=^|[^\p{L}\p{N}_])دول(?=[^\p{L}\p{N}_]|$)/gu, replace: 'دُول' },
+    { pattern: /(?<=^|[^\p{L}\p{N}_])مش(?=[^\p{L}\p{N}_]|$)/gu, replace: 'مِش' },
+    { pattern: /(?<=^|[^\p{L}\p{N}_])برضه(?=[^\p{L}\p{N}_]|$)/gu, replace: 'بَرضُه' },
+    { pattern: /(?<=^|[^\p{L}\p{N}_])برضو(?=[^\p{L}\p{N}_]|$)/gu, replace: 'بَرضُه' },
+    { pattern: /(?<=^|[^\p{L}\p{N}_])كمان(?=[^\p{L}\p{N}_]|$)/gu, replace: 'كَمَان' },
+    { pattern: /(?<=^|[^\p{L}\p{N}_])شوية(?=[^\p{L}\p{N}_]|$)/gu, replace: 'شُوَيَّة' },
+    { pattern: /(?<=^|[^\p{L}\p{N}_])كتير(?=[^\p{L}\p{N}_]|$)/gu, replace: 'كِتِير' },
+    { pattern: /(?<=^|[^\p{L}\p{N}_])خالص(?=[^\p{L}\p{N}_]|$)/gu, replace: 'خَالِص' },
+    { pattern: /(?<=^|[^\p{L}\p{N}_])يعني(?=[^\p{L}\p{N}_]|$)/gu, replace: 'يَعْنِي' }
+]
+
+export const GULF_PHONETIC_GLOSSARY = [
+    { pattern: /(?<=^|[^\p{L}\p{N}_])الحين(?=[^\p{L}\p{N}_]|$)/gu, replace: 'إِلْحِين' },
+    { pattern: /(?<=^|[^\p{L}\p{N}_])علشان(?=[^\p{L}\p{N}_]|$)/gu, replace: 'عَشَان' },
+    { pattern: /(?<=^|[^\p{L}\p{N}_])عشان(?=[^\p{L}\p{N}_]|$)/gu, replace: 'عَشَان' },
+    { pattern: /(?<=^|[^\p{L}\p{N}_])شلونك(?=[^\p{L}\p{N}_]|$)/gu, replace: 'شْلُونِك' },
+    { pattern: /(?<=^|[^\p{L}\p{N}_])شنو(?=[^\p{L}\p{N}_]|$)/gu, replace: 'شِنُو' },
+    { pattern: /(?<=^|[^\p{L}\p{N}_])ايش(?=[^\p{L}\p{N}_]|$)/gu, replace: 'إِيش' },
+    { pattern: /(?<=^|[^\p{L}\p{N}_])إيش(?=[^\p{L}\p{N}_]|$)/gu, replace: 'إِيش' },
+    { pattern: /(?<=^|[^\p{L}\p{N}_])كذا(?=[^\p{L}\p{N}_]|$)/gu, replace: 'كِذَا' },
+    { pattern: /(?<=^|[^\p{L}\p{N}_])وايد(?=[^\p{L}\p{N}_]|$)/gu, replace: 'وَايِد' },
+    { pattern: /(?<=^|[^\p{L}\p{N}_])زين(?=[^\p{L}\p{N}_]|$)/gu, replace: 'زِين' },
+    { pattern: /(?<=^|[^\p{L}\p{N}_])بعدين(?=[^\p{L}\p{N}_]|$)/gu, replace: 'بَعْدِين' },
+    { pattern: /(?<=^|[^\p{L}\p{N}_])تبي(?=[^\p{L}\p{N}_]|$)/gu, replace: 'تَبِي' },
+    { pattern: /(?<=^|[^\p{L}\p{N}_])ابي(?=[^\p{L}\p{N}_]|$)/gu, replace: 'أَبِي' },
+    { pattern: /(?<=^|[^\p{L}\p{N}_])أبي(?=[^\p{L}\p{N}_]|$)/gu, replace: 'أَبِي' },
+    { pattern: /(?<=^|[^\p{L}\p{N}_])يبي(?=[^\p{L}\p{N}_]|$)/gu, replace: 'يَبِي' }
+]
+
+export function applyDialectPhoneticNudges(text, dialect) {
+    if (!text || typeof text !== 'string') return text || ''
+    let nudged = text
+    if (dialect === 'ar-eg') {
+        for (const item of EGYPTIAN_PHONETIC_GLOSSARY) {
+            nudged = nudged.replace(item.pattern, item.replace)
+        }
+    } else if (dialect === 'ar-sa') {
+        for (const item of GULF_PHONETIC_GLOSSARY) {
+            nudged = nudged.replace(item.pattern, item.replace)
+        }
+    }
+    return nudged
 }
 
 function getOpenRouterKey() {
@@ -53,10 +146,11 @@ async function translateOneWithOpenRouter(text, dialect, apiKey) {
             model: 'openai/gpt-4o-mini',
             messages: [
                 { role: 'system', content: DIALECT_PROMPTS[dialect] },
-                { role: 'user', content: `Translate ONLY the following text. Output ONLY the translated text with no explanation or extra text:\n\n${text}` }
+                { role: 'user', content: `Translate the following text into the requested dual JSON format:\n\n${text}` }
             ],
-            temperature: 0.3,
-            max_tokens: 512
+            temperature: 0.25,
+            response_format: { type: 'json_object' },
+            max_tokens: 650
         })
     })
     if (!response.ok) {
@@ -64,7 +158,50 @@ async function translateOneWithOpenRouter(text, dialect, apiKey) {
         throw new Error(`OpenRouter API error ${response.status}: ${err}`)
     }
     const data = await response.json()
-    return data.choices?.[0]?.message?.content?.trim() || text
+    const content = data.choices?.[0]?.message?.content?.trim() || ''
+
+    // Parse JSON dual output
+    try {
+        const parsed = JSON.parse(content)
+        if (parsed.caption && parsed.tts) {
+            return {
+                caption: String(parsed.caption).trim(),
+                tts: String(parsed.tts).trim()
+            }
+        }
+        if (parsed.caption) {
+            const cap = String(parsed.caption).trim()
+            const tts = parsed.tts ? String(parsed.tts).trim() : applyDialectPhoneticNudges(cap, dialect)
+            return {
+                caption: cap,
+                tts: tts || cap
+            }
+        }
+    } catch {
+        // Fallback: search for json object in case of markdown wrapping
+        const match = content.match(/\{[\s\S]*\}/)
+        if (match) {
+            try {
+                const parsed = JSON.parse(match[0])
+                if (parsed.caption) {
+                    const cap = String(parsed.caption).trim()
+                    const tts = parsed.tts ? String(parsed.tts).trim() : applyDialectPhoneticNudges(cap, dialect)
+                    return {
+                        caption: cap,
+                        tts: tts || cap
+                    }
+                }
+            } catch {}
+        }
+    }
+
+    // Fallback if plain text returned: strip diacritics for caption, apply dialect nudges for tts
+    const cleanCaption = content.replace(/[\u0617-\u061A\u064B-\u0652]/g, '').trim()
+    const ttsText = applyDialectPhoneticNudges(content || text, dialect)
+    return {
+        caption: cleanCaption || text,
+        tts: ttsText || text
+    }
 }
 
 /**
@@ -178,7 +315,12 @@ export function sliceTranslatedSentenceToCues(translatedText, originalCues) {
         } else {
             const cueWeight = Math.max(1, (cue.text || '').length)
             const targetWordCount = Math.max(1, Math.round((cueWeight / totalWeight) * words.length))
-            const sliceEnd = Math.min(words.length - (originalCues.length - 1 - i), wordCursor + targetWordCount)
+            let sliceEnd = wordCursor + targetWordCount
+            const remainingCues = originalCues.length - 1 - i
+            if (words.length - sliceEnd < remainingCues && words.length >= originalCues.length) {
+                sliceEnd = words.length - remainingCues
+            }
+            sliceEnd = Math.max(wordCursor, Math.min(words.length, sliceEnd))
             const cueWords = words.slice(wordCursor, sliceEnd).join(' ')
             wordCursor = sliceEnd
             result.push({
@@ -200,27 +342,40 @@ async function translateChunksOpenRouter(chunks, targetLanguage, onProgress, req
     const dialectLabel = targetLanguage === 'ar-eg' ? 'Egyptian Arabic' : 'Gulf Arabic'
     const stitchedSentences = stitchCuesIntoSentences(chunks)
     const total = stitchedSentences.length
-    const translatedSentences = []
+    const captionSentences = []
+    const ttsSentences = []
     const startTime = Date.now()
 
-    console.log(`[OpenRouter] Translating ${total} stitched sentences (${chunks.length} cues) to ${dialectLabel} via GPT-4o-mini`)
+    console.log(`[OpenRouter] Translating ${total} stitched sentences (${chunks.length} cues) to ${dialectLabel} via GPT-4o-mini (Dual-Transcript)`)
     onProgress?.({ step: 'loading', message: `Connecting to OpenRouter for ${dialectLabel}...`, percent: 0 })
 
     for (let i = 0; i < total; i++) {
         if (req?.socket?.destroyed) throw new Error('Translation cancelled by client')
         onProgress?.({ step: 'translating', message: `Translating sentence ${i + 1} of ${total} (${dialectLabel})...`, batch: i + 1, of: total, percent: Math.round((i / total) * 100) })
-        const translated = await translateOneWithOpenRouter(stitchedSentences[i].text, targetLanguage, apiKey)
-        translatedSentences.push(translated)
+        const pair = await translateOneWithOpenRouter(stitchedSentences[i].text, targetLanguage, apiKey)
+        captionSentences.push(pair.caption)
+        ttsSentences.push(pair.tts)
     }
 
-    // Re-slice sentences back into original cue windows
+    // Re-slice caption sentences back into original cue windows for player subtitles
     const translatedChunks = []
     for (let i = 0; i < total; i++) {
-        const sliced = sliceTranslatedSentenceToCues(translatedSentences[i], stitchedSentences[i].cues)
+        const sliced = sliceTranslatedSentenceToCues(captionSentences[i], stitchedSentences[i].cues)
         translatedChunks.push(...sliced)
     }
 
-    console.log(`[OpenRouter] ${dialectLabel} translation done in ${((Date.now() - startTime) / 1000).toFixed(2)}s`)
+    // Attach companion phonetic TTS segments (sentence-level timing + phonetically nudged text)
+    const ttsSegments = stitchedSentences.map((s, idx) => ({
+        start: s.start,
+        end: s.end,
+        timestamp: [s.start, s.end],
+        caption: captionSentences[idx],
+        text: ttsSentences[idx]
+    }))
+
+    translatedChunks.ttsSegments = ttsSegments
+
+    console.log(`[OpenRouter] ${dialectLabel} dual translation done in ${((Date.now() - startTime) / 1000).toFixed(2)}s`)
     onProgress?.({ step: 'done', message: 'Translation complete!', percent: 100, lang: targetLanguage, chunkCount: translatedChunks.length })
     return translatedChunks
 }
@@ -279,6 +434,15 @@ async function translateChunksNLLB(chunks, targetLanguage, onProgress, req, sour
         translatedChunks.push(...sliced)
     }
 
+    // Standard language ttsSegments
+    translatedChunks.ttsSegments = stitchedSentences.map((s, idx) => ({
+        start: s.start,
+        end: s.end,
+        timestamp: [s.start, s.end],
+        caption: translatedSentences[idx],
+        text: translatedSentences[idx]
+    }))
+
     console.log(`[NLLB-200] Done in ${((Date.now() - startTime) / 1000).toFixed(2)}s: ${translatedChunks.length} chunks`)
     onProgress?.({ step: 'done', message: 'Translation complete!', batch: totalBatches, of: totalBatches, percent: 100, lang: targetLanguage, chunkCount: translatedChunks.length })
     return translatedChunks
@@ -286,7 +450,21 @@ async function translateChunksNLLB(chunks, targetLanguage, onProgress, req, sour
 
 export async function translateChunks(chunks, targetLanguage, apiKey, modelParams, onProgress, req, sourceLanguage = 'en') {
     if (targetLanguage === 'ar-eg' || targetLanguage === 'ar-sa') {
-        return translateChunksOpenRouter(chunks, targetLanguage, onProgress, req)
+        if (hasOpenRouterKey()) {
+            return translateChunksOpenRouter(chunks, targetLanguage, onProgress, req)
+        }
+        // Offline / No-API-Key Fallback: Use local NLLB-200 for Arabic ('ar') and apply dialect phonetic nudging
+        const dialectLabel = targetLanguage === 'ar-eg' ? 'Egyptian Arabic' : 'Gulf Arabic'
+        console.warn(`[aiTranslation] OpenRouter API key not configured for ${dialectLabel}. Translating via local NLLB-200 with dialect phonetic nudging.`)
+        onProgress?.({ step: 'loading', message: `OpenRouter key not found. Using offline NLLB-200 with ${dialectLabel} phonetic nudging...`, percent: 0 })
+        const translated = await translateChunksNLLB(chunks, 'ar', onProgress, req, sourceLanguage)
+        // Transform the ttsSegments text with dialect phonetic nudges while preserving clean caption
+        if (translated.ttsSegments && Array.isArray(translated.ttsSegments)) {
+            for (const seg of translated.ttsSegments) {
+                seg.text = applyDialectPhoneticNudges(seg.text, targetLanguage)
+            }
+        }
+        return translated
     }
     return translateChunksNLLB(chunks, targetLanguage, onProgress, req, sourceLanguage)
 }

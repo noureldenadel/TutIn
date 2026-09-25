@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from 'react'
 import { X, Headphones, Loader2, AlertCircle, CheckCircle2, Play, Globe, Sparkles, Volume2 } from 'lucide-react'
 import { useSettings } from '../../contexts/SettingsContext'
 import { SERVER_URL } from '../../utils/api'
-import { processVideoForSummary, isAIAvailable } from '../../utils/aiSummarization'
+import { transcribeVideoCaptions, isAIAvailable, formatFriendlyDuration } from '../../utils/aiSummarization'
 import { verifyPermission } from '../../utils/fileSystem'
 import { SUPPORTED_LANGUAGES, getLanguageInfo } from '../../utils/languages'
 
@@ -155,26 +155,12 @@ export default function DubModal({ isOpen, onClose, video, course, sourceLanguag
         if (!hasSource) {
             setStatus({ step: `Transcribing audio with Whisper (${sourceInfo.nativeName})...`, progress: 10 })
 
-            // Get file source
-            let fileSource = video?.fileHandle || (video?.filePath ? `${SERVER_URL}/video/${encodeURIComponent(video.filePath)}` : null)
-            if (!fileSource) {
-                throw new Error('Video source file not accessible for transcription')
-            }
-            if (fileSource.getFile) {
-                const hasPerm = await verifyPermission(fileSource)
-                if (!hasPerm) throw new Error('File access was denied')
-            }
-
-            // Run transcription with explicit course source language
-            await processVideoForSummary(
-                video.id,
-                fileSource,
+            await transcribeVideoCaptions(
+                video,
                 (p) => {
                     const pct = Math.round(10 + (p.progress || 0) * 30)
                     setStatus({ step: `Transcribing audio: ${p.message || ''}`, progress: pct })
                 },
-                settings.openRouterApiKey,
-                settings.openRouterModel,
                 settings.aiDevice,
                 sourceLang
             )
@@ -259,6 +245,7 @@ export default function DubModal({ isOpen, onClose, video, course, sourceLanguag
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ 
                     targetLanguage: targetLang,
+                    sourceLanguage: sourceLang,
                     preserveBackgroundAudio: Boolean(preserveBackgroundAudio)
                 })
             })
@@ -290,6 +277,21 @@ export default function DubModal({ isOpen, onClose, video, course, sourceLanguag
                         setIsDone(true)
                         setDubbedLangs(prev => Array.from(new Set([...prev, targetLang])))
 
+                        if (data.timings) {
+                            console.group('%c[TutIn AI Dubbing Performance Debugger]', 'color: #3b82f6; font-weight: bold; font-size: 13px;')
+                            console.log(`Video ID: ${video.id} | Target Lang: ${targetLang} | Total Pipeline: ${formatFriendlyDuration(data.timings.total_seconds)}`)
+                            console.table([
+                                { Process: 'Demucs Vocal Separation', Time: formatFriendlyDuration(data.timings.demucs_separation_seconds) },
+                                { Process: 'XTTS Model Load / Warmup', Time: formatFriendlyDuration(data.timings.model_load_seconds) },
+                                { Process: 'Voice Reference Extraction', Time: formatFriendlyDuration(data.timings.voice_reference_seconds) },
+                                { Process: `Neural Speech Synthesis (${data.timings.segments_synthesized} cues)`, Time: formatFriendlyDuration(data.timings.tts_synthesis_seconds) },
+                                { Process: 'Normalization & Audio Mixdown', Time: formatFriendlyDuration(data.timings.mix_export_seconds) },
+                                { Process: 'Total End-to-End Pipeline', Time: formatFriendlyDuration(data.timings.total_seconds) }
+                            ])
+                            console.log(`Average Latency per Segment: ${data.timings.avg_ms_per_segment}ms`)
+                            console.groupEnd()
+                        }
+
                         window.dispatchEvent(new CustomEvent('tutin:dub-updated', {
                             detail: { videoId: video.id, lang: targetLang }
                         }))
@@ -313,6 +315,26 @@ export default function DubModal({ isOpen, onClose, video, course, sourceLanguag
             setError(err.message)
             setIsDubbing(false)
         }
+    }
+
+    async function handleCancelDub() {
+        if (pollRef.current) clearInterval(pollRef.current)
+        if (activeAbortController.current) {
+            activeAbortController.current.abort()
+            activeAbortController.current = null
+        }
+        
+        setIsDubbing(false)
+        setStatus(null)
+        
+        try {
+            await fetch(`${SERVER_URL}/api/dub/video/${video.id}/cancel`, { method: 'POST' })
+            console.log('[Dub] Cancellation request sent to server.')
+        } catch (e) {
+            console.warn('[Dub] Cancel request error:', e)
+        }
+        
+        setError('Dubbing process was cancelled by user.')
     }
 
     async function ensureServiceIsRunning() {
@@ -584,13 +606,21 @@ export default function DubModal({ isOpen, onClose, video, course, sourceLanguag
 
                 {/* Footer */}
                 <div className="p-4 border-t border-light-border dark:border-dark-border flex justify-end gap-3 bg-light-surface dark:bg-black/20">
-                    <button
-                        onClick={onClose}
-                        disabled={isDubbing && !isDone && !error}
-                        className="px-4 py-2 rounded-lg text-sm font-medium hover:bg-black/5 dark:hover:bg-white/5 transition-colors disabled:opacity-50"
-                    >
-                        {isDubbing && !isDone ? 'Close' : 'Cancel'}
-                    </button>
+                    {isDubbing && !isDone && !error ? (
+                        <button
+                            onClick={handleCancelDub}
+                            className="px-4 py-2 rounded-lg text-sm font-medium bg-red-500/10 text-red-600 dark:text-red-400 hover:bg-red-500/20 border border-red-500/30 transition-colors flex items-center gap-1.5"
+                        >
+                            Cancel Dubbing
+                        </button>
+                    ) : (
+                        <button
+                            onClick={onClose}
+                            className="px-4 py-2 rounded-lg text-sm font-medium hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
+                        >
+                            {isDone ? 'Close' : 'Cancel'}
+                        </button>
+                    )}
                     {!isDubbing && !isDone && (
                         <button
                             onClick={handleStartDub}

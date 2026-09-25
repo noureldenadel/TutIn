@@ -1,6 +1,6 @@
 # TutIn - AI-Powered Course Learning Platform
 
-[![Version](https://img.shields.io/badge/version-5.0.0-blue.svg)](https://github.com/noureldenadel/TutIn/releases)
+[![Version](https://img.shields.io/badge/version-5.1.0-blue.svg)](https://github.com/noureldenadel/TutIn/releases)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
 > Your offline-first, AI-enhanced management system for local video courses and YouTube playlists.

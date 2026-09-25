@@ -4,7 +4,7 @@ import path from 'path'
 import multer from 'multer'
 import { getOne, run, getAll, getDataDir } from '../database.js'
 import { parseSubtitleFile, chunksToSRT, chunksToVTT, extractLangCode, detectFormat } from '../utils/captionParser.js'
-import { saveCaptionFile, loadCaptionChunks, listVideoLanguages } from '../utils/courseAssets.js'
+import { saveCaptionFile, loadCaptionChunks, listVideoLanguages, getTtsCompanionFilePath } from '../utils/courseAssets.js'
 import { translateChunks } from '../utils/aiTranslation.js'
 import { needsPunctuationRestoration, restorePunctuation } from '../utils/punctuationService.js'
 
@@ -268,6 +268,7 @@ router.get('/:videoId/languages', (req, res) => {
                 try {
                     const files = fs.readdirSync(captionsDir)
                     for (const f of files) {
+                        if (f.includes('.tts.')) continue
                         if (f.startsWith(videoMeta.videoBaseName) && f.endsWith('.vtt')) {
                             const fullPath = path.join(captionsDir, f)
                             if (!sources.some(s => s.filePath === fullPath)) {
@@ -363,11 +364,8 @@ router.post('/:videoId/translate', async (req, res) => {
 
         const videoMeta = getVideoMeta(req.params.videoId)
         
-        let actualSourceLang = 'source'
         const aiSource = videoMeta.subtitleSources?.find(s => s.is_ai_source)
-        if (aiSource && aiSource.lang) {
-            actualSourceLang = aiSource.lang
-        }
+        let actualSourceLang = req.body.sourceLanguage || (aiSource?.lang || 'source')
 
         // Decouple spoken audio from transcript text:
         // Priority: AI Source lang -> req.body.sourceLanguage -> courseLanguage -> 'en'
@@ -385,6 +383,19 @@ router.post('/:videoId/translate', async (req, res) => {
             videoMeta.relModulePath,
             videoMeta.videoBaseName
         )
+
+        // If requested actualSourceLang had no chunks, fall back to 'source'
+        if (sourceChunks.length === 0 && actualSourceLang !== 'source') {
+            sourceChunks = loadCaptionChunks(
+                req.params.videoId,
+                'source',
+                videoMeta.subtitleSources,
+                videoMeta.courseFolder,
+                videoMeta.relModulePath,
+                videoMeta.videoBaseName
+            )
+            if (sourceChunks.length > 0) actualSourceLang = 'source'
+        }
 
         if (sourceChunks.length === 0) {
         // custom_metadata fallback removed
@@ -418,6 +429,13 @@ router.post('/:videoId/translate', async (req, res) => {
 
         // Save translation with origin 'generated' (e.g. 01 - Intro-generated.es.vtt)
         const filePath = saveCaptionFile(videoMeta, targetLanguage, translatedChunks, 'generated')
+
+        // If translation generated companion phonetic TTS segments, save them to the internal companion file
+        if (translatedChunks.ttsSegments && translatedChunks.ttsSegments.length > 0) {
+            const { saveTtsCompanionFile } = await import('../utils/courseAssets.js')
+            saveTtsCompanionFile(videoMeta, targetLanguage, translatedChunks.ttsSegments)
+            console.log(`[Translate] Saved companion TTS phonetic text (${translatedChunks.ttsSegments.length} segments) for '${targetLanguage}'.`)
+        }
 
         const currentSources = videoMeta.subtitleSources.filter(s => !(s.lang === targetLanguage && s.origin === 'generated'))
         currentSources.push({
@@ -630,6 +648,16 @@ router.delete('/:videoId', (req, res) => {
                 : `${req.params.videoId}.${lang}.json`
             const cachePath = path.join(getDataDir(), 'transcripts', cacheFile)
             if (fs.existsSync(cachePath)) fs.unlinkSync(cachePath)
+        } catch { /* non-fatal */ }
+
+        // Also delete companion TTS phonetic file if it exists
+        try {
+            if (videoMeta.courseFolder && videoMeta.videoBaseName) {
+                const ttsVaultPath = getTtsCompanionFilePath(videoMeta.courseFolder, videoMeta.relModulePath, videoMeta.videoBaseName, lang)
+                if (ttsVaultPath && fs.existsSync(ttsVaultPath)) fs.unlinkSync(ttsVaultPath)
+            }
+            const appDataTts = path.join(getDataDir(), 'transcripts', 'tts_companion', `${req.params.videoId}.${lang}.tts.json`)
+            if (fs.existsSync(appDataTts)) fs.unlinkSync(appDataTts)
         } catch { /* non-fatal */ }
         
         videoMeta.subtitleSources.splice(sourceIndex, 1)

@@ -94,6 +94,7 @@ TutIn can automatically dub videos into 16+ languages, cloning the original spea
 
 **Advanced Audio Processing**:
 - **Natural Sentence Prosody:** The engine stitches fragmented subtitle cues into complete grammatical sentences before translation and speech synthesis, ensuring fluent cadence, proper breathing, and natural vocal intonation.
+- **Dual-Transcript Output (Phonetic Voice vs. Clean Subtitles):** For dialectal translation (e.g. Egyptian `ar-eg` and Gulf `ar-sa`), TutIn generates two specialized text streams: on-screen subtitles remain clean, readable, and free of clutter, while the voice synthesis engine is fed phonetically-nudged text (with selective tashkeel and colloquial glottal/vowel hints) for authentic dialect pronunciation.
 - **Intelligent Time-Fitting & Rubber Band:** Speech duration is fitted using a 4-tier engine: inter-cue silence gap absorption (zero-stretch first), native XTTS speed pre-biasing ($0.88\times$ to $1.25\times$), internal pause trimming, and FFmpeg `rubberband` filtering for crisp, artifact-free speech.
 - **Background Audio Preservation (Demucs AI):** Check the **"Preserve Background Music & Effects"** toggle to isolate original background music and SFX with Demucs. The pipeline ducks background music by ~16 dB under speech using sidechain compression and adds a subtle continuous room-tone ambience bed.
 - **Overlap Prevention & Fading:** Segments automatically avoid collisions on the timeline, with a 20ms fade-in/fade-out eliminating harsh clicks between sentences.

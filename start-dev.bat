@@ -3,7 +3,7 @@ setlocal
 title TutIn Launcher
 
 echo ===================================================
-echo             Starting TutIn v5
+echo             Starting TutIn v5.1
 echo ===================================================
 echo.
 

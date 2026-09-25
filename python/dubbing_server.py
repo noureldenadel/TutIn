@@ -610,6 +610,22 @@ def mix_dub_with_background(dialogue_wav: str, background_wav: str, output_path:
     print(f"[XTTS Dubbing] Mixed ducked background audio -> {output_path}")
 
 
+def sanitize_dub_text(text: str) -> str:
+    if not text:
+        return ""
+    import re
+    # Strip HTML tags
+    t = re.sub(r'<[^>]+>', '', text)
+    # Strip music notes and special audio symbols
+    t = re.sub(r'[♪♫#]+', '', t)
+    # Strip bracketed sound descriptors like [Music], [Applause], (Laughter), [Silence]
+    t = re.sub(r'\[[^\]]*\]', '', t)
+    t = re.sub(r'\([^)]*\)', '', t)
+    # Collapse multiple whitespaces
+    t = re.sub(r'\s+', ' ', t).strip()
+    return t
+
+
 def process_dubbing_job(job_id: str, req: DubRequest):
     global JOBS
     
@@ -636,31 +652,45 @@ def process_dubbing_job(job_id: str, req: DubRequest):
         explicit_voice_ref = req.resolved_voice_ref()
         device_pref = req.device or DEVICE_PREFERENCE
 
+        t_job_start = __import__('time').time()
+        demucs_sec = 0.0
+        model_sec = 0.0
+        voice_ref_sec = 0.0
+        tts_sec = 0.0
+        mix_sec = 0.0
+        total_seg_synthesized = 0
+
         # 1. Demucs Stem Separation (if opt-in requested)
         if preserve_bg:
             if not video_path or not os.path.exists(video_path):
                 raise Exception(f"Video file not found at path: {video_path}")
             job["step"] = "Preserving background audio: Running Demucs separation..."
             job["progress"] = 6
+            t_demucs_start = __import__('time').time()
             orig_audio_path = extract_full_audio(video_path, temp_dir)
             vocals_stem_path, no_vocals_stem_path = separate_stems_demucs(orig_audio_path, temp_dir, device_pref)
+            demucs_sec = __import__('time').time() - t_demucs_start
             if not explicit_voice_ref and os.path.exists(vocals_stem_path):
                 explicit_voice_ref = vocals_stem_path
 
         # 2. Load XTTS Model
         job["step"] = "Loading XTTS v2 model..."
         job["progress"] = 12 if preserve_bg else 5
+        t_model_start = __import__('time').time()
         load_model(device_pref)
+        model_sec = __import__('time').time() - t_model_start
 
         # 3. Extract Reference Audio
         job["step"] = "Extracting reference speaker voice..."
         job["progress"] = 18 if preserve_bg else 10
+        t_ref_start = __import__('time').time()
         ref_voice_path = extract_reference_audio(
             video_path=video_path,
             temp_dir=temp_dir,
             explicit_ref_path=explicit_voice_ref,
             segments=segments
         )
+        voice_ref_sec = __import__('time').time() - t_ref_start
 
         # 4. Process Segments with Intelligent Time-Fitting
         target_lang = map_xtts_lang(req.resolved_target_lang())
@@ -696,7 +726,7 @@ def process_dubbing_job(job_id: str, req: DubRequest):
                 target_window_sec = nominal_window + 0.60
 
             start_ms = int(start_sec * 1000)
-            text = seg.text.strip()
+            text = sanitize_dub_text(seg.text)
             
             job["step"] = f"Synthesizing segment {i+1} of {total_segments}..."
             job["progress"] = base_progress + int((i / total_segments) * available_progress)
@@ -718,14 +748,22 @@ def process_dubbing_job(job_id: str, req: DubRequest):
                 initial_speed = max(0.88, estimated_sec / target_window_sec)
 
             seg_start_t = __import__('time').time()
-            TTS_MODEL.tts_to_file(
-                text=text,
-                speaker_wav=ref_voice_path,
-                language=target_lang,
-                speed=initial_speed,
-                file_path=raw_chunk_path
-            )
-            seg_latency = round((__import__('time').time() - seg_start_t) * 1000)
+            try:
+                TTS_MODEL.tts_to_file(
+                    text=text,
+                    speaker_wav=ref_voice_path,
+                    language=target_lang,
+                    speed=initial_speed,
+                    file_path=raw_chunk_path
+                )
+            except Exception as seg_err:
+                print(f"[XTTS Dubbing] Warning: Segment {i+1} synthesis error ('{text[:30]}...'): {seg_err}")
+                continue
+
+            seg_elapsed = __import__('time').time() - seg_start_t
+            tts_sec += seg_elapsed
+            total_seg_synthesized += 1
+            seg_latency = round(seg_elapsed * 1000)
 
             if not os.path.exists(raw_chunk_path):
                 continue
@@ -737,6 +775,7 @@ def process_dubbing_job(job_id: str, req: DubRequest):
             if natural_duration_sec > (target_window_sec * 1.28) and initial_speed < 1.25:
                 retry_speed = min(1.35, initial_speed * (natural_duration_sec / target_window_sec))
                 try:
+                    r_start = __import__('time').time()
                     TTS_MODEL.tts_to_file(
                         text=text,
                         speaker_wav=ref_voice_path,
@@ -744,6 +783,7 @@ def process_dubbing_job(job_id: str, req: DubRequest):
                         speed=retry_speed,
                         file_path=raw_chunk_path
                     )
+                    tts_sec += (__import__('time').time() - r_start)
                     chunk_audio = AudioSegment.from_wav(raw_chunk_path)
                     natural_duration_sec = len(chunk_audio) / 1000.0
                     print(f"[XTTS Dubbing] Segment {i+1}: Adaptive retry with speed={retry_speed:.2f} -> {natural_duration_sec:.2f}s")
@@ -796,6 +836,7 @@ def process_dubbing_job(job_id: str, req: DubRequest):
         job["step"] = "Exporting final dubbed audio..."
         job["progress"] = 93
 
+        t_mix_start = __import__('time').time()
         master_audio = master_audio.normalize()
 
         if preserve_bg and no_vocals_stem_path and os.path.exists(no_vocals_stem_path):
@@ -823,11 +864,46 @@ def process_dubbing_job(job_id: str, req: DubRequest):
             master_audio.export(output_path, format="mp3", bitrate="128k", parameters=["-ac", "1"])
             print(f"[XTTS Dubbing] Exported final dubbed MP3 (128k Mono) -> {output_path}")
 
+        mix_sec = __import__('time').time() - t_mix_start
+        total_sec = round(__import__('time').time() - t_job_start, 2)
+        avg_seg_ms = round((tts_sec / max(1, total_seg_synthesized)) * 1000)
+
+        job_timings = {
+            "total_seconds": total_sec,
+            "demucs_separation_seconds": round(demucs_sec, 2),
+            "model_load_seconds": round(model_sec, 2),
+            "voice_reference_seconds": round(voice_ref_sec, 2),
+            "tts_synthesis_seconds": round(tts_sec, 2),
+            "mix_export_seconds": round(mix_sec, 2),
+            "segments_synthesized": total_seg_synthesized,
+            "avg_ms_per_segment": avg_seg_ms
+        }
+
+        def fmt_sec(s):
+            if s >= 60:
+                m = int(s // 60)
+                sec_rem = int(s % 60)
+                return f"{s/60:.1f} min ({m}m {sec_rem}s)"
+            return f"{s:.2f}s"
+
+        print("\n" + "=" * 62)
+        print(" [XTTS DUBBING PIPELINE TIMING DEBUGGER]")
+        print("=" * 62)
+        print(f" Total Dubbing Time           : {fmt_sec(total_sec)}")
+        if preserve_bg:
+            print(f" Demucs Vocal Separation      : {fmt_sec(demucs_sec)}")
+        print(f" XTTS Model Warmup/Load       : {fmt_sec(model_sec)}")
+        print(f" Voice Reference Extraction   : {fmt_sec(voice_ref_sec)}")
+        print(f" Neural Synthesis ({total_seg_synthesized:>3} cues)   : {fmt_sec(tts_sec)} (avg {avg_seg_ms}ms/cue)")
+        print(f" Normalization & Mixdown      : {fmt_sec(mix_sec)}")
+        print("=" * 62 + "\n")
+
         job["status"] = "done"
         job["step"] = "Complete"
         job["progress"] = 100
         job["audio_path"] = output_path
         job["error"] = None
+        job["timings"] = job_timings
 
     except Exception as e:
         print("[XTTS Dubbing] Dubbing job error:", traceback.format_exc())
@@ -956,6 +1032,7 @@ def cancel_job(job_id: str):
 # =====================================================================
 
 PUNCT_PIPELINES: Dict[str, Any] = {}
+PUNCT_MODELS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "models", "punctuation")
 
 class PunctuateRequest(BaseModel):
     text: str
@@ -968,15 +1045,19 @@ def get_punctuation_pipeline(lang: str):
     # Model selection: Dedicated Arabic Naqta vs Multilingual/Latin
     if norm_lang == "ar":
         model_name = "MostafaMaroof/Naqta"
+        cache_key = "ar"
     else:
         model_name = "oliverguhr/fullstop-punctuation-multilang-large"
+        cache_key = "multilingual"
 
-    if norm_lang in PUNCT_PIPELINES:
-        return PUNCT_PIPELINES[norm_lang], norm_lang
+    if cache_key in PUNCT_PIPELINES:
+        return PUNCT_PIPELINES[cache_key], norm_lang
 
     try:
         from transformers import pipeline
-        print(f"[Punctuation] Loading on-demand model for '{norm_lang}' ({model_name})...")
+        lang_cache_dir = os.path.join(PUNCT_MODELS_DIR, norm_lang)
+        os.makedirs(lang_cache_dir, exist_ok=True)
+        print(f"[Punctuation] Loading on-demand model for '{norm_lang}' ({model_name}) into {lang_cache_dir}...")
         
         # Use GPU if available and preferred, else CPU
         use_cuda = (TTS_DEVICE == "cuda" and torch.cuda.is_available())
@@ -986,8 +1067,10 @@ def get_punctuation_pipeline(lang: str):
             "token-classification",
             model=model_name,
             device=device,
-            aggregation_strategy="first"
+            aggregation_strategy="first",
+            model_kwargs={"cache_dir": lang_cache_dir}
         )
+        PUNCT_PIPELINES[cache_key] = pipe
         PUNCT_PIPELINES[norm_lang] = pipe
         print(f"[Punctuation] Model for '{norm_lang}' successfully loaded into memory.")
         return pipe, norm_lang
@@ -1054,16 +1137,22 @@ def apply_token_punctuation(text: str, pipe, norm_lang: str) -> str:
 @app.post("/punctuate")
 def punctuate_text(req: PunctuateRequest):
     if not req.text or not req.text.strip():
-        return {"punctuated_text": req.text, "model_used": "none"}
+        return {"punctuated_text": req.text, "model_used": "none", "elapsed_seconds": 0.0}
 
+    t0 = __import__('time').time()
     norm_lang = (req.lang or "en").lower().split("-")[0].strip()
     try:
         pipe, resolved_lang = get_punctuation_pipeline(norm_lang)
         punctuated = apply_token_punctuation(req.text, pipe, resolved_lang)
+        elapsed = round(__import__('time').time() - t0, 3)
+        word_count = len(req.text.split())
+        print(f"[Punctuation Debugger] Restored punctuation for {word_count} words ({resolved_lang}) in {elapsed}s")
         return {
             "punctuated_text": punctuated,
             "lang": resolved_lang,
-            "model_used": "neural"
+            "model_used": "neural",
+            "elapsed_seconds": elapsed,
+            "word_count": word_count
         }
     except Exception as e:
         traceback.print_exc()
@@ -1072,8 +1161,14 @@ def punctuate_text(req: PunctuateRequest):
 
 @app.get("/models/punctuation")
 def list_punctuation_models():
+    loaded = []
+    for k in PUNCT_PIPELINES.keys():
+        if k in ("ar", "en", "es", "fr", "de", "it"):
+            loaded.append(k)
+        elif k == "multilingual":
+            loaded.extend(["en", "es", "fr", "de", "it"])
     return {
-        "loaded_models": list(PUNCT_PIPELINES.keys()),
+        "loaded_models": list(set(loaded)),
         "available_languages": ["en", "ar", "es", "fr", "de", "it"]
     }
 
@@ -1081,12 +1176,19 @@ def list_punctuation_models():
 @app.delete("/models/punctuation/{lang}")
 def unload_punctuation_model(lang: str):
     norm = lang.lower().split("-")[0].strip()
+    unloaded = []
     if norm in PUNCT_PIPELINES:
         del PUNCT_PIPELINES[norm]
+        unloaded.append(norm)
+    cache_key = "ar" if norm == "ar" else "multilingual"
+    if cache_key in PUNCT_PIPELINES:
+        del PUNCT_PIPELINES[cache_key]
+        unloaded.append(cache_key)
+    if unloaded:
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
-        return {"success": True, "unloaded": norm}
+        return {"success": True, "unloaded": unloaded}
     return {"success": False, "message": f"Model for '{norm}' was not loaded in memory"}
 
 

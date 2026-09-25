@@ -128,6 +128,19 @@ async function extractAndProcessAudio(fileOrHandle, onProgress) {
 let whisperWorker = null
 let workerQueuePromise = Promise.resolve()
 
+export function cancelActiveTranscription() {
+    console.log('[AI] Cancelling active Whisper transcription and terminating worker...')
+    if (whisperWorker) {
+        try {
+            whisperWorker.terminate()
+        } catch (e) {
+            console.warn('[AI] Error terminating whisper worker:', e)
+        }
+        whisperWorker = null
+    }
+    workerQueuePromise = Promise.resolve()
+}
+
 function getOrCreateWhisperWorker() {
     if (!whisperWorker) {
         console.log('[AI] Creating new Whisper worker...')
@@ -538,6 +551,15 @@ export function chunksToVTT(chunks) {
  * Transcribe a video to generate or regenerate timestamped captions (VTT chunks).
  * Runs Whisper AI speech-to-text in the video's spoken language.
  */
+export function formatFriendlyDuration(sec) {
+    if (typeof sec !== 'number') sec = parseFloat(sec) || 0
+    if (sec < 60) return `${sec.toFixed(2)}s`
+    const mins = (sec / 60).toFixed(1)
+    const m = Math.floor(sec / 60)
+    const s = Math.round(sec % 60)
+    return `${mins} min (${m}m ${s}s / ${sec.toFixed(1)}s)`
+}
+
 export async function transcribeVideoCaptions(video, onProgress, device = 'auto', language = 'en') {
     let fileSource = video?.fileHandle || (video?.filePath ? `${SERVER_URL}/video/${encodeURIComponent(video.filePath)}` : video?.url)
     if (!fileSource) {
@@ -548,13 +570,31 @@ export async function transcribeVideoCaptions(video, onProgress, device = 'auto'
         if (!hasPerm) throw new Error('File access permission was denied')
     }
 
+    const t0 = performance.now()
+
     // Step 1: Extract audio
     const audioData = await extractAndProcessAudio(fileSource, onProgress)
+    const tExtract = performance.now() - t0
 
     // Step 2: Transcribe using Whisper Web Worker or main thread
+    const tTransStart = performance.now()
     const transcription = await transcribeAudio(audioData, onProgress, device, language)
+    const tTranscribe = performance.now() - tTransStart
+    const totalElapsedSec = (performance.now() - t0) / 1000
+    const audioDurationSec = audioData.length / 16000
+    const speedX = (audioDurationSec / Math.max(0.1, totalElapsedSec)).toFixed(1)
+
     const transcript = transcription.text
     const captionChunks = transcription.chunks
+
+    console.group('%c[TutIn AI Speech Transcription Debugger]', 'color: #10b981; font-weight: bold; font-size: 13px;')
+    console.log(`Video ID: ${video.id} | Language: ${language} | Audio Duration: ${formatFriendlyDuration(audioDurationSec)} | Processing Speed: ${speedX}x real-time`)
+    console.table([
+        { Process: 'Audio Extraction & 16kHz Decoding', Time: formatFriendlyDuration(tExtract / 1000) },
+        { Process: `Whisper Neural Transcription (${(captionChunks || []).length} cues)`, Time: formatFriendlyDuration(tTranscribe / 1000) },
+        { Process: 'Total Transcription Pipeline', Time: formatFriendlyDuration(totalElapsedSec) }
+    ])
+    console.groupEnd()
 
     // Step 3: Save timestamped caption chunks to server / course folder
     const serverAvailable = await isServerAvailable()
@@ -601,14 +641,32 @@ export async function processVideoForSummary(videoIdOrVideo, fileSourceOrOnProgr
         if (!hasPerm) throw new Error('File access permission was denied')
     }
 
+    const t0 = performance.now()
+
     try {
         // Step 1: Extract audio
         const audioData = await extractAndProcessAudio(fileSource, onProgress)
+        const tExtract = performance.now() - t0
 
         // Step 2: Transcribe using Whisper (returns { text, chunks })
+        const tTransStart = performance.now()
         const transcription = await transcribeAudio(audioData, onProgress, device, lang)
+        const tTranscribe = performance.now() - tTransStart
+        const totalTransSec = (performance.now() - t0) / 1000
+        const audioDurationSec = audioData.length / 16000
+        const speedX = (audioDurationSec / Math.max(0.1, totalTransSec)).toFixed(1)
+
         const transcript = transcription.text
         const captionChunks = transcription.chunks
+
+        console.group('%c[TutIn AI Speech Transcription Debugger]', 'color: #10b981; font-weight: bold; font-size: 13px;')
+        console.log(`Video ID: ${videoId} | Language: ${lang} | Audio Duration: ${formatFriendlyDuration(audioDurationSec)} | Processing Speed: ${speedX}x real-time`)
+        console.table([
+            { Process: 'Audio Extraction & 16kHz Resampling', Time: formatFriendlyDuration(tExtract / 1000) },
+            { Process: `Whisper Speech Recognition (${(captionChunks || []).length} cues)`, Time: formatFriendlyDuration(tTranscribe / 1000) },
+            { Process: 'Total Transcription Pipeline', Time: formatFriendlyDuration(totalTransSec) }
+        ])
+        console.groupEnd()
 
         // Save transcript and caption chunks
         const serverAvailable = await isServerAvailable()

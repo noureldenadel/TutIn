@@ -38,7 +38,8 @@ export function remapPunctuatedTextToCues(originalChunks, punctuatedText) {
     if (!originalChunks || originalChunks.length === 0) return []
     if (!punctuatedText || !punctuatedText.trim()) return originalChunks
 
-    const punctWords = punctuatedText.trim().split(/\s+/).filter(Boolean)
+    const normalizedPunctText = punctuatedText.replace(/\s+([.,?!؟،:;!])/gu, '$1')
+    const punctWords = normalizedPunctText.trim().split(/\s+/).filter(Boolean)
     if (punctWords.length === 0) return originalChunks
 
     let punctIdx = 0
