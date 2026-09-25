@@ -886,17 +886,17 @@ def process_dubbing_job(job_id: str, req: DubRequest):
                 return f"{s/60:.1f} min ({m}m {sec_rem}s)"
             return f"{s:.2f}s"
 
-        print("\n" + "=" * 62)
+        print("\n" + "=" * 80)
         print(" [XTTS DUBBING PIPELINE TIMING DEBUGGER]")
-        print("=" * 62)
-        print(f" Total Dubbing Time           : {fmt_sec(total_sec)}")
+        print("=" * 80)
+        print(f" Total Pipeline Duration      : {fmt_sec(total_sec):<18} | Full end-to-end voice dubbing process")
         if preserve_bg:
-            print(f" Demucs Vocal Separation      : {fmt_sec(demucs_sec)}")
-        print(f" XTTS Model Warmup/Load       : {fmt_sec(model_sec)}")
-        print(f" Voice Reference Extraction   : {fmt_sec(voice_ref_sec)}")
-        print(f" Neural Synthesis ({total_seg_synthesized:>3} cues)   : {fmt_sec(tts_sec)} (avg {avg_seg_ms}ms/cue)")
-        print(f" Normalization & Mixdown      : {fmt_sec(mix_sec)}")
-        print("=" * 62 + "\n")
+            print(f" Demucs Vocal Separation      : {fmt_sec(demucs_sec):<18} | Isolates speaker vocals from background music & SFX")
+        print(f" XTTS Model Warmup/Load       : {fmt_sec(model_sec):<18} | Loads neural synthesis weights into GPU VRAM")
+        print(f" Voice Reference Extraction   : {fmt_sec(voice_ref_sec):<18} | Captures speaker vocal timbre & acoustic profile")
+        print(f" Neural Synthesis ({total_seg_synthesized:>3} cues)   : {fmt_sec(tts_sec):<18} | Clones voice & synthesizes speech ({avg_seg_ms}ms/cue)")
+        print(f" Normalization & Mixdown      : {fmt_sec(mix_sec):<18} | Sidechain ducking, room-tone bed & MP3 export")
+        print("=" * 80 + "\n")
 
         job["status"] = "done"
         job["step"] = "Complete"

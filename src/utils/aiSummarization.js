@@ -239,7 +239,7 @@ async function transcribeWithWorker(audioData, onProgress, device = 'auto', lang
     })
 
     // Advance queue, catching error so subsequent queued items can still proceed
-    workerQueuePromise = resultPromise.catch(() => {})
+    workerQueuePromise = resultPromise.catch(() => { })
 
     return resultPromise
 }
@@ -419,7 +419,7 @@ ${truncatedTranscript}`
                 if (response.status === 429) {
                     // Rate limited - wait and retry
                     const waitTime = Math.pow(2, attempt) * 2000 // 4s, 8s, 16s
-                    console.warn(`[AI Summary] ⚠️ Rate limit 429 encountered, retrying in ${waitTime/1000}s... (Attempt ${attempt}/${maxRetries})`)
+                    console.warn(`[AI Summary] ⚠️ Rate limit 429 encountered, retrying in ${waitTime / 1000}s... (Attempt ${attempt}/${maxRetries})`)
                     onProgress?.({
                         stage: 'summarizing',
                         progress: 0.3,
@@ -590,15 +590,15 @@ export async function transcribeVideoCaptions(video, onProgress, device = 'auto'
     console.group('%c[TutIn AI Speech Transcription Debugger]', 'color: #10b981; font-weight: bold; font-size: 13px;')
     console.log(`Video ID: ${video.id} | Language: ${language} | Audio Duration: ${formatFriendlyDuration(audioDurationSec)} | Processing Speed: ${speedX}x real-time`)
     console.table([
-        { Process: 'Audio Extraction & 16kHz Decoding', Time: formatFriendlyDuration(tExtract / 1000) },
-        { Process: `Whisper Neural Transcription (${(captionChunks || []).length} cues)`, Time: formatFriendlyDuration(tTranscribe / 1000) },
-        { Process: 'Total Transcription Pipeline', Time: formatFriendlyDuration(totalElapsedSec) }
+        { Process: 'Audio Extraction & 16kHz Decoding', Role: 'Extracts video audio track and downsamples to 16kHz mono', Time: formatFriendlyDuration(tExtract / 1000) },
+        { Process: `Whisper Neural Transcription (${(captionChunks || []).length} cues)`, Role: 'Speech-to-text recognition with timestamp alignment', Time: formatFriendlyDuration(tTranscribe / 1000) },
+        { Process: 'Total Transcription Pipeline', Role: 'Full audio extraction and subtitle generation process', Time: formatFriendlyDuration(totalElapsedSec) }
     ])
     console.groupEnd()
 
     // Step 3: Save timestamped caption chunks to server / course folder
     const serverAvailable = await isServerAvailable()
-    
+
     if (serverAvailable) {
         await put(`/api/transcripts/${video.id}`, { chunks: captionChunks, language: language || 'en' })
     } else {
@@ -662,15 +662,15 @@ export async function processVideoForSummary(videoIdOrVideo, fileSourceOrOnProgr
         console.group('%c[TutIn AI Speech Transcription Debugger]', 'color: #10b981; font-weight: bold; font-size: 13px;')
         console.log(`Video ID: ${videoId} | Language: ${lang} | Audio Duration: ${formatFriendlyDuration(audioDurationSec)} | Processing Speed: ${speedX}x real-time`)
         console.table([
-            { Process: 'Audio Extraction & 16kHz Resampling', Time: formatFriendlyDuration(tExtract / 1000) },
-            { Process: `Whisper Speech Recognition (${(captionChunks || []).length} cues)`, Time: formatFriendlyDuration(tTranscribe / 1000) },
-            { Process: 'Total Transcription Pipeline', Time: formatFriendlyDuration(totalTransSec) }
+            { Process: 'Audio Extraction & 16kHz Resampling', Role: 'Extracts video audio track and downsamples to 16kHz mono', Time: formatFriendlyDuration(tExtract / 1000) },
+            { Process: `Whisper Speech Recognition (${(captionChunks || []).length} cues)`, Role: 'Speech-to-text recognition with timestamp alignment', Time: formatFriendlyDuration(tTranscribe / 1000) },
+            { Process: 'Total Transcription Pipeline', Role: 'Full audio extraction and subtitle generation process', Time: formatFriendlyDuration(totalTransSec) }
         ])
         console.groupEnd()
 
         // Save transcript and caption chunks
         const serverAvailable = await isServerAvailable()
-        
+
         if (serverAvailable) {
             await put(`/api/transcripts/${videoId}`, { chunks: captionChunks, language: lang || 'en' })
         } else {

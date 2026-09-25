@@ -211,7 +211,7 @@ export default function TranslateModal({ isOpen, onClose, video, course, sourceL
                                     console.group('%c[TutIn AI Translation Performance Debugger]', 'color: #8b5cf6; font-weight: bold; font-size: 13px;')
                                     console.log(`Video ID: ${video.id} | ${sourceLang.toUpperCase()} -> ${targetLang.toUpperCase()} | Total Duration: ${formatFriendlyDuration(totalTranslationSec)}`)
                                     console.table([
-                                        { Process: `NLLB-200 Neural Translation (${data.cuesCount || data.count || 'all'} cues)`, Time: formatFriendlyDuration(totalTranslationSec) }
+                                        { Process: `NLLB-200 Neural Translation (${data.cuesCount || data.count || 'all'} cues)`, Role: 'Translates subtitle sentences with cue timestamp alignment', Time: formatFriendlyDuration(totalTranslationSec) }
                                     ])
                                     console.groupEnd()
 

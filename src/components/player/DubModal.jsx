@@ -281,12 +281,12 @@ export default function DubModal({ isOpen, onClose, video, course, sourceLanguag
                             console.group('%c[TutIn AI Dubbing Performance Debugger]', 'color: #3b82f6; font-weight: bold; font-size: 13px;')
                             console.log(`Video ID: ${video.id} | Target Lang: ${targetLang} | Total Pipeline: ${formatFriendlyDuration(data.timings.total_seconds)}`)
                             console.table([
-                                { Process: 'Demucs Vocal Separation', Time: formatFriendlyDuration(data.timings.demucs_separation_seconds) },
-                                { Process: 'XTTS Model Load / Warmup', Time: formatFriendlyDuration(data.timings.model_load_seconds) },
-                                { Process: 'Voice Reference Extraction', Time: formatFriendlyDuration(data.timings.voice_reference_seconds) },
-                                { Process: `Neural Speech Synthesis (${data.timings.segments_synthesized} cues)`, Time: formatFriendlyDuration(data.timings.tts_synthesis_seconds) },
-                                { Process: 'Normalization & Audio Mixdown', Time: formatFriendlyDuration(data.timings.mix_export_seconds) },
-                                { Process: 'Total End-to-End Pipeline', Time: formatFriendlyDuration(data.timings.total_seconds) }
+                                { Process: 'Demucs Vocal Separation', Role: 'Isolates speaker vocals from background music & SFX', Time: formatFriendlyDuration(data.timings.demucs_separation_seconds) },
+                                { Process: 'XTTS Model Load / Warmup', Role: 'Loads neural synthesis model weights into GPU VRAM', Time: formatFriendlyDuration(data.timings.model_load_seconds) },
+                                { Process: 'Voice Reference Extraction', Role: 'Captures speaker vocal timbre & acoustic profile', Time: formatFriendlyDuration(data.timings.voice_reference_seconds) },
+                                { Process: `Neural Speech Synthesis (${data.timings.segments_synthesized} cues)`, Role: 'Clones voice and synthesizes translated cues', Time: formatFriendlyDuration(data.timings.tts_synthesis_seconds) },
+                                { Process: 'Normalization & Audio Mixdown', Role: 'Sidechain ducking, room-tone bed & final MP3 export', Time: formatFriendlyDuration(data.timings.mix_export_seconds) },
+                                { Process: 'Total End-to-End Pipeline', Role: 'Full automated voice dubbing process', Time: formatFriendlyDuration(data.timings.total_seconds) }
                             ])
                             console.log(`Average Latency per Segment: ${data.timings.avg_ms_per_segment}ms`)
                             console.groupEnd()
