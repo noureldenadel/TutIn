@@ -153,6 +153,11 @@ export function streamVideo(req, res) {
                 res.status(500).json({ error: 'Stream error' })
             }
         })
+        res.on('close', () => {
+            if (!stream.destroyed) {
+                stream.destroy()
+            }
+        })
         stream.pipe(res)
     } else {
         // Full file response
@@ -172,6 +177,11 @@ export function streamVideo(req, res) {
             console.error(`[VideoStreamer] Stream error: ${err.message}`)
             if (!res.headersSent) {
                 res.status(500).json({ error: 'Stream error' })
+            }
+        })
+        res.on('close', () => {
+            if (!stream.destroyed) {
+                stream.destroy()
             }
         })
         stream.pipe(res)

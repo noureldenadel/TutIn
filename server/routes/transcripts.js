@@ -5,7 +5,7 @@ import multer from 'multer'
 import { getOne, run, getAll, getDataDir } from '../database.js'
 import { parseSubtitleFile, chunksToSRT, chunksToVTT, extractLangCode, detectFormat } from '../utils/captionParser.js'
 import { saveCaptionFile, loadCaptionChunks, listVideoLanguages, getTtsCompanionFilePath } from '../utils/courseAssets.js'
-import { translateChunks } from '../utils/aiTranslation.js'
+import { translateChunks, isNonSpeechText } from '../utils/aiTranslation.js'
 import { needsPunctuationRestoration, restorePunctuation } from '../utils/punctuationService.js'
 
 const router = express.Router()
@@ -523,14 +523,20 @@ router.get('/:videoId/download', (req, res) => {
 router.put('/:videoId', (req, res) => {
     const { chunks, language } = req.body
     if (!Array.isArray(chunks)) return res.status(400).json({ error: 'Chunks must be an array' })
-
     try {
         const videoMeta = getVideoMeta(req.params.videoId)
         const genLang = language || req.body.lang || videoMeta.courseLanguage || 'en'
-        
+        // Filter out silence hallucinations, music tags, and empty chunks
+        const cleanChunks = chunks.filter(c => {
+            if (!c || !c.text) return false
+            const text = (c.text || '').trim()
+            return text && !isNonSpeechText(text)
+        })
+        const chunksToSave = cleanChunks.length > 0 ? cleanChunks : chunks
+
         // AI generation is always saved with origin 'generated' and explicit language code
         // e.g. 01 - Intro-generated.en.vtt
-        const filePath = saveCaptionFile(videoMeta, genLang, chunks, 'generated')
+        const filePath = saveCaptionFile(videoMeta, genLang, chunksToSave, 'generated')
 
         const currentSources = videoMeta.subtitleSources.filter(s => !(s.lang === genLang && s.origin === 'generated'))
         const hasMaster = currentSources.some(s => s.lang === genLang && s.is_master)

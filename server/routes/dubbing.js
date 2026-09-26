@@ -523,6 +523,9 @@ router.get('/audio/:videoId', (req, res) => {
                     console.error('[DubAudio] Stream error:', err)
                     if (!res.headersSent) res.status(500).end()
                 })
+                res.on('close', () => {
+                    if (!stream.destroyed) stream.destroy()
+                })
                 return stream.pipe(res)
             } else {
                 res.writeHead(200, {
@@ -533,6 +536,9 @@ router.get('/audio/:videoId', (req, res) => {
                 stream.on('error', (err) => {
                     console.error('[DubAudio] Stream error:', err)
                     if (!res.headersSent) res.status(500).end()
+                })
+                res.on('close', () => {
+                    if (!stream.destroyed) stream.destroy()
                 })
                 return stream.pipe(res)
             }

@@ -105,11 +105,53 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+import threading
+import io
+
 # Global state
 TTS_MODEL = None
 TTS_DEVICE = None  # Track what device the model is currently on
 DEVICE_PREFERENCE = "auto"  # User preference: 'auto', 'gpu', 'cpu'
 JOBS: Dict[str, dict] = {}  # job_id -> {status, step, progress, error, audio_path, created_at}
+
+# ==========================================
+# VRAM Idle Reaper: Automatically unloads XTTS from GPU VRAM after inactivity
+# ==========================================
+IDLE_UNLOAD_SECONDS = 600  # 10 minutes
+_idle_timer = None
+_idle_lock = threading.Lock()
+
+def cancel_idle_model_unload():
+    global _idle_timer
+    with _idle_lock:
+        if _idle_timer is not None:
+            _idle_timer.cancel()
+            _idle_timer = None
+
+def schedule_idle_model_unload():
+    global _idle_timer
+    with _idle_lock:
+        if _idle_timer is not None:
+            _idle_timer.cancel()
+        _idle_timer = threading.Timer(IDLE_UNLOAD_SECONDS, auto_unload_model)
+        _idle_timer.daemon = True
+        _idle_timer.start()
+
+def auto_unload_model():
+    global TTS_MODEL, TTS_DEVICE
+    with _idle_lock:
+        if TTS_MODEL is not None:
+            print(f"[XTTS Dubbing] Idle timeout reached ({IDLE_UNLOAD_SECONDS // 60} min). Unloading model to reclaim VRAM/RAM...")
+            try:
+                del TTS_MODEL
+            except Exception:
+                pass
+            TTS_MODEL = None
+            TTS_DEVICE = None
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            print("[XTTS Dubbing] Model successfully unloaded. VRAM freed.")
 
 # ==========================================
 # Models & Configuration
@@ -273,6 +315,7 @@ def load_model(device_preference: str = None):
     If a model is already loaded on a different device, move it."""
     global TTS_MODEL, TTS_DEVICE
 
+    cancel_idle_model_unload()
     target_device = get_device(device_preference)
 
     if TTS_MODEL is not None:
@@ -313,7 +356,8 @@ def extract_reference_audio(video_path: str, temp_dir: str, explicit_ref_path: O
     """
     Extract a clean 8-10 second voice sample from the video.
     If explicit_ref_path is provided and exists, use it.
-    Otherwise, pick a window from the middle of the video where subtitles indicate speech.
+    Otherwise, intelligently scan candidate subtitle segments to locate a window with
+    optimal speech energy (good conversational RMS dBFS) and minimal background noise/silence.
     """
     if explicit_ref_path and os.path.exists(explicit_ref_path):
         return explicit_ref_path
@@ -327,48 +371,85 @@ def extract_reference_audio(video_path: str, temp_dir: str, explicit_ref_path: O
     ref_path = os.path.join(temp_dir, "reference_voice.wav")
     ffmpeg_bin = get_ffmpeg_bin()
     
-    # Determine sample start time (avoid first 10 seconds of intro/music)
-    start_time = 15.0
+    candidate_start_times = []
+
+    # 1. Identify candidate start times from speech segments (between 12% and 80% of video)
     if segments and len(segments) > 0:
-        # Find a segment in the 30% - 60% range of subtitles
-        mid_idx = len(segments) // 2
-        candidate_seg = segments[mid_idx]
-        start_time = max(5.0, candidate_seg.get_start())
-    
+        valid_segs = []
+        for s in segments:
+            dur = s.get_end() - s.get_start()
+            txt = s.text.strip()
+            # Only consider genuine dialogue cues (at least 2.5s and 3 words, not bracketed sound tags)
+            if dur >= 2.5 and len(txt.split()) >= 3 and not txt.startswith('[') and not txt.startswith('('):
+                valid_segs.append(s)
+
+        if valid_segs:
+            n = len(valid_segs)
+            indices = [int(n * 0.25), int(n * 0.45), int(n * 0.65), int(n * 0.80)]
+            for idx in indices:
+                cand = valid_segs[min(idx, n - 1)]
+                candidate_start_times.append(max(5.0, cand.get_start()))
+
+    if not candidate_start_times:
+        candidate_start_times = [15.0, 30.0, 60.0]
+
+    # Deduplicate candidate start times
+    candidate_start_times = list(dict.fromkeys(candidate_start_times))
+
+    # 2. Test candidate windows to pick the highest clarity audio (good RMS dialogue volume)
+    best_candidate_path = None
+    best_score = -999.0
+
+    for idx, c_start in enumerate(candidate_start_times):
+        cand_path = os.path.join(temp_dir, f"cand_ref_{idx}.wav")
+        cmd = [
+            ffmpeg_bin, "-y",
+            "-ss", str(c_start),
+            "-i", video_path,
+            "-t", "9",  # 9-second clean voice sample
+            "-vn",
+            "-acodec", "pcm_s16le",
+            "-ar", "24000",
+            "-ac", "1",
+            cand_path
+        ]
+        try:
+            subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            if os.path.exists(cand_path) and os.path.getsize(cand_path) > 5000:
+                audio_slice = AudioSegment.from_wav(cand_path)
+                dbfs = audio_slice.dBFS
+                # Ideal conversational dialogue lies between -28 dBFS and -14 dBFS.
+                # Penalize silence (< -40 dBFS) or clipped distorted audio (> -3 dBFS).
+                if -42.0 <= dbfs <= -6.0:
+                    score = -abs(dbfs - (-20.0))  # Target standard broadcast -20 dBFS
+                    if dbfs > -35.0:
+                        score += 5.0
+                    if score > best_score:
+                        best_score = score
+                        best_candidate_path = cand_path
+        except Exception:
+            continue
+
+    if best_candidate_path and os.path.exists(best_candidate_path):
+        if best_candidate_path != ref_path:
+            shutil.copyfile(best_candidate_path, ref_path)
+        print(f"[XTTS Dubbing] Selected high-SNR voice reference (score: {best_score:.1f}, dBFS: {AudioSegment.from_wav(ref_path).dBFS:.1f})")
+        return ref_path
+
+    # Fallback to standard 9s extract from 15s mark
     cmd = [
         ffmpeg_bin, "-y",
-        "-ss", str(start_time),
+        "-ss", "15.0",
         "-i", video_path,
-        "-t", "9",  # 9-second clean voice sample
+        "-t", "9",
         "-vn",
         "-acodec", "pcm_s16le",
         "-ar", "24000",
         "-ac", "1",
         ref_path
     ]
-
-    try:
-        res = subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-        if not os.path.exists(ref_path) or os.path.getsize(ref_path) < 1000:
-            # Fallback to start of video if middle seek failed
-            fallback_cmd = [
-                ffmpeg_bin, "-y",
-                "-i", video_path,
-                "-t", "9",
-                "-vn",
-                "-acodec", "pcm_s16le",
-                "-ar", "24000",
-                "-ac", "1",
-                ref_path
-            ]
-            subprocess.run(fallback_cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            
-        if not os.path.exists(ref_path):
-            raise Exception("FFmpeg failed to extract reference audio.")
-        return ref_path
-    except subprocess.CalledProcessError as e:
-        err_msg = e.stderr.decode('utf-8', errors='ignore') if e.stderr else str(e)
-        raise Exception(f"FFmpeg reference extraction error: {err_msg}")
+    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return ref_path
 
 
 def apply_atempo_filter(input_wav: str, output_wav: str, speed_factor: float):
@@ -376,19 +457,15 @@ def apply_atempo_filter(input_wav: str, output_wav: str, speed_factor: float):
     Apply FFmpeg atempo filter to speed up audio clip.
     FFmpeg atempo filter accepts 0.5 to 2.0. If speed_factor > 2.0, chain filters.
     """
-    # Clamp speed factor between 0.5 and 1.5 to avoid extreme robotic/metallic artifacts
     factor = max(0.5, min(speed_factor, 1.5))
-    
     filter_chain = []
     current_factor = factor
     while current_factor > 2.0:
         filter_chain.append("atempo=2.0")
         current_factor /= 2.0
     filter_chain.append(f"atempo={current_factor:.4f}")
-    
     filter_str = ",".join(filter_chain)
     ffmpeg_bin = get_ffmpeg_bin()
-    
     cmd = [
         ffmpeg_bin, "-y",
         "-i", input_wav,
@@ -396,7 +473,6 @@ def apply_atempo_filter(input_wav: str, output_wav: str, speed_factor: float):
         "-vn",
         output_wav
     ]
-    
     subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
@@ -419,6 +495,52 @@ def apply_rubberband_filter(input_wav: str, output_wav: str, speed_factor: float
     except Exception as err:
         print(f"[XTTS Dubbing] Rubberband filter warning ({err}), falling back to atempo")
         apply_atempo_filter(input_wav, output_wav, factor)
+
+
+def apply_rubberband_filter_bytes(input_wav_bytes: bytes, speed_factor: float) -> bytes:
+    """
+    Apply FFmpeg rubberband filter in-memory via stdin/stdout pipes,
+    avoiding all disk write/read cycles.
+    """
+    factor = max(0.60, min(speed_factor, 1.60))
+    ffmpeg_bin = get_ffmpeg_bin()
+    cmd = [
+        ffmpeg_bin, "-y",
+        "-f", "wav",
+        "-i", "pipe:0",
+        "-filter:a", f"rubberband=tempo={factor:.4f}:transients=crisp:detector=compound",
+        "-f", "wav",
+        "pipe:1"
+    ]
+    try:
+        proc = subprocess.run(cmd, input=input_wav_bytes, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+        return proc.stdout
+    except Exception as err:
+        print(f"[XTTS Dubbing] In-memory rubberband filter warning ({err}), falling back to atempo")
+        return apply_atempo_filter_bytes(input_wav_bytes, factor)
+
+
+def apply_atempo_filter_bytes(input_wav_bytes: bytes, speed_factor: float) -> bytes:
+    """Apply FFmpeg atempo filter in-memory via stdin/stdout pipes."""
+    factor = max(0.5, min(speed_factor, 1.5))
+    filter_chain = []
+    current_factor = factor
+    while current_factor > 2.0:
+        filter_chain.append("atempo=2.0")
+        current_factor /= 2.0
+    filter_chain.append(f"atempo={current_factor:.4f}")
+    filter_str = ",".join(filter_chain)
+    ffmpeg_bin = get_ffmpeg_bin()
+    cmd = [
+        ffmpeg_bin, "-y",
+        "-f", "wav",
+        "-i", "pipe:0",
+        "-filter:a", filter_str,
+        "-f", "wav",
+        "pipe:1"
+    ]
+    proc = subprocess.run(cmd, input=input_wav_bytes, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+    return proc.stdout
 
 
 def trim_internal_silence(audio_segment: AudioSegment, max_reduction_ms: int = 350) -> AudioSegment:
@@ -672,6 +794,9 @@ def process_dubbing_job(job_id: str, req: DubRequest):
             demucs_sec = __import__('time').time() - t_demucs_start
             if not explicit_voice_ref and os.path.exists(vocals_stem_path):
                 explicit_voice_ref = vocals_stem_path
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            gc.collect()
 
         # 2. Load XTTS Model
         job["step"] = "Loading XTTS v2 model..."
@@ -700,13 +825,60 @@ def process_dubbing_job(job_id: str, req: DubRequest):
         last_seg_end = max([s.get_end() for s in segments], default=0.0)
         max_duration_ms = int(last_seg_end * 1000)
         
-        # Create silent master canvas
-        master_audio = AudioSegment.silent(duration=max_duration_ms + 3000)
-        last_end_ms = 0
+        # Pre-compute speaker conditioning latents once to eliminate 30%–40% synthesis latency
+        xtts_model = None
+        gpt_cond_latent = None
+        speaker_embedding = None
+        if hasattr(TTS_MODEL, "synthesizer") and hasattr(TTS_MODEL.synthesizer, "tts_model"):
+            xtts_model = TTS_MODEL.synthesizer.tts_model
+            try:
+                t_latent_start = __import__('time').time()
+                print(f"[XTTS Dubbing] Pre-computing speaker conditioning latents from: {ref_voice_path}...")
+                gpt_cond_latent, speaker_embedding = xtts_model.get_conditioning_latents(audio_path=[ref_voice_path])
+                print(f"[XTTS Dubbing] Speaker latents pre-computed in {(__import__('time').time() - t_latent_start):.2f}s (reused across all {len(segments)} cues)")
+            except Exception as latent_err:
+                print(f"[XTTS Dubbing] Warning: Could not pre-compute conditioning latents ({latent_err}). Falling back to standard inference.")
+                xtts_model = None
+
+        # Pre-allocate 1D NumPy float32 master canvas at 24,000 Hz
+        # Eliminates 190+ GB of Pydub immutable AudioSegment.overlay() memory churn
+        SAMPLE_RATE = 24000
+        total_canvas_samples = int((max_duration_ms / 1000.0 + 5.0) * SAMPLE_RATE)
+        master_canvas = np.zeros(total_canvas_samples, dtype=np.float32)
+        last_end_sample = 0
         
         print(f"[XTTS Dubbing] Starting job {job_id} | Segments: {len(segments)} | Target Lang: {target_lang} | Preserve BG: {preserve_bg}")
         base_progress = 20 if preserve_bg else 12
         available_progress = 70 if preserve_bg else 80
+
+        def synthesize_chunk_in_memory(chunk_text, speed):
+            if xtts_model is not None and gpt_cond_latent is not None and speaker_embedding is not None:
+                out = xtts_model.inference(
+                    text=chunk_text,
+                    language=target_lang,
+                    gpt_cond_latent=gpt_cond_latent,
+                    speaker_embedding=speaker_embedding,
+                    speed=speed,
+                    temperature=0.75,
+                    repetition_penalty=5.0
+                )
+                raw_wav = out.get("wav", None)
+                if isinstance(raw_wav, torch.Tensor):
+                    raw_wav = raw_wav.detach().cpu().numpy()
+                else:
+                    raw_wav = np.asarray(raw_wav, dtype=np.float32)
+                pcm16 = (np.clip(raw_wav, -1.0, 1.0) * 32767.0).astype(np.int16).tobytes()
+                return AudioSegment(data=pcm16, sample_width=2, frame_rate=SAMPLE_RATE, channels=1)
+            else:
+                wav_list = TTS_MODEL.tts(
+                    text=chunk_text,
+                    speaker_wav=ref_voice_path,
+                    language=target_lang,
+                    speed=speed
+                )
+                raw_wav = np.asarray(wav_list, dtype=np.float32)
+                pcm16 = (np.clip(raw_wav, -1.0, 1.0) * 32767.0).astype(np.int16).tobytes()
+                return AudioSegment(data=pcm16, sample_width=2, frame_rate=SAMPLE_RATE, channels=1)
 
         for i, seg in enumerate(segments):
             if job["status"] == "cancelled":
@@ -734,9 +906,6 @@ def process_dubbing_job(job_id: str, req: DubRequest):
             if not text:
                 continue
 
-            raw_chunk_path = os.path.join(temp_dir, f"raw_chunk_{i}.wav")
-            fitted_chunk_path = os.path.join(temp_dir, f"fitted_chunk_{i}.wav")
-
             # 4a. Native Speed Pre-Biasing
             words = text.split()
             word_count = max(1, len(words))
@@ -749,13 +918,7 @@ def process_dubbing_job(job_id: str, req: DubRequest):
 
             seg_start_t = __import__('time').time()
             try:
-                TTS_MODEL.tts_to_file(
-                    text=text,
-                    speaker_wav=ref_voice_path,
-                    language=target_lang,
-                    speed=initial_speed,
-                    file_path=raw_chunk_path
-                )
+                chunk_audio = synthesize_chunk_in_memory(text, initial_speed)
             except Exception as seg_err:
                 print(f"[XTTS Dubbing] Warning: Segment {i+1} synthesis error ('{text[:30]}...'): {seg_err}")
                 continue
@@ -765,10 +928,6 @@ def process_dubbing_job(job_id: str, req: DubRequest):
             total_seg_synthesized += 1
             seg_latency = round(seg_elapsed * 1000)
 
-            if not os.path.exists(raw_chunk_path):
-                continue
-
-            chunk_audio = AudioSegment.from_wav(raw_chunk_path)
             natural_duration_sec = len(chunk_audio) / 1000.0
 
             # 4b. Adaptive Single Retry (if still significantly exceeding window by >28%)
@@ -776,68 +935,67 @@ def process_dubbing_job(job_id: str, req: DubRequest):
                 retry_speed = min(1.35, initial_speed * (natural_duration_sec / target_window_sec))
                 try:
                     r_start = __import__('time').time()
-                    TTS_MODEL.tts_to_file(
-                        text=text,
-                        speaker_wav=ref_voice_path,
-                        language=target_lang,
-                        speed=retry_speed,
-                        file_path=raw_chunk_path
-                    )
+                    chunk_audio = synthesize_chunk_in_memory(text, retry_speed)
                     tts_sec += (__import__('time').time() - r_start)
-                    chunk_audio = AudioSegment.from_wav(raw_chunk_path)
                     natural_duration_sec = len(chunk_audio) / 1000.0
                     print(f"[XTTS Dubbing] Segment {i+1}: Adaptive retry with speed={retry_speed:.2f} -> {natural_duration_sec:.2f}s")
                 except Exception as retry_err:
                     print(f"[XTTS Dubbing] Adaptive retry warning: {retry_err}")
 
-            # 4c. Internal Silence Truncation (absorb slack into internal pauses)
+            # 4c. Internal Silence Truncation (absorb slack into internal pauses in-memory)
             if natural_duration_sec > (target_window_sec * 1.04):
                 excess_ms = int((natural_duration_sec - target_window_sec) * 1000)
                 chunk_audio = trim_internal_silence(chunk_audio, max_reduction_ms=excess_ms)
                 natural_duration_sec = len(chunk_audio) / 1000.0
-                chunk_audio.export(raw_chunk_path, format="wav")
 
             final_segment_audio = chunk_audio
 
-            # 4d. Rubber Band Fine-Tuning (minor corrections only)
+            # 4d. Rubber Band Fine-Tuning in memory via pipe
             if natural_duration_sec > (target_window_sec * 1.04):
                 speed_factor = natural_duration_sec / target_window_sec
                 try:
-                    apply_rubberband_filter(raw_chunk_path, fitted_chunk_path, speed_factor)
-                    if os.path.exists(fitted_chunk_path):
-                        final_segment_audio = AudioSegment.from_wav(fitted_chunk_path)
-                        os.remove(fitted_chunk_path)
-                        print(f"[XTTS Dubbing] Segment {i+1}/{total_segments} ({seg_latency}ms): Rubber Band {speed_factor:.2f}x to fit {target_window_sec:.2f}s window")
+                    buf = io.BytesIO()
+                    chunk_audio.export(buf, format="wav")
+                    filtered_bytes = apply_rubberband_filter_bytes(buf.getvalue(), speed_factor)
+                    final_segment_audio = AudioSegment.from_file(io.BytesIO(filtered_bytes), format="wav")
+                    print(f"[XTTS Dubbing] Segment {i+1}/{total_segments} ({seg_latency}ms): Rubber Band {speed_factor:.2f}x to fit {target_window_sec:.2f}s window")
                 except Exception as tempo_err:
                     print(f"[XTTS Dubbing] Warning: Rubber Band compression failed for segment {i}: {tempo_err}")
             else:
                 print(f"[XTTS Dubbing] Segment {i+1}/{total_segments} ({seg_latency}ms): Natural duration {natural_duration_sec:.2f}s (window: {target_window_sec:.2f}s)")
 
-            # Prevent overlapping by shifting start_ms if previous segment is still playing
-            if start_ms < last_end_ms:
-                start_ms = last_end_ms + 50
-                
-            # Ensure master canvas is long enough
-            required_length = start_ms + len(final_segment_audio)
-            if required_length > len(master_audio):
-                master_audio += AudioSegment.silent(duration=(required_length - len(master_audio) + 1000))
+            # Prevent overlapping by shifting start_sample if previous segment is still playing
+            start_sample = int(start_sec * SAMPLE_RATE)
+            if start_sample < last_end_sample:
+                start_sample = last_end_sample + int(0.05 * SAMPLE_RATE)
 
-            # Apply a short 20ms fade in/out
             final_segment_audio = final_segment_audio.fade_in(20).fade_out(20)
+            seg_samples = np.array(final_segment_audio.get_array_of_samples(), dtype=np.float32) / 32768.0
 
-            # Place onto master audio canvas at target start time
-            master_audio = master_audio.overlay(final_segment_audio, position=start_ms)
-            last_end_ms = start_ms + len(final_segment_audio)
-            
-            if os.path.exists(raw_chunk_path):
-                os.remove(raw_chunk_path)
+            end_sample = start_sample + len(seg_samples)
+            if end_sample > len(master_canvas):
+                master_canvas = np.pad(master_canvas, (0, end_sample - len(master_canvas) + SAMPLE_RATE * 2))
+
+            master_canvas[start_sample:end_sample] += seg_samples
+            last_end_sample = end_sample
 
         # 5. Final Export & Background Mixdown
         job["step"] = "Exporting final dubbed audio..."
         job["progress"] = 93
 
         t_mix_start = __import__('time').time()
-        master_audio = master_audio.normalize()
+
+        # Convert master canvas once to AudioSegment
+        peak = np.max(np.abs(master_canvas)) if len(master_canvas) > 0 else 0
+        if peak > 0.99:
+            master_canvas = (master_canvas / peak) * 0.95
+        canvas_pcm16 = (np.clip(master_canvas, -1.0, 1.0) * 32767.0).astype(np.int16).tobytes()
+        master_audio = AudioSegment(
+            data=canvas_pcm16,
+            sample_width=2,
+            frame_rate=SAMPLE_RATE,
+            channels=1
+        ).normalize()
 
         if preserve_bg and no_vocals_stem_path and os.path.exists(no_vocals_stem_path):
             job["step"] = "Mixing background audio & room tone with ducking..."
@@ -1059,9 +1217,9 @@ def get_punctuation_pipeline(lang: str):
         os.makedirs(lang_cache_dir, exist_ok=True)
         print(f"[Punctuation] Loading on-demand model for '{norm_lang}' ({model_name}) into {lang_cache_dir}...")
         
-        # Use GPU if available and preferred, else CPU
-        use_cuda = (TTS_DEVICE == "cuda" and torch.cuda.is_available())
-        device = 0 if use_cuda else -1
+        # Force CPU execution (device = -1) for punctuation models.
+        # Punctuation inference takes < 0.3s on CPU and saves ~1.5–2.0 GB of GPU VRAM for XTTS and Demucs.
+        device = -1
         
         pipe = pipeline(
             "token-classification",

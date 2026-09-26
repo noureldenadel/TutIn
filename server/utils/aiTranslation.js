@@ -30,6 +30,12 @@ const DIALECT_PROMPTS = {
     'ar-eg': `You are an expert translator specializing in spoken Egyptian Arabic (العامية المصرية) and text-to-speech phonetic adaptation.
 Translate the input into authentic spoken Egyptian Arabic dialect — NOT formal Modern Standard Arabic (MSA). Use colloquial vocabulary, contractions, and everyday phrasing that a native Egyptian speaker would use in casual conversation.
 
+CRITICAL ANTI-HALLUCINATION RULES:
+1. Translate ONLY what is explicitly present in the input text. NEVER add extra facts, explanations, or conclusions not found in the input.
+2. DO NOT complete unfinished thoughts or trail-off sentences. If the input is incomplete, translate only the incomplete fragment.
+3. DO NOT add conversational filler, transitions, or greetings (e.g. do NOT insert "يا جماعة", "زي ما انتو شايفين", "خلونا نشوف", "أهلاً بيكم") unless equivalent words are in the input.
+4. If the input consists solely of non-speech markers (e.g. music notes, laughter, applause, silence, or noise), return empty strings: {"caption": "", "tts": ""}.
+
 You MUST output a strict JSON object with EXACTLY two fields:
 {
   "caption": "Natural, conversational Egyptian Arabic text in standard readable spelling. DO NOT include diacritics/tashkeel. Use standard everyday written spelling (e.g. use 'دلوقتي', 'قلتله', 'كده', 'علشان').",
@@ -41,6 +47,12 @@ Do NOT wrap in markdown code blocks. Output ONLY the raw JSON object.`,
     'ar-sa': `You are an expert translator specializing in spoken Gulf/Saudi Arabic (اللهجة الخليجية) and text-to-speech phonetic adaptation.
 Translate the input into natural, conversational Gulf/Saudi Arabic dialect — NOT formal Modern Standard Arabic (MSA). Use colloquial Gulf vocabulary and everyday phrasing that a native Saudi or Gulf speaker would use in casual conversation.
 
+CRITICAL ANTI-HALLUCINATION RULES:
+1. Translate ONLY what is explicitly present in the input text. NEVER add extra facts, explanations, or conclusions not found in the input.
+2. DO NOT complete unfinished thoughts or trail-off sentences. If the input is incomplete, translate only the incomplete fragment.
+3. DO NOT add conversational filler, transitions, or greetings (e.g. do NOT insert "يا شباب", "طال عمرك", "زي ما تشوفون", "هلا والله") unless equivalent words are in the input.
+4. If the input consists solely of non-speech markers (e.g. music notes, laughter, applause, silence, or noise), return empty strings: {"caption": "", "tts": ""}.
+
 You MUST output a strict JSON object with EXACTLY two fields:
 {
   "caption": "Natural, conversational Gulf Arabic text in standard readable spelling. DO NOT include diacritics/tashkeel. Use standard everyday written spelling (e.g. use 'الحين', 'قلت له', 'شلونك', 'عشان').",
@@ -48,6 +60,42 @@ You MUST output a strict JSON object with EXACTLY two fields:
 }
 
 Do NOT wrap in markdown code blocks. Output ONLY the raw JSON object.`
+}
+
+const WHISPER_HALLUCINATION_REGEX = /^\s*(?:thank\s+you\s+for\s+watching|thanks\s+for\s+watching|please\s+like\s+and\s+subscribe|please\s+subscribe|like\s+and\s+subscribe|don'?t\s+forget\s+to\s+subscribe|subscribe\s+to\s+my\s+channel|see\s+you\s+in\s+the\s+next\s+video|subtitles?\s+by\b|transcribed\s+by\b)[.!]?\s*$/i
+
+/**
+ * Detects whether a subtitle cue is a non-speech sound descriptor, music, applause, or whitespace.
+ */
+export function isNonSpeechText(text) {
+    if (!text || typeof text !== 'string') return true
+    const trimmed = text.trim()
+    if (!trimmed) return true
+    if (WHISPER_HALLUCINATION_REGEX.test(trimmed)) return true
+    const stripped = trimmed
+        .replace(/<[^>]+>/g, '') // HTML tags
+        .replace(/\[[^\]]*\]/g, '') // [Music], [Applause], [laughter]
+        .replace(/\([^)]*\)/g, '') // (Music), (Applause), (laughter)
+        .replace(/[♪♫#*]+/g, '') // Music notes and symbols
+        .replace(/[\s.\-_–—…,:;!?]+/g, '') // Ellipses, dashes, punctuation
+        .trim()
+    return stripped.length === 0
+}
+
+/**
+ * Sanitizes subtitle text before sentence stitching and translation,
+ * stripping bracketed sound markers and music notes while preserving spoken words.
+ */
+export function sanitizeCueText(text) {
+    if (!text || typeof text !== 'string') return ''
+    let cleaned = text
+        .replace(/<[^>]+>/g, '') // HTML tags
+        .replace(/\[(?:music|applause|laughter|silence|cheering|cough|sigh|sound|audio|intro|outro|instrumental)[^\]]*\]/gi, '')
+        .replace(/\((?:music|applause|laughter|silence|cheering|cough|sigh|sound|audio|intro|outro|instrumental)[^)]*\)/gi, '')
+        .replace(/[♪♫]+/g, '')
+        .replace(/\s+/g, ' ')
+        .trim()
+    return cleaned
 }
 
 export const EGYPTIAN_PHONETIC_GLOSSARY = [
@@ -134,6 +182,9 @@ function getOpenRouterKey() {
 }
 
 async function translateOneWithOpenRouter(text, dialect, apiKey) {
+    if (isNonSpeechText(text)) {
+        return { caption: '', tts: '' }
+    }
     const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
         method: 'POST',
         headers: {
@@ -218,18 +269,39 @@ export function stitchCuesIntoSentences(chunks) {
 
     for (let i = 0; i < chunks.length; i++) {
         const c = chunks[i]
-        const text = (c.text || '').trim()
-        if (!text) continue
+        const rawText = (c.text || '').trim()
+        if (!rawText) continue
 
         const start = Array.isArray(c.timestamp) ? Number(c.timestamp[0]) : Number(c.start ?? 0)
         const end = Array.isArray(c.timestamp) ? Number(c.timestamp[1]) : Number(c.end ?? (start + 2))
+
+        const isNonSpeech = isNonSpeechText(rawText)
+        const sanitized = sanitizeCueText(rawText)
+
+        // Non-speech cues (e.g. [Music], ♪) must NOT merge with speech
+        if (isNonSpeech || !sanitized) {
+            if (current) {
+                sentences.push(current)
+                current = null
+            }
+            // Add as a standalone non-speech sentence that produces empty translation
+            sentences.push({
+                start,
+                end,
+                timestamp: [start, end],
+                text: '',
+                isNonSpeech: true,
+                cues: [{ index: i, start, end, timestamp: [start, end], text: rawText, isNonSpeech: true }]
+            })
+            continue
+        }
 
         const cueObj = {
             index: i,
             start,
             end,
             timestamp: [start, end],
-            text
+            text: sanitized
         }
 
         if (!current) {
@@ -237,17 +309,17 @@ export function stitchCuesIntoSentences(chunks) {
                 start,
                 end,
                 timestamp: [start, end],
-                text,
+                text: sanitized,
                 cues: [cueObj]
             }
         } else {
             const gap = start - current.end
             const isTerm = termRegex.test(current.text) && !abbrevRegex.test(current.text)
-            const isLong = (end - current.start) >= 7.5 || current.text.length >= 180
-            const isGap = gap >= 0.55
-            // Discourse transition word at cue boundary (e.g. Next, However, Furthermore, First, Then)
+            const isLong = (end - current.start) >= 7.0 || current.text.length >= 160
+            const isGap = gap >= 0.40 // 400ms is an audible acoustic pause
+            // Discourse transition word at cue boundary
             const transitionRegex = /^(Next|However|Furthermore|Meanwhile|Finally|First|Second|Third|Moreover|Therefore|In addition|Now|Then|So)\b/i
-            const isTransition = transitionRegex.test(text) && current.text.split(/\s+/).length >= 6
+            const isTransition = transitionRegex.test(sanitized) && current.text.split(/\s+/).length >= 6
 
             if (isTerm || isGap || isLong || isTransition) {
                 sentences.push(current)
@@ -255,13 +327,13 @@ export function stitchCuesIntoSentences(chunks) {
                     start,
                     end,
                     timestamp: [start, end],
-                    text,
+                    text: sanitized,
                     cues: [cueObj]
                 }
             } else {
                 current.end = end
                 current.timestamp = [current.start, end]
-                current.text = current.text + ' ' + text
+                current.text = current.text + ' ' + sanitized
                 current.cues.push(cueObj)
             }
         }
@@ -273,11 +345,20 @@ export function stitchCuesIntoSentences(chunks) {
 /**
  * Re-slices a translated sentence across the original cue timestamp windows
  * based on relative character/word weights, preserving exact timing synchronization.
+ * Pure non-speech and silence cues receive empty strings instead of hallucinated words.
  */
 export function sliceTranslatedSentenceToCues(translatedText, originalCues) {
     if (!originalCues || originalCues.length === 0) return []
     const cleanText = (translatedText || '').trim()
     if (originalCues.length === 1) {
+        if (isNonSpeechText(originalCues[0].text)) {
+            return [{
+                timestamp: originalCues[0].timestamp,
+                start: originalCues[0].start,
+                end: originalCues[0].end,
+                text: ''
+            }]
+        }
         return [{
             timestamp: originalCues[0].timestamp,
             start: originalCues[0].start,
@@ -296,39 +377,75 @@ export function sliceTranslatedSentenceToCues(translatedText, originalCues) {
         }))
     }
 
-    const totalWeight = originalCues.reduce((sum, c) => sum + Math.max(1, (c.text || '').length), 0)
-    const result = []
+    // Compute weights based ONLY on cues that actually had spoken dialogue
+    const cueSpeechWeights = originalCues.map(c => {
+        if (c.isNonSpeech || isNonSpeechText(c.text)) return 0
+        const speechOnly = sanitizeCueText(c.text).replace(/[\s\p{P}\p{S}]+/gu, '')
+        return Math.max(1, speechOnly.length)
+    })
+    const totalWeight = cueSpeechWeights.reduce((sum, w) => sum + w, 0)
+
+    // If no cues had real speech, return empty text for all
+    if (totalWeight === 0) {
+        return originalCues.map(c => ({
+            timestamp: c.timestamp,
+            start: c.start,
+            end: c.end,
+            text: ''
+        }))
+    }
+
+    // Identify which cues actually carry speech
+    const speechIndices = []
+    for (let i = 0; i < originalCues.length; i++) {
+        if (cueSpeechWeights[i] > 0) speechIndices.push(i)
+    }
+
+    const result = new Array(originalCues.length)
     let wordCursor = 0
 
-    for (let i = 0; i < originalCues.length; i++) {
-        const cue = originalCues[i]
-        const isLast = (i === originalCues.length - 1)
+    for (let si = 0; si < speechIndices.length; si++) {
+        const idx = speechIndices[si]
+        const cue = originalCues[idx]
+        const isLastSpeechCue = (si === speechIndices.length - 1)
 
-        if (isLast) {
+        if (isLastSpeechCue) {
             const remainingWords = words.slice(wordCursor).join(' ')
-            result.push({
+            result[idx] = {
                 timestamp: cue.timestamp,
                 start: cue.start,
                 end: cue.end,
                 text: remainingWords
-            })
+            }
         } else {
-            const cueWeight = Math.max(1, (cue.text || '').length)
+            const cueWeight = cueSpeechWeights[idx]
             const targetWordCount = Math.max(1, Math.round((cueWeight / totalWeight) * words.length))
             let sliceEnd = wordCursor + targetWordCount
-            const remainingCues = originalCues.length - 1 - i
-            if (words.length - sliceEnd < remainingCues && words.length >= originalCues.length) {
-                sliceEnd = words.length - remainingCues
+            const remainingSpeechCues = speechIndices.length - 1 - si
+            if (words.length - sliceEnd < remainingSpeechCues && words.length >= speechIndices.length) {
+                sliceEnd = words.length - remainingSpeechCues
             }
             sliceEnd = Math.max(wordCursor, Math.min(words.length, sliceEnd))
             const cueWords = words.slice(wordCursor, sliceEnd).join(' ')
             wordCursor = sliceEnd
-            result.push({
+            result[idx] = {
                 timestamp: cue.timestamp,
                 start: cue.start,
                 end: cue.end,
                 text: cueWords
-            })
+            }
+        }
+    }
+
+    // Any cues with 0 speech weight (silence, music, brackets) remain strictly empty!
+    for (let i = 0; i < originalCues.length; i++) {
+        if (!result[i]) {
+            result[i] = {
+                timestamp: originalCues[i].timestamp,
+                start: originalCues[i].start,
+                end: originalCues[i].end,
+                text: ''
+            }
         }
     }
 
@@ -346,15 +463,53 @@ async function translateChunksOpenRouter(chunks, targetLanguage, onProgress, req
     const ttsSentences = []
     const startTime = Date.now()
 
-    console.log(`[OpenRouter] Translating ${total} stitched sentences (${chunks.length} cues) to ${dialectLabel} via GPT-4o-mini (Dual-Transcript)`)
+    console.log(`[OpenRouter] Translating ${total} stitched sentences (${chunks.length} cues) to ${dialectLabel} via GPT-4o-mini (Dual-Transcript, 4x Concurrency)`)
     onProgress?.({ step: 'loading', message: `Connecting to OpenRouter for ${dialectLabel}...`, percent: 0 })
 
-    for (let i = 0; i < total; i++) {
+    const CONCURRENCY = 4
+    let completedCount = 0
+    const results = new Array(total)
+
+    async function translateWorker(index) {
         if (req?.socket?.destroyed) throw new Error('Translation cancelled by client')
-        onProgress?.({ step: 'translating', message: `Translating sentence ${i + 1} of ${total} (${dialectLabel})...`, batch: i + 1, of: total, percent: Math.round((i / total) * 100) })
-        const pair = await translateOneWithOpenRouter(stitchedSentences[i].text, targetLanguage, apiKey)
-        captionSentences.push(pair.caption)
-        ttsSentences.push(pair.tts)
+        const sent = stitchedSentences[index]
+        if (sent.isNonSpeech || isNonSpeechText(sent.text)) {
+            results[index] = { caption: '', tts: '' }
+        } else {
+            const pair = await translateOneWithOpenRouter(sent.text, targetLanguage, apiKey)
+            results[index] = pair
+        }
+        completedCount++
+        const pct = Math.round((completedCount / total) * 100)
+        onProgress?.({
+            step: 'translating',
+            message: `Translating sentence ${completedCount} of ${total} (${dialectLabel})...`,
+            batch: completedCount,
+            of: total,
+            percent: pct
+        })
+    }
+
+    let nextIndex = 0
+    async function runWorkerLoop() {
+        while (nextIndex < total) {
+            if (req?.socket?.destroyed) throw new Error('Translation cancelled by client')
+            const idx = nextIndex++
+            await translateWorker(idx)
+        }
+    }
+
+    const workerPool = Array.from({ length: Math.min(CONCURRENCY, total) }, () => runWorkerLoop())
+    await Promise.all(workerPool)
+
+    for (let i = 0; i < total; i++) {
+        if (results[i]) {
+            captionSentences.push(results[i].caption || '')
+            ttsSentences.push(results[i].tts || '')
+        } else {
+            captionSentences.push('')
+            ttsSentences.push('')
+        }
     }
 
     // Re-slice caption sentences back into original cue windows for player subtitles
@@ -365,13 +520,14 @@ async function translateChunksOpenRouter(chunks, targetLanguage, onProgress, req
     }
 
     // Attach companion phonetic TTS segments (sentence-level timing + phonetically nudged text)
+    // Filter out non-speech/silent segments so dubbing never synthesizes speech over silence
     const ttsSegments = stitchedSentences.map((s, idx) => ({
         start: s.start,
         end: s.end,
         timestamp: [s.start, s.end],
-        caption: captionSentences[idx],
-        text: ttsSentences[idx]
-    }))
+        caption: captionSentences[idx] || '',
+        text: ttsSentences[idx] || ''
+    })).filter(seg => seg.text && seg.text.trim())
 
     translatedChunks.ttsSegments = ttsSegments
 
@@ -380,8 +536,40 @@ async function translateChunksOpenRouter(chunks, targetLanguage, onProgress, req
     return translatedChunks
 }
 
-async function translateChunksNLLB(chunks, targetLanguage, onProgress, req, sourceLanguage) {
+let cachedNllbTranslator = null
+let nllbLoadingPromise = null
+
+async function getCachedNLLBTranslator(onProgress) {
+    if (cachedNllbTranslator) {
+        onProgress?.({ step: 'loading', message: 'Using loaded NLLB-200 model...', percent: 100 })
+        return cachedNllbTranslator
+    }
+    if (nllbLoadingPromise) {
+        return nllbLoadingPromise
+    }
+
     const modelId = 'Xenova/nllb-200-distilled-600M'
+    nllbLoadingPromise = pipeline('translation', modelId, {
+        progress_callback: (p) => {
+            if (p.status === 'progress' || p.status === 'downloading') {
+                onProgress?.({ step: 'downloading', message: `Downloading model... (${Math.round(p.progress)}%)`, percent: p.progress })
+            } else if (p.status === 'ready') {
+                onProgress?.({ step: 'loading', message: 'Model loaded. Preparing...', percent: 100 })
+            }
+        }
+    }).then(instance => {
+        cachedNllbTranslator = instance
+        nllbLoadingPromise = null
+        return instance
+    }).catch(err => {
+        nllbLoadingPromise = null
+        throw err
+    })
+
+    return nllbLoadingPromise
+}
+
+async function translateChunksNLLB(chunks, targetLanguage, onProgress, req, sourceLanguage) {
     const tgt_lang = NLLB_LANG_MAP[targetLanguage]
     const src_lang = NLLB_LANG_MAP[sourceLanguage] || 'eng_Latn'
     if (!tgt_lang) throw new Error(`Unsupported language code: ${targetLanguage}`)
@@ -393,15 +581,7 @@ async function translateChunksNLLB(chunks, targetLanguage, onProgress, req, sour
 
     let translator
     try {
-        translator = await pipeline('translation', modelId, {
-            progress_callback: (p) => {
-                if (p.status === 'progress' || p.status === 'downloading') {
-                    onProgress?.({ step: 'downloading', message: `Downloading model... (${Math.round(p.progress)}%)`, percent: p.progress })
-                } else if (p.status === 'ready') {
-                    onProgress?.({ step: 'loading', message: 'Model loaded. Preparing...', percent: 100 })
-                }
-            }
-        })
+        translator = await getCachedNLLBTranslator(onProgress)
     } catch (err) {
         throw new Error(`Failed to load NLLB-200 for '${targetLanguage}': ${err.message}`)
     }
@@ -417,11 +597,26 @@ async function translateChunksNLLB(chunks, targetLanguage, onProgress, req, sour
         onProgress?.({ step: 'translating', message: `Translating batch ${batchNum} of ${totalBatches}...`, batch: batchNum, of: totalBatches, percent: Math.round(((batchNum - 1) / totalBatches) * 100) })
 
         try {
-            const output = await translator(batch.map(c => c.text), { src_lang, tgt_lang })
-            for (let j = 0; j < batch.length; j++) {
-                const text = Array.isArray(output[j]) ? output[j][0].translation_text : output[j].translation_text
-                translatedSentences.push(text)
+            const textsToTranslate = batch.map(c => (c.isNonSpeech || isNonSpeechText(c.text)) ? '' : c.text)
+            const validIndices = []
+            const validTexts = []
+            for (let j = 0; j < textsToTranslate.length; j++) {
+                if (textsToTranslate[j]) {
+                    validIndices.push(j)
+                    validTexts.push(textsToTranslate[j])
+                }
             }
+
+            const batchResults = new Array(textsToTranslate.length).fill('')
+            if (validTexts.length > 0) {
+                const output = await translator(validTexts, { src_lang, tgt_lang })
+                for (let k = 0; k < validTexts.length; k++) {
+                    const text = Array.isArray(output[k]) ? output[k][0].translation_text : output[k].translation_text
+                    batchResults[validIndices[k]] = text || ''
+                }
+            }
+
+            translatedSentences.push(...batchResults)
         } catch (err) {
             throw new Error(`NLLB-200 crashed on batch ${batchNum}: ${err.message}`)
         }
@@ -434,14 +629,14 @@ async function translateChunksNLLB(chunks, targetLanguage, onProgress, req, sour
         translatedChunks.push(...sliced)
     }
 
-    // Standard language ttsSegments
+    // Standard language ttsSegments (filter out empty/silent segments)
     translatedChunks.ttsSegments = stitchedSentences.map((s, idx) => ({
         start: s.start,
         end: s.end,
         timestamp: [s.start, s.end],
-        caption: translatedSentences[idx],
-        text: translatedSentences[idx]
-    }))
+        caption: translatedSentences[idx] || '',
+        text: translatedSentences[idx] || ''
+    })).filter(seg => seg.text && seg.text.trim())
 
     console.log(`[NLLB-200] Done in ${((Date.now() - startTime) / 1000).toFixed(2)}s: ${translatedChunks.length} chunks`)
     onProgress?.({ step: 'done', message: 'Translation complete!', batch: totalBatches, of: totalBatches, percent: 100, lang: targetLanguage, chunkCount: translatedChunks.length })

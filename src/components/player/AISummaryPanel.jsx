@@ -33,7 +33,7 @@ function getChunkStart(c) {
     return 0
 }
 
-function AISummaryPanel({ video, courseId, course, onSeek, onVideoDataChange, currentTime = 0 }) {
+function AISummaryPanel({ video, courseId, course, onSeek, onVideoDataChange }) {
     const { settings, updateSettings } = useSettings()
     const [transcript, setTranscript] = useState(null)
     const [summary, setSummary] = useState(null)

@@ -75,6 +75,7 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
     const currentTimeRef = useRef(currentTime)
     const durationRef = useRef(duration)
     const isPlayingRef = useRef(isPlaying)
+    const lastParentTimeUpdateRef = useRef(0)
     useEffect(() => { currentTimeRef.current = currentTime }, [currentTime])
     useEffect(() => { durationRef.current = duration }, [duration])
     useEffect(() => { isPlayingRef.current = isPlaying }, [isPlaying])
@@ -522,8 +523,14 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
 
     function handleTimeUpdate() {
         if (videoRef.current) {
-            setCurrentTime(videoRef.current.currentTime)
-            onTimeUpdate?.(videoRef.current.currentTime)
+            const vTime = videoRef.current.currentTime
+            setCurrentTime(vTime)
+
+            const now = performance.now()
+            if (now - lastParentTimeUpdateRef.current >= 1000) {
+                lastParentTimeUpdateRef.current = now
+                onTimeUpdate?.(vTime)
+            }
             
             // Sync dub audio with smooth rate-nudging drift correction (prevents audio pops/clicks)
             if (selectedDubLang !== 'none' && dubAudioRef.current) {
@@ -876,6 +883,8 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
             dubAudioRef.current.currentTime = newTime
         }
         setCurrentTime(newTime)
+        lastParentTimeUpdateRef.current = performance.now()
+        onTimeUpdate?.(newTime)
     }
 
     function handleVolumeChange(e) {

@@ -30,36 +30,124 @@ export function needsPunctuationRestoration(chunks) {
     return density < 0.04
 }
 
+const WHISPER_HALLUCINATION_REGEX = /^\s*(?:thank\s+you\s+for\s+watching|thanks\s+for\s+watching|please\s+like\s+and\s+subscribe|please\s+subscribe|like\s+and\s+subscribe|don'?t\s+forget\s+to\s+subscribe|subscribe\s+to\s+my\s+channel|see\s+you\s+in\s+the\s+next\s+video|subtitles?\s+by\b|transcribed\s+by\b)[.!]?\s*$/i
+
+/**
+ * Detects whether a subtitle cue represents non-speech, music, noise, or silence hallucinations.
+ */
+export function isNonSpeechText(text) {
+    if (!text || typeof text !== 'string') return true
+    const trimmed = text.trim()
+    if (!trimmed) return true
+    if (WHISPER_HALLUCINATION_REGEX.test(trimmed)) return true
+    const stripped = trimmed
+        .replace(/<[^>]+>/g, '')
+        .replace(/\[[^\]]*\]/g, '')
+        .replace(/\([^)]*\)/g, '')
+        .replace(/[♪♫#*]+/g, '')
+        .replace(/[\s.\-_–—…,:;!?]+/g, '')
+        .trim()
+    return stripped.length === 0
+}
+
+/**
+ * Strips markdown code blocks, conversational LLM intros, and trailing conversational notes.
+ */
+export function cleanPunctuatedResponse(raw) {
+    if (!raw || typeof raw !== 'string') return ''
+    let text = raw.trim()
+
+    // 1. Strip markdown code blocks
+    text = text.replace(/^```[a-zA-Z]*\s*\n([\s\S]*?)\n```$/g, '$1')
+    text = text.replace(/```[a-zA-Z]*\n?/g, '').replace(/```/g, '')
+
+    // 2. Strip leading conversational preambles
+    text = text.replace(/^(?:here(?:\s+is|'s)\s+(?:the\s+)?(?:punctuated|restored|corrected|edited)?\s*(?:text|transcript|subtitles?|captions?)[^:\n]*:?\s*)/i, '')
+    text = text.replace(/^(?:sure|certainly|of course|here you go)[^:\n]*:?\s*/i, '')
+    text = text.replace(/^(?:note|explanation)[^:\n]*:?\s*/i, '')
+
+    // 3. Strip trailing conversational sign-offs
+    text = text.replace(/\n+(?:hope this helps|let me know if you need|let me know if|feel free to ask)[^.\n]*[.!]?\s*$/i, '')
+
+    return text.trim()
+}
+
 /**
  * Re-maps a continuous stream of punctuated words back to the original subtitle cues,
  * strictly preserving each cue's exact millisecond [start, end] timestamps.
+ * Uses normalized lookahead alignment to prevent word-shift drift and never dumps unconsumed
+ * trailing words onto the final cue.
  */
 export function remapPunctuatedTextToCues(originalChunks, punctuatedText) {
     if (!originalChunks || originalChunks.length === 0) return []
     if (!punctuatedText || !punctuatedText.trim()) return originalChunks
 
-    const normalizedPunctText = punctuatedText.replace(/\s+([.,?!؟،:;!])/gu, '$1')
+    const cleanedText = cleanPunctuatedResponse(punctuatedText)
+    const normalizedPunctText = cleanedText.replace(/\s+([.,?!؟،:;!])/gu, '$1')
     const punctWords = normalizedPunctText.trim().split(/\s+/).filter(Boolean)
     if (punctWords.length === 0) return originalChunks
+
+    const norm = (w) => (w || '').toLowerCase().replace(/[\p{P}\p{S}]/gu, '')
 
     let punctIdx = 0
     const remapped = []
 
     for (let c = 0; c < originalChunks.length; c++) {
         const chunk = originalChunks[c]
-        const origWords = (chunk.text || '').trim().split(/\s+/).filter(Boolean)
-        
+        const rawText = (chunk.text || '').trim()
+
+        // Non-speech or empty cues remain empty and must not consume spoken words
+        if (!rawText || isNonSpeechText(rawText)) {
+            remapped.push({ ...chunk, text: rawText && isNonSpeechText(rawText) ? '' : rawText })
+            continue
+        }
+
+        const origWords = rawText.split(/\s+/).filter(Boolean)
         if (origWords.length === 0) {
-            remapped.push({ ...chunk })
+            remapped.push({ ...chunk, text: '' })
             continue
         }
 
         const assignedWords = []
         for (let w = 0; w < origWords.length; w++) {
-            if (punctIdx < punctWords.length) {
+            const origNorm = norm(origWords[w])
+
+            if (punctIdx >= punctWords.length) {
+                // Punctuated words stream exhausted: retain original word safely
+                assignedWords.push(origWords[w])
+                continue
+            }
+
+            const currPunctNorm = norm(punctWords[punctIdx])
+
+            if (currPunctNorm === origNorm || !origNorm) {
+                // Normal alignment: direct match
                 assignedWords.push(punctWords[punctIdx++])
             } else {
-                assignedWords.push(origWords[w])
+                // Word count/token divergence: lookahead up to 4 tokens in punctWords to re-synchronize
+                let matchOffset = -1
+                for (let k = 1; k <= 4 && (punctIdx + k) < punctWords.length; k++) {
+                    if (norm(punctWords[punctIdx + k]) === origNorm) {
+                        matchOffset = k
+                        break
+                    }
+                }
+
+                if (matchOffset !== -1) {
+                    // LLM inserted extra punctuation/words; jump punctIdx forward to match
+                    punctIdx += matchOffset
+                    assignedWords.push(punctWords[punctIdx++])
+                } else {
+                    // Check if LLM dropped the current original word
+                    const nextOrigNorm = (w + 1 < origWords.length) ? norm(origWords[w + 1]) : null
+                    if (nextOrigNorm && nextOrigNorm === currPunctNorm) {
+                        // Current original word was omitted in punctuation output; preserve original word without consuming punctIdx
+                        assignedWords.push(origWords[w])
+                    } else {
+                        // Fallback: take punctuated word and advance
+                        assignedWords.push(punctWords[punctIdx++])
+                    }
+                }
             }
         }
 
@@ -69,10 +157,8 @@ export function remapPunctuatedTextToCues(originalChunks, punctuatedText) {
         })
     }
 
-    // If any trailing punctuated words remain, append them to the last chunk
-    if (punctIdx < punctWords.length && remapped.length > 0) {
-        const remaining = punctWords.slice(punctIdx).join(' ')
-        remapped[remapped.length - 1].text += ' ' + remaining
+    if (punctIdx < punctWords.length) {
+        console.log(`[Punctuation] Dropped ${punctWords.length - punctIdx} trailing unaligned tokens to prevent outro speech hallucination.`)
     }
 
     return remapped
@@ -168,7 +254,12 @@ export function restorePunctuationHeuristic(chunks, lang = 'en') {
  */
 export async function restorePunctuationWithOpenRouter(chunks, lang = 'en', apiKey) {
     if (!chunks || chunks.length === 0) return []
-    const fullText = chunks.map(c => c.text || '').join(' ')
+    const fullText = chunks
+        .map(c => (c.text || '').trim())
+        .filter(t => t && !isNonSpeechText(t))
+        .join(' ')
+
+    if (!fullText.trim()) return chunks
 
     const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
         method: 'POST',
@@ -188,7 +279,7 @@ CRITICAL RULES:
 1. DO NOT change, delete, add, or reorder any words.
 2. The number and order of words in your output MUST match the input exactly.
 3. Only insert punctuation marks and fix casing.
-4. Output ONLY the punctuated text with no introductory text or markdown formatting.`
+4. Output raw plain text ONLY. Never include markdown code fences, headers, conversational intros, or closing sign-offs.`
                 },
                 {
                     role: 'user',
@@ -216,7 +307,12 @@ CRITICAL RULES:
  */
 export async function restorePunctuationWithEngine(chunks, lang = 'en') {
     if (!chunks || chunks.length === 0) return []
-    const fullText = chunks.map(c => c.text || '').join(' ')
+    const fullText = chunks
+        .map(c => (c.text || '').trim())
+        .filter(t => t && !isNonSpeechText(t))
+        .join(' ')
+
+    if (!fullText.trim()) return chunks
 
     const res = await fetch(`${PYTHON_DUBBING_SERVER_URL}/punctuate`, {
         method: 'POST',

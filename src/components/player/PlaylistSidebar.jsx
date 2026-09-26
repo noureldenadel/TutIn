@@ -429,34 +429,37 @@ function PlaylistSidebar({
                     </div>
 
                     {/* Notes Tab */}
-                    <div className={`flex-1 overflow-hidden flex-col ${activeTab === 'notes' ? 'flex' : 'hidden'}`}>
-                        <div className="h-full overflow-y-auto">
-                            <NotesPanel
-                                video={currentVideo}
-                                courseId={courseId}
-                                currentTime={currentTime}
-                                onSeek={onSeek}
-                                onCaptureFrame={onCaptureFrame}
-                                onPlay={onPlay}
-                                onPause={onPause}
-                                getPlaybackState={getPlaybackState}
-                            />
+                    {activeTab === 'notes' && (
+                        <div className="flex-1 overflow-hidden flex flex-col">
+                            <div className="h-full overflow-y-auto">
+                                <NotesPanel
+                                    video={currentVideo}
+                                    courseId={courseId}
+                                    currentTime={currentTime}
+                                    onSeek={onSeek}
+                                    onCaptureFrame={onCaptureFrame}
+                                    onPlay={onPlay}
+                                    onPause={onPause}
+                                    getPlaybackState={getPlaybackState}
+                                />
+                            </div>
                         </div>
-                    </div>
+                    )}
 
                     {/* AI Tab */}
-                    <div className={`flex-1 overflow-hidden flex-col ${activeTab === 'ai' ? 'flex' : 'hidden'}`}>
-                        <div className="h-full overflow-y-auto">
-                            <AISummaryPanel
-                                video={currentVideo}
-                                courseId={courseId}
-                                course={course}
-                                onSeek={onSeek}
-                                onVideoDataChange={onVideoDataChange}
-                                currentTime={currentTime}
-                            />
+                    {activeTab === 'ai' && (
+                        <div className="flex-1 overflow-hidden flex flex-col">
+                            <div className="h-full overflow-y-auto">
+                                <AISummaryPanel
+                                    video={currentVideo}
+                                    courseId={courseId}
+                                    course={course}
+                                    onSeek={onSeek}
+                                    onVideoDataChange={onVideoDataChange}
+                                />
+                            </div>
                         </div>
-                    </div>
+                    )}
                 </div>
             </div>
 

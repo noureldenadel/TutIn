@@ -84,15 +84,27 @@ assert.strictEqual(sliced[4].text, '')
 const joinedWords = sliced.map(c => c.text).filter(Boolean)
 assert.strictEqual(joinedWords.length, 2, 'Words must not be duplicated across cues')
 
-console.log('--- 7. Testing remapPunctuatedTextToCues spacing normalization ---')
+console.log('--- 7. Testing remapPunctuatedTextToCues spacing normalization & anti-hallucination ---')
 const { remapPunctuatedTextToCues } = await import('../../server/utils/punctuationService.js')
 const punctCues = [
     { start: 0, end: 1, timestamp: [0, 1], text: 'Hello' },
     { start: 1, end: 2, timestamp: [1, 2], text: 'world' }
 ]
-// Input with stray spaces before punctuation
-const remapped = remapPunctuatedTextToCues(punctCues, 'Hello world . How are you ?')
+// Input with stray spaces before punctuation and hallucinated extra trailing words
+const remapped = remapPunctuatedTextToCues(punctCues, 'Here is the punctuated text: Hello world . How are you ?')
 assert.strictEqual(remapped[0].text, 'Hello')
-assert.strictEqual(remapped[1].text, 'world. How are you?')
+// Trailing extra words ('How are you ?') must NOT be dumped onto the last cue
+assert.strictEqual(remapped[1].text, 'world.')
+
+// Test that non-speech cue is preserved and does not steal speech words
+const mixedCues = [
+    { start: 0, end: 1, timestamp: [0, 1], text: '[Music]' },
+    { start: 1, end: 2, timestamp: [1, 2], text: 'Welcome' },
+    { start: 2, end: 3, timestamp: [2, 3], text: 'everyone' }
+]
+const mixedRemapped = remapPunctuatedTextToCues(mixedCues, 'Welcome everyone.')
+assert.strictEqual(mixedRemapped[0].text, '')
+assert.strictEqual(mixedRemapped[1].text, 'Welcome')
+assert.strictEqual(mixedRemapped[2].text, 'everyone.')
 
 console.log('ALL COMPANION PIPELINE AND EDGE-CASE TESTS PASSED SUCCESSFULLY!')

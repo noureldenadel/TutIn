@@ -1,7 +1,10 @@
 import express from 'express'
 import fs from 'fs'
+import path from 'path'
+import { spawn } from 'child_process'
 import { getAll, getOne, run, transaction } from '../database.js'
 import { recalculateCourseProgress } from './courses.js'
+import { getFfmpegPath } from '../utils/ffmpeg.js'
 
 const router = express.Router()
 
@@ -41,6 +44,79 @@ function mapVideoRow(video) {
         dubbedTracks: JSON.parse(video.dubbed_tracks || '[]').filter(t => t.filePath && fs.existsSync(t.filePath))
     }
 }
+
+// GET /api/videos/:id/audio-16k - Stream 16kHz mono WAV for Whisper AI without downloading gigabytes of video
+router.get('/:id/audio-16k', (req, res) => {
+    try {
+        const video = getOne('SELECT * FROM videos WHERE id = ?', [req.params.id])
+        if (!video) return res.status(404).json({ error: 'Video not found' })
+
+        let filePath = video.file_path
+        if (!filePath || !fs.existsSync(filePath)) {
+            if (video.course_id && video.file_name) {
+                const course = getOne('SELECT folder_path FROM courses WHERE id = ?', [video.course_id])
+                if (course && course.folder_path) {
+                    let relMod = ''
+                    if (video.module_id) {
+                        const mod = getOne('SELECT folder_path FROM modules WHERE id = ?', [video.module_id])
+                        if (mod && mod.folder_path) {
+                            relMod = path.relative(course.folder_path, mod.folder_path)
+                        }
+                    }
+                    const candidate = path.join(course.folder_path, relMod, video.file_name)
+                    if (fs.existsSync(candidate)) {
+                        filePath = candidate
+                    }
+                }
+            }
+        }
+
+        if (!filePath || !fs.existsSync(filePath)) {
+            return res.status(404).json({ error: 'Video source file not found on disk' })
+        }
+
+        const ffmpegPath = getFfmpegPath()
+        res.setHeader('Content-Type', 'audio/wav')
+        res.setHeader('Cache-Control', 'no-cache')
+        res.setHeader('Access-Control-Allow-Origin', '*')
+
+        const ffmpegArgs = [
+            '-loglevel', 'error',
+            '-i', filePath,
+            '-vn',
+            '-acodec', 'pcm_s16le',
+            '-ar', '16000',
+            '-ac', '1',
+            '-f', 'wav',
+            'pipe:1'
+        ]
+
+        const proc = spawn(ffmpegPath, ffmpegArgs, { stdio: ['ignore', 'pipe', 'pipe'] })
+
+        proc.stdout.pipe(res)
+
+        proc.stderr.on('data', (data) => {
+            console.error(`[AudioStream 16k] FFmpeg error: ${data.toString()}`)
+        })
+
+        proc.on('error', (err) => {
+            console.error(`[AudioStream 16k] Failed to spawn FFmpeg: ${err.message}`)
+            if (!res.headersSent) res.status(500).json({ error: 'Audio extraction failed' })
+        })
+
+        res.on('close', () => {
+            if (!proc.killed) {
+                try {
+                    proc.kill()
+                } catch {
+                    // Ignored
+                }
+            }
+        })
+    } catch (err) {
+        res.status(500).json({ error: err.message })
+    }
+})
 
 // GET /api/videos/by-course/:courseId
 router.get('/by-course/:courseId', (req, res) => {
@@ -182,10 +258,6 @@ router.put('/:id', (req, res) => {
         params.push(id)
         run(`UPDATE videos SET ${updateFields.join(', ')} WHERE id = ?`, params)
 
-        // If completion status changed, we might need to update the course completion percentage
-        // In a full app, we'd fire an event or recalculate here, but frontend usually handles this
-        // or we can add a specific endpoint for recalculating course progress
-
         res.json({ success: true })
     } catch (err) {
         res.status(500).json({ error: err.message })
@@ -193,6 +265,7 @@ router.put('/:id', (req, res) => {
 })
 
 // PUT /api/videos/:id/progress
+// Optimized: Update video progress without triggering full course recalculation/DB flush on every 5s tick
 router.put('/:id/progress', (req, res) => {
     const { watchProgress, lastWatchedPosition } = req.body
     try {
@@ -201,12 +274,6 @@ router.put('/:id/progress', (req, res) => {
             SET watch_progress = ?, last_watched_position = ?, last_watched_at = ?
             WHERE id = ?
         `, [watchProgress || 0, lastWatchedPosition || 0, new Date().toISOString(), req.params.id])
-        
-        // Recalculate course progress using the user's setting
-        const video = getOne('SELECT course_id FROM videos WHERE id = ?', [req.params.id])
-        if (video) {
-            recalculateCourseProgress(video.course_id)
-        }
         
         res.json({ success: true })
     } catch (err) {

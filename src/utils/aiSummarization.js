@@ -84,10 +84,73 @@ async function loadTranscriptionPipeline(onProgress, device = 'auto') {
 }
 
 /**
- * Extract audio from a video file and convert to the format needed by Whisper
+ * Fast in-memory WAV PCM parser to convert 16-bit 16kHz mono WAV directly to Float32Array
+ * without allocating or relying on Web Audio AudioContext.
  */
-async function extractAndProcessAudio(fileOrHandle, onProgress) {
+function parseWavToFloat32(arrayBuffer) {
+    const dataView = new DataView(arrayBuffer)
+    if (arrayBuffer.byteLength < 44) throw new Error('Audio buffer too small')
+    
+    let offset = 12
+    while (offset + 8 <= arrayBuffer.byteLength) {
+        const chunkId = String.fromCharCode(
+            dataView.getUint8(offset),
+            dataView.getUint8(offset + 1),
+            dataView.getUint8(offset + 2),
+            dataView.getUint8(offset + 3)
+        )
+        const chunkSize = dataView.getUint32(offset + 4, true)
+        if (chunkId === 'data') {
+            const numSamples = Math.floor(chunkSize / 2)
+            const float32 = new Float32Array(numSamples)
+            let byteOffset = offset + 8
+            for (let i = 0; i < numSamples; i++, byteOffset += 2) {
+                float32[i] = dataView.getInt16(byteOffset, true) / 32768.0
+            }
+            return float32
+        }
+        offset += 8 + chunkSize
+    }
+    throw new Error("Could not find 'data' chunk in WAV")
+}
+
+/**
+ * Extract audio from a video file and convert to the format needed by Whisper.
+ * If videoId is provided and local server is reachable, streams 16kHz WAV from FFmpeg
+ * to prevent downloading gigabytes of MP4 video into browser heap.
+ */
+async function extractAndProcessAudio(fileOrHandle, onProgress, videoId = null) {
     onProgress?.({ stage: 'extracting_audio', progress: 0, message: 'Extracting audio...' })
+
+    // If videoId is available and server is accessible, use the high-efficiency server 16kHz stream
+    if (videoId) {
+        try {
+            const serverAvailable = await isServerAvailable()
+            if (serverAvailable) {
+                onProgress?.({ stage: 'extracting_audio', progress: 0.1, message: 'Streaming 16kHz audio from server (zero video download)...' })
+                const response = await fetch(`${SERVER_URL}/api/videos/${encodeURIComponent(videoId)}/audio-16k`)
+                if (response.ok) {
+                    const arrayBuffer = await response.arrayBuffer()
+                    onProgress?.({ stage: 'extracting_audio', progress: 0.8, message: 'Decoding audio buffer...' })
+                    try {
+                        const audioData = parseWavToFloat32(arrayBuffer)
+                        onProgress?.({ stage: 'extracting_audio', progress: 1, message: 'Audio extracted!' })
+                        return audioData
+                    } catch (parseErr) {
+                        // Fallback to Web Audio decoder if custom parser encounters non-standard WAV
+                        const audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 })
+                        const audioBuffer = await audioContext.decodeAudioData(arrayBuffer)
+                        const audioData = audioBuffer.getChannelData(0)
+                        await audioContext.close()
+                        onProgress?.({ stage: 'extracting_audio', progress: 1, message: 'Audio extracted!' })
+                        return audioData
+                    }
+                }
+            }
+        } catch (serverAudioErr) {
+            console.warn('[AI] Server audio stream failed, falling back to local file decode:', serverAudioErr)
+        }
+    }
 
     let arrayBuffer
     if (typeof fileOrHandle === 'string' && fileOrHandle.startsWith('http')) {
@@ -489,11 +552,45 @@ ${summary}
 *Note: AI-powered summary unavailable (${errorReason}). This is an extractive summary from the first ${maxSentences} sentences.*`
 }
 
+export const WHISPER_HALLUCINATION_REGEX = /^\s*(?:thank\s+you\s+for\s+watching|thanks\s+for\s+watching|thank\s+you\s+very\s+much\s+for\s+watching|please\s+like\s+and\s+subscribe|please\s+subscribe|like\s+and\s+subscribe|don'?t\s+forget\s+to\s+subscribe|subscribe\s+to\s+my\s+channel|see\s+you\s+in\s+the\s+next\s+video|subtitles?\s+by\b|transcribed\s+by\b|bye\s*bye|goodbye)[.!]?\s*$/i
+
+/**
+ * Checks whether a chunk's text represents a known Whisper silence hallucination or non-speech noise.
+ */
+export function isWhisperHallucination(text) {
+    if (!text || typeof text !== 'string') return true
+    const trimmed = text.trim()
+    if (!trimmed) return true
+    if (WHISPER_HALLUCINATION_REGEX.test(trimmed)) return true
+    const stripped = trimmed
+        .replace(/<[^>]+>/g, '')
+        .replace(/\[[^\]]*\]/g, '')
+        .replace(/\([^)]*\)/g, '')
+        .replace(/[♪♫#*]+/g, '')
+        .replace(/[\s.\-_–—…,:;!?]+/g, '')
+        .trim()
+    return stripped.length === 0
+}
+
+/**
+ * Strips silence hallucinations and non-speech sound markers from Whisper timestamp chunks.
+ */
+export function sanitizeTranscriptionChunks(chunks) {
+    if (!Array.isArray(chunks)) return []
+    return chunks.filter(c => {
+        if (!c) return false
+        const text = (c.text || '').trim()
+        return text && !isWhisperHallucination(text)
+    })
+}
+
 /**
  * Convert timestamp chunks to WebVTT format for CC display
  */
 export function chunksToVTT(chunks) {
     if (!chunks || chunks.length === 0) return null
+    const validChunks = sanitizeTranscriptionChunks(chunks)
+    if (validChunks.length === 0) return null
 
     const formatTime = (seconds) => {
         const h = Math.floor(seconds / 3600)
@@ -508,7 +605,7 @@ export function chunksToVTT(chunks) {
     let currentSegment = { text: '', start: null, end: null }
     let wordCount = 0
 
-    for (const chunk of chunks) {
+    for (const chunk of validChunks) {
         if (!chunk.timestamp || chunk.timestamp.length < 2) continue
 
         const [start, end] = chunk.timestamp
@@ -573,7 +670,7 @@ export async function transcribeVideoCaptions(video, onProgress, device = 'auto'
     const t0 = performance.now()
 
     // Step 1: Extract audio
-    const audioData = await extractAndProcessAudio(fileSource, onProgress)
+    const audioData = await extractAndProcessAudio(fileSource, onProgress, video?.id)
     const tExtract = performance.now() - t0
 
     // Step 2: Transcribe using Whisper Web Worker or main thread
@@ -584,8 +681,11 @@ export async function transcribeVideoCaptions(video, onProgress, device = 'auto'
     const audioDurationSec = audioData.length / 16000
     const speedX = (audioDurationSec / Math.max(0.1, totalElapsedSec)).toFixed(1)
 
-    const transcript = transcription.text
-    const captionChunks = transcription.chunks
+    const rawChunks = transcription.chunks || []
+    const captionChunks = sanitizeTranscriptionChunks(rawChunks)
+    const transcript = (transcription.text || '')
+        .replace(/(?:thank\s+you\s+for\s+watching|thanks\s+for\s+watching|please\s+like\s+and\s+subscribe|please\s+subscribe)[.!]?\s*$/gi, '')
+        .trim()
 
     console.group('%c[TutIn AI Speech Transcription Debugger]', 'color: #10b981; font-weight: bold; font-size: 13px;')
     console.log(`Video ID: ${video.id} | Language: ${language} | Audio Duration: ${formatFriendlyDuration(audioDurationSec)} | Processing Speed: ${speedX}x real-time`)
@@ -645,7 +745,7 @@ export async function processVideoForSummary(videoIdOrVideo, fileSourceOrOnProgr
 
     try {
         // Step 1: Extract audio
-        const audioData = await extractAndProcessAudio(fileSource, onProgress)
+        const audioData = await extractAndProcessAudio(fileSource, onProgress, videoId)
         const tExtract = performance.now() - t0
 
         // Step 2: Transcribe using Whisper (returns { text, chunks })

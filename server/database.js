@@ -72,7 +72,7 @@ function writeToDisk() {
 export function saveDatabase() {
     if (!db || !dbPath) return
 
-    // Debounce: save after 100ms of no writes
+    // Debounce: save after 500ms of no writes to batch disk flushes
     if (saveTimer) clearTimeout(saveTimer)
     saveTimer = setTimeout(() => {
         try {
@@ -80,7 +80,7 @@ export function saveDatabase() {
         } catch (err) {
             console.error('[Database] Save failed:', err.message)
         }
-    }, 100)
+    }, 500)
 }
 
 /**
