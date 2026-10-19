@@ -1,22 +1,86 @@
-import React, { createContext, useContext, useState, useRef, useCallback } from 'react';
+import React, { createContext, useContext, useState, useRef, useCallback, useEffect } from 'react';
 import { SERVER_URL } from '../utils/api';
 import { transcribeVideoCaptions } from '../utils/aiSummarization';
 
 const JobsContext = createContext();
+const CHANNEL_NAME = 'tutin_active_jobs';
 
 export function JobsProvider({ children }) {
     // { [videoId]: { type, status, progress, message, abortController } }
     const [activeJobs, setActiveJobs] = useState({});
+    const activeJobsRef = useRef(activeJobs);
     const abortControllersRef = useRef({});
+    const broadcastChannelRef = useRef(null);
+
+    useEffect(() => {
+        activeJobsRef.current = activeJobs;
+    }, [activeJobs]);
+
+    // Cross-tab synchronization via BroadcastChannel
+    useEffect(() => {
+        if (typeof BroadcastChannel === 'undefined') return;
+        const channel = new BroadcastChannel(CHANNEL_NAME);
+        broadcastChannelRef.current = channel;
+
+        channel.onmessage = (event) => {
+            const { type, videoId, jobData, jobs } = event.data || {};
+            if (type === 'JOB_SET' && videoId && jobData) {
+                setActiveJobs(prev => ({
+                    ...prev,
+                    [videoId]: { ...prev[videoId], ...jobData }
+                }));
+            } else if (type === 'JOB_REMOVED' && videoId) {
+                setActiveJobs(prev => {
+                    const next = { ...prev };
+                    delete next[videoId];
+                    return next;
+                });
+            } else if (type === 'REQUEST_JOBS_SYNC') {
+                const serializable = {};
+                for (const [vId, job] of Object.entries(activeJobsRef.current)) {
+                    if (job) {
+                        const { abortController, ...rest } = job;
+                        serializable[vId] = rest;
+                    }
+                }
+                channel.postMessage({ type: 'SYNC_JOBS_RESPONSE', jobs: serializable });
+            } else if (type === 'SYNC_JOBS_RESPONSE' && jobs) {
+                setActiveJobs(prev => ({ ...prev, ...jobs }));
+            } else if (type === 'CANCEL_JOB' && videoId) {
+                if (abortControllersRef.current[videoId]) {
+                    abortControllersRef.current[videoId].abort();
+                    delete abortControllersRef.current[videoId];
+                }
+            }
+        };
+
+        // Query active jobs on mount from any other open tabs
+        channel.postMessage({ type: 'REQUEST_JOBS_SYNC' });
+
+        return () => {
+            channel.close();
+            broadcastChannelRef.current = null;
+        };
+    }, []);
 
     const setJob = useCallback((videoId, jobData) => {
-        setActiveJobs(prev => ({
-            ...prev,
-            [videoId]: typeof jobData === 'function' ? jobData(prev[videoId]) : { ...prev[videoId], ...jobData }
-        }));
+        setActiveJobs(prev => {
+            const updated = typeof jobData === 'function' ? jobData(prev[videoId]) : { ...prev[videoId], ...jobData };
+            if (broadcastChannelRef.current && updated) {
+                const { abortController, ...serializable } = updated;
+                broadcastChannelRef.current.postMessage({ type: 'JOB_SET', videoId, jobData: serializable });
+            }
+            return {
+                ...prev,
+                [videoId]: updated
+            };
+        });
     }, []);
 
     const removeJob = useCallback((videoId) => {
+        if (broadcastChannelRef.current) {
+            broadcastChannelRef.current.postMessage({ type: 'JOB_REMOVED', videoId });
+        }
         setActiveJobs(prev => {
             const next = { ...prev };
             delete next[videoId];
@@ -28,6 +92,10 @@ export function JobsProvider({ children }) {
         if (abortControllersRef.current[videoId]) {
             abortControllersRef.current[videoId].abort();
             delete abortControllersRef.current[videoId];
+        }
+        if (broadcastChannelRef.current) {
+            broadcastChannelRef.current.postMessage({ type: 'CANCEL_JOB', videoId });
+            broadcastChannelRef.current.postMessage({ type: 'JOB_REMOVED', videoId });
         }
         setActiveJobs(prev => {
             const job = prev[videoId];
@@ -102,7 +170,8 @@ export function JobsProvider({ children }) {
                                 }));
                             },
                             settings?.aiDevice || 'auto',
-                            sourceLang
+                            sourceLang,
+                            settings?.transcriptionModel
                         );
 
                         window.dispatchEvent(new CustomEvent('tutin:transcript-updated', {
@@ -248,7 +317,8 @@ export function JobsProvider({ children }) {
                                 }));
                             },
                             settings?.aiDevice || 'auto',
-                            sourceLang
+                            sourceLang,
+                            settings?.transcriptionModel
                         );
 
                         window.dispatchEvent(new CustomEvent('tutin:transcript-updated', {
@@ -294,7 +364,8 @@ export function JobsProvider({ children }) {
                                     }));
                                 },
                                 settings?.aiDevice || 'auto',
-                                sourceLang
+                                sourceLang,
+                                settings?.transcriptionModel
                             );
 
                             window.dispatchEvent(new CustomEvent('tutin:transcript-updated', {

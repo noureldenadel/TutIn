@@ -96,7 +96,7 @@ export function parseSRT(text) {
         const start = parseTime(startStr)
         const end = parseTime(endStr.trim().split(' ')[0])
         const clean = stripTags(lines.slice(tsLine + 1).join('\n'))
-        if (clean) chunks.push({ timestamp: [start, end], text: clean })
+        chunks.push({ timestamp: [start, end], text: clean || '' })
     }
     return chunks
 }
@@ -113,7 +113,7 @@ export function parseVTT(text) {
         const start = parseTime(startStr)
         const end = parseTime(endStr.trim().split(/\s/)[0])
         const clean = stripTags(lines.slice(tsLine + 1).join('\n'))
-        if (clean) chunks.push({ timestamp: [start, end], text: clean })
+        chunks.push({ timestamp: [start, end], text: clean || '' })
     }
     return chunks
 }

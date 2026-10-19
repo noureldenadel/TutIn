@@ -1,6 +1,6 @@
 import express from 'express'
 import { getDb, getOne, run, getAll, getDataDir } from '../database.js'
-import { submitDubJob, pollJobStatus, cancelJob, isServiceRunning } from '../services/dubbingService.js'
+import { submitDubJob, pollJobStatus, cancelJob, isServiceRunning, ensureServiceRunning } from '../services/dubbingService.js'
 import { getDubsDir, getDubFilePath, loadCaptionChunks, listDubLanguages, getDubFilePathForPlayback } from '../utils/courseAssets.js'
 import { stitchCuesIntoSentences } from '../utils/aiTranslation.js'
 import fs from 'fs'
@@ -679,6 +679,68 @@ router.post('/set-device', async (req, res) => {
         res.json({ service_running: true, ...data })
     } catch (err) {
         res.status(500).json({ error: err.message })
+    }
+})
+
+// POST /api/dub/transcribe (faster-whisper GPU transcription)
+router.post('/transcribe', async (req, res) => {
+    try {
+        const { videoId, filePath, language, modelName } = req.body
+        let videoPath = filePath
+
+        if (videoId && (!videoPath || !fs.existsSync(videoPath))) {
+            try {
+                const info = getVideoInfo(videoId)
+                videoPath = info.videoPath
+            } catch {}
+        }
+
+        if (!videoPath || !fs.existsSync(videoPath)) {
+            return res.status(400).json({ error: "Video file not found for transcription" })
+        }
+
+        const isRunning = await ensureServiceRunning()
+        if (!isRunning) {
+            return res.status(503).json({ error: "Python transcription service could not be started" })
+        }
+
+        const pyRes = await fetch('http://127.0.0.1:9475/transcribe', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                videoPath,
+                language: language || 'en',
+                modelName: modelName || 'large-v3-turbo',
+                wordTimestamps: true
+            })
+        })
+
+        if (!pyRes.ok) {
+            const errData = await pyRes.json().catch(() => ({}))
+            throw new Error(errData.detail || `Python transcription failed: HTTP ${pyRes.status}`)
+        }
+
+        const data = await pyRes.json()
+        res.json(data)
+    } catch (err) {
+        console.error('[DubbingRoute:transcribe] Error:', err)
+        res.status(500).json({ error: err.message })
+    }
+})
+
+// GET /api/dub/models/whisper
+router.get('/models/whisper', async (req, res) => {
+    try {
+        const isUp = await isServiceRunning()
+        if (!isUp) {
+            return res.json({ models: [], loaded_models: [] })
+        }
+        const pyRes = await fetch('http://127.0.0.1:9475/models/whisper')
+        if (!pyRes.ok) return res.json({ models: [], loaded_models: [] })
+        const data = await pyRes.json()
+        res.json(data)
+    } catch (err) {
+        res.json({ models: [], loaded_models: [] })
     }
 })
 

@@ -11,14 +11,24 @@ let isLoadingPipeline = false
 
 // Handle messages from main thread
 self.onmessage = async function (e) {
-    const { type, audioBuffer, id, language = 'en', device = 'auto' } = e.data || {}
-    console.log('[Whisper AI] 📥 Worker received request:', { type, bufferBytes: audioBuffer?.byteLength, language, device })
+    const { type, audioBuffer, id, language = 'en', device = 'auto', modelTier = 'whisper-base' } = e.data || {}
+    console.log('[Whisper AI] 📥 Worker received request:', { type, bufferBytes: audioBuffer?.byteLength, language, device, modelTier })
 
     if (type === 'transcribe') {
         const startTime = performance.now()
         try {
             const cleanLang = (language || 'en').toLowerCase().trim()
-            const targetModel = cleanLang === 'en' ? 'Xenova/whisper-tiny.en' : 'Xenova/whisper-tiny'
+            const isEn = cleanLang === 'en'
+
+            let targetModel
+            if (modelTier === 'whisper-tiny') {
+                targetModel = isEn ? 'Xenova/whisper-tiny.en' : 'Xenova/whisper-tiny'
+            } else if (modelTier === 'whisper-small') {
+                targetModel = isEn ? 'Xenova/whisper-small.en' : 'Xenova/whisper-small'
+            } else {
+                // whisper-base default for balanced browser transcription
+                targetModel = isEn ? 'Xenova/whisper-base.en' : 'Xenova/whisper-base'
+            }
 
             // Load pipeline if not loaded or if model mismatch (e.g. switched between English-only and Multilingual)
             if (!transcriptionPipeline || currentModelLoaded !== targetModel) {
@@ -31,18 +41,20 @@ self.onmessage = async function (e) {
 
             // Convert ArrayBuffer to Float32Array
             const audioFloat32 = new Float32Array(audioBuffer)
-            console.log(`[Whisper AI] 🎙️ Processing audio: ${audioFloat32.length} samples (~${Math.round(audioFloat32.length / 16000)}s duration)`)
+            console.log(`[Whisper AI] 🎙️ Processing audio: ${audioFloat32.length} samples (~${Math.round(audioFloat32.length / 16000)}s duration) with ${targetModel}`)
 
             // Run transcription with timestamps & explicit language
             const options = {
                 chunk_length_s: 30,
                 stride_length_s: 5,
                 return_timestamps: true,
-                force_full_sequences: false
+                force_full_sequences: false,
+                condition_on_previous_text: false,
+                no_speech_threshold: 0.6
             }
 
             // For multilingual model, specify language and task
-            if (targetModel !== 'Xenova/whisper-tiny.en') {
+            if (!targetModel.endsWith('.en')) {
                 options.language = cleanLang
                 options.task = 'transcribe'
             }

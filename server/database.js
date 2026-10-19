@@ -46,6 +46,11 @@ function ensureDirectories() {
         path.join(dataDir, 'dubs'),
         path.join(dataDir, 'backups', 'auto'),
         path.join(dataDir, 'backups', 'manual'),
+        path.join(dataDir, 'models'),
+        path.join(dataDir, 'models', 'ai'),
+        path.join(dataDir, 'models', 'tts'),
+        path.join(dataDir, 'models', 'punctuation'),
+        path.join(dataDir, 'models', 'huggingface'),
     ]
 
     for (const dir of dirs) {
@@ -58,27 +63,38 @@ function ensureDirectories() {
 }
 
 /**
- * Write the in-memory database to disk
+ * Write the in-memory database to disk asynchronously
  */
-function writeToDisk() {
+async function writeToDiskAsync() {
+    if (!db || !dbPath) return
+    const data = db.export()
+    const buffer = Buffer.from(data)
+    await fs.promises.writeFile(dbPath, buffer)
+}
+
+/**
+ * Write the in-memory database to disk synchronously
+ */
+function writeToDiskSync() {
+    if (!db || !dbPath) return
     const data = db.export()
     const buffer = Buffer.from(data)
     fs.writeFileSync(dbPath, buffer)
 }
 
 /**
- * Save database to disk (debounced)
+ * Save database to disk (debounced, non-blocking)
  */
 export function saveDatabase() {
     if (!db || !dbPath) return
 
     // Debounce: save after 500ms of no writes to batch disk flushes
     if (saveTimer) clearTimeout(saveTimer)
-    saveTimer = setTimeout(() => {
+    saveTimer = setTimeout(async () => {
         try {
-            writeToDisk()
+            await writeToDiskAsync()
         } catch (err) {
-            console.error('[Database] Save failed:', err.message)
+            console.error('[Database] Async save failed:', err.message)
         }
     }, 500)
 }
@@ -90,7 +106,7 @@ export function saveDatabaseSync() {
     if (!db || !dbPath) return
     if (saveTimer) clearTimeout(saveTimer)
     try {
-        writeToDisk()
+        writeToDiskSync()
     } catch (err) {
         console.error('[Database] Save failed:', err.message)
     }

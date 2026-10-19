@@ -32,6 +32,16 @@ try:
 except Exception:
     pass
 
+# Ensure default centralized AppData model paths for standalone executions
+DEFAULT_MODELS_DIR = os.path.join(
+    os.environ.get("APPDATA") or os.path.expanduser("~"), "TutIn", "models"
+)
+if "HF_HOME" not in os.environ:
+    os.environ["HF_HOME"] = os.path.join(DEFAULT_MODELS_DIR, "huggingface")
+if "TTS_HOME" not in os.environ:
+    os.environ["TTS_HOME"] = DEFAULT_MODELS_DIR
+    os.environ["XDG_DATA_HOME"] = DEFAULT_MODELS_DIR
+
 from fastapi import FastAPI, BackgroundTasks, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -338,6 +348,13 @@ def load_model(device_preference: str = None):
 
     from TTS.api import TTS
     
+    if "TTS_HOME" not in os.environ:
+        default_models = os.path.join(
+            os.environ.get("APPDATA") or os.path.expanduser("~"), "TutIn", "models"
+        )
+        os.environ["TTS_HOME"] = default_models
+        os.environ["XDG_DATA_HOME"] = default_models
+
     model_name = "tts_models/multilingual/multi-dataset/xtts_v2"
     print(f"[XTTS Dubbing] Initializing model '{model_name}' on device: {target_device.upper()} (CUDA Available: {torch.cuda.is_available()})...")
     
@@ -354,19 +371,28 @@ def load_model(device_preference: str = None):
 
 def extract_reference_audio(video_path: str, temp_dir: str, explicit_ref_path: Optional[str] = None, segments: Optional[List[SegmentInput]] = None) -> str:
     """
-    Extract a clean 8-10 second voice sample from the video.
-    If explicit_ref_path is provided and exists, use it.
+    Extract a clean 8-10 second voice sample from the video or vocal stem.
+    If explicit_ref_path is provided and is already a short reference sample (<= 15s), use it directly.
+    If explicit_ref_path is a full audio track (e.g. Demucs vocals stem), use it as the source media.
     Otherwise, intelligently scan candidate subtitle segments to locate a window with
     optimal speech energy (good conversational RMS dBFS) and minimal background noise/silence.
     """
+    source_media = video_path
     if explicit_ref_path and os.path.exists(explicit_ref_path):
-        return explicit_ref_path
+        try:
+            sample_seg = AudioSegment.from_file(explicit_ref_path)
+            if len(sample_seg) <= 15000:
+                print(f"[XTTS Dubbing] Using direct reference voice sample: {explicit_ref_path} ({len(sample_seg)/1000.0:.1f}s)")
+                return explicit_ref_path
+            source_media = explicit_ref_path
+        except Exception:
+            source_media = explicit_ref_path
 
     if not check_ffmpeg():
         raise Exception("FFmpeg was not found in system PATH. Please install FFmpeg to use AI Dubbing.")
 
-    if not video_path or not os.path.exists(video_path):
-        raise Exception(f"Video file not found at path: {video_path}")
+    if not source_media or not os.path.exists(source_media):
+        raise Exception(f"Source media file not found at path: {source_media}")
 
     ref_path = os.path.join(temp_dir, "reference_voice.wav")
     ffmpeg_bin = get_ffmpeg_bin()
@@ -396,16 +422,14 @@ def extract_reference_audio(video_path: str, temp_dir: str, explicit_ref_path: O
     # Deduplicate candidate start times
     candidate_start_times = list(dict.fromkeys(candidate_start_times))
 
-    # 2. Test candidate windows to pick the highest clarity audio (good RMS dialogue volume)
-    best_candidate_path = None
-    best_score = -999.0
+    scored_candidates = []
 
     for idx, c_start in enumerate(candidate_start_times):
         cand_path = os.path.join(temp_dir, f"cand_ref_{idx}.wav")
         cmd = [
             ffmpeg_bin, "-y",
             "-ss", str(c_start),
-            "-i", video_path,
+            "-i", source_media,
             "-t", "9",  # 9-second clean voice sample
             "-vn",
             "-acodec", "pcm_s16le",
@@ -424,23 +448,24 @@ def extract_reference_audio(video_path: str, temp_dir: str, explicit_ref_path: O
                     score = -abs(dbfs - (-20.0))  # Target standard broadcast -20 dBFS
                     if dbfs > -35.0:
                         score += 5.0
-                    if score > best_score:
-                        best_score = score
-                        best_candidate_path = cand_path
+                    scored_candidates.append((score, cand_path))
         except Exception:
             continue
 
-    if best_candidate_path and os.path.exists(best_candidate_path):
-        if best_candidate_path != ref_path:
-            shutil.copyfile(best_candidate_path, ref_path)
-        print(f"[XTTS Dubbing] Selected high-SNR voice reference (score: {best_score:.1f}, dBFS: {AudioSegment.from_wav(ref_path).dBFS:.1f})")
-        return ref_path
+    if scored_candidates:
+        scored_candidates.sort(key=lambda x: x[0], reverse=True)
+        # Select up to top 3 distinct candidate windows for multi-reference latent averaging
+        top_candidates = [p for _, p in scored_candidates[:3]]
+        if top_candidates[0] != ref_path:
+            shutil.copyfile(top_candidates[0], ref_path)
+        print(f"[XTTS Dubbing] Selected {len(top_candidates)} high-SNR voice reference sample(s) from {os.path.basename(source_media)}")
+        return top_candidates
 
     # Fallback to standard 9s extract from 15s mark
     cmd = [
         ffmpeg_bin, "-y",
         "-ss", "15.0",
-        "-i", video_path,
+        "-i", source_media,
         "-t", "9",
         "-vn",
         "-acodec", "pcm_s16le",
@@ -743,6 +768,38 @@ def sanitize_dub_text(text: str) -> str:
     # Strip bracketed sound descriptors like [Music], [Applause], (Laughter), [Silence]
     t = re.sub(r'\[[^\]]*\]', '', t)
     t = re.sub(r'\([^)]*\)', '', t)
+    # Strip all Arabic tashkeel / harakat diacritics (dense diacritics cause catastrophic XTTS BPE failure / alien gibberish)
+    t = re.sub(r'[\u0617-\u061A\u064B-\u065F\u0670]', '', t)
+    # Normalize corrupted pseudo-phonetic glottal-stop dialect words that choke XTTS tokenizer
+    corrupted_words = {
+        'طريء': 'طريق',
+        'فوء': 'فوق',
+        'وإع': 'وقع',
+        'وئع': 'وقع',
+        'وإعت': 'وقعت',
+        'وئعت': 'وقعت',
+        'أاعد': 'قاعد',
+        'دلأتي': 'دلوقتي',
+        'دلوأتي': 'دلوقتي',
+        'ألتله': 'قلتله',
+        'ألتلها': 'قلتلها',
+        'ألتلك': 'قلتلك',
+        'ألتلهم': 'قلتلهم',
+        'ألت': 'قلت',
+        'أريب': 'قريب',
+        'أدام': 'قدام',
+        'أُدام': 'قدام',
+        'أفل': 'قفل',
+        'أدر': 'قدر',
+        'يبأى': 'يبقى',
+        'كِدا': 'كده',
+        'كدا': 'كده',
+    }
+    tokens = t.split()
+    tokens = [corrupted_words.get(w, w) for w in tokens]
+    t = ' '.join(tokens)
+    # Collapse repeated punctuation
+    t = re.sub(r'([.?!؟,،;:])\1+', r'\1', t)
     # Collapse multiple whitespaces
     t = re.sub(r'\s+', ' ', t).strip()
     return t
@@ -809,13 +866,20 @@ def process_dubbing_job(job_id: str, req: DubRequest):
         job["step"] = "Extracting reference speaker voice..."
         job["progress"] = 18 if preserve_bg else 10
         t_ref_start = __import__('time').time()
-        ref_voice_path = extract_reference_audio(
+        ref_voice_paths = extract_reference_audio(
             video_path=video_path,
             temp_dir=temp_dir,
             explicit_ref_path=explicit_voice_ref,
             segments=segments
         )
         voice_ref_sec = __import__('time').time() - t_ref_start
+
+        if isinstance(ref_voice_paths, list):
+            primary_ref_path = ref_voice_paths[0]
+            latents_ref_paths = ref_voice_paths
+        else:
+            primary_ref_path = ref_voice_paths
+            latents_ref_paths = [ref_voice_paths]
 
         # 4. Process Segments with Intelligent Time-Fitting
         target_lang = map_xtts_lang(req.resolved_target_lang())
@@ -826,6 +890,7 @@ def process_dubbing_job(job_id: str, req: DubRequest):
         max_duration_ms = int(last_seg_end * 1000)
         
         # Pre-compute speaker conditioning latents once to eliminate 30%–40% synthesis latency
+        # Averaging latents across candidate speech clips creates a consistent acoustic timbre
         xtts_model = None
         gpt_cond_latent = None
         speaker_embedding = None
@@ -833,8 +898,11 @@ def process_dubbing_job(job_id: str, req: DubRequest):
             xtts_model = TTS_MODEL.synthesizer.tts_model
             try:
                 t_latent_start = __import__('time').time()
-                print(f"[XTTS Dubbing] Pre-computing speaker conditioning latents from: {ref_voice_path}...")
-                gpt_cond_latent, speaker_embedding = xtts_model.get_conditioning_latents(audio_path=[ref_voice_path])
+                print(f"[XTTS Dubbing] Pre-computing speaker conditioning latents from: {latents_ref_paths}...")
+                gpt_cond_latent, speaker_embedding = xtts_model.get_conditioning_latents(
+                    audio_path=latents_ref_paths,
+                    sound_norm_refs=True
+                )
                 print(f"[XTTS Dubbing] Speaker latents pre-computed in {(__import__('time').time() - t_latent_start):.2f}s (reused across all {len(segments)} cues)")
             except Exception as latent_err:
                 print(f"[XTTS Dubbing] Warning: Could not pre-compute conditioning latents ({latent_err}). Falling back to standard inference.")
@@ -859,8 +927,10 @@ def process_dubbing_job(job_id: str, req: DubRequest):
                     gpt_cond_latent=gpt_cond_latent,
                     speaker_embedding=speaker_embedding,
                     speed=speed,
-                    temperature=0.75,
-                    repetition_penalty=5.0
+                    temperature=0.20,
+                    length_penalty=1.0,
+                    repetition_penalty=2.5,
+                    enable_text_splitting=True
                 )
                 raw_wav = out.get("wav", None)
                 if isinstance(raw_wav, torch.Tensor):
@@ -872,13 +942,18 @@ def process_dubbing_job(job_id: str, req: DubRequest):
             else:
                 wav_list = TTS_MODEL.tts(
                     text=chunk_text,
-                    speaker_wav=ref_voice_path,
+                    speaker_wav=primary_ref_path,
                     language=target_lang,
                     speed=speed
                 )
                 raw_wav = np.asarray(wav_list, dtype=np.float32)
                 pcm16 = (np.clip(raw_wav, -1.0, 1.0) * 32767.0).astype(np.int16).tobytes()
                 return AudioSegment(data=pcm16, sample_width=2, frame_rate=SAMPLE_RATE, channels=1)
+
+        # Seed RNG for deterministic voice timbre and rock-solid acoustic consistency across all cues
+        torch.manual_seed(42)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(42)
 
         for i, seg in enumerate(segments):
             if job["status"] == "cancelled":
@@ -905,6 +980,10 @@ def process_dubbing_job(job_id: str, req: DubRequest):
             
             if not text:
                 continue
+
+            # Ensure sentence ends with terminal punctuation for clean EOS trigger
+            if text and not text[-1] in ('.', '!', '?', '؟', '،', ';', ':'):
+                text = text + '.'
 
             # 4a. Native Speed Pre-Biasing
             words = text.split()
@@ -964,10 +1043,15 @@ def process_dubbing_job(job_id: str, req: DubRequest):
             else:
                 print(f"[XTTS Dubbing] Segment {i+1}/{total_segments} ({seg_latency}ms): Natural duration {natural_duration_sec:.2f}s (window: {target_window_sec:.2f}s)")
 
-            # Prevent overlapping by shifting start_sample if previous segment is still playing
-            start_sample = int(start_sec * SAMPLE_RATE)
-            if start_sample < last_end_sample:
-                start_sample = last_end_sample + int(0.05 * SAMPLE_RATE)
+            # Anchor each segment to its nominal start time to prevent cumulative timing drift
+            nominal_start_sample = int(start_sec * SAMPLE_RATE)
+            if nominal_start_sample < last_end_sample:
+                # Previous segment slightly overran. Allow at most 80ms shift to prevent cascade drift
+                overlap_samples = last_end_sample - nominal_start_sample
+                max_allowed_shift = int(0.08 * SAMPLE_RATE)
+                start_sample = nominal_start_sample + min(overlap_samples, max_allowed_shift)
+            else:
+                start_sample = nominal_start_sample
 
             final_segment_audio = final_segment_audio.fade_in(20).fade_out(20)
             seg_samples = np.array(final_segment_audio.get_array_of_samples(), dtype=np.float32) / 32768.0
@@ -1190,7 +1274,9 @@ def cancel_job(job_id: str):
 # =====================================================================
 
 PUNCT_PIPELINES: Dict[str, Any] = {}
-PUNCT_MODELS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "models", "punctuation")
+PUNCT_MODELS_DIR = os.environ.get("PUNCT_MODELS_DIR") or os.path.join(
+    os.environ.get("APPDATA") or os.path.expanduser("~"), "TutIn", "models", "punctuation"
+)
 
 class PunctuateRequest(BaseModel):
     text: str
@@ -1275,6 +1361,8 @@ def apply_token_punctuation(text: str, pipe, norm_lang: str) -> str:
                 # Check if label represents a punctuation mark
                 if label not in ("0", "O", "LABEL_0", ""):
                     punct = label
+                    label_map = {"LABEL_1": ".", "LABEL_2": ",", "LABEL_3": "?", "LABEL_4": "!"}
+                    punct = label_map.get(punct, punct)
                     # Valid punctuation marks across Arabic and Latin
                     if punct in (".", ",", "?", "!", "-", ":", ";", "،", "؟", "؛"):
                         reconstructed.append(punct)
@@ -1348,6 +1436,152 @@ def unload_punctuation_model(lang: str):
             torch.cuda.empty_cache()
         return {"success": True, "unloaded": unloaded}
     return {"success": False, "message": f"Model for '{norm}' was not loaded in memory"}
+
+
+# =====================================================================
+# FASTER-WHISPER GPU TRANSCRIPTION ENGINE
+# =====================================================================
+
+WHISPER_MODELS: Dict[str, Any] = {}
+WHISPER_MODELS_DIR = os.path.join(DEFAULT_MODELS_DIR, "whisper")
+os.makedirs(WHISPER_MODELS_DIR, exist_ok=True)
+
+class TranscribeRequest(BaseModel):
+    videoPath: Optional[str] = None
+    video_path: Optional[str] = None
+    audioPath: Optional[str] = None
+    audio_path: Optional[str] = None
+    language: Optional[str] = None
+    modelName: Optional[str] = "large-v3-turbo"
+    model_name: Optional[str] = "large-v3-turbo"
+    wordTimestamps: Optional[bool] = True
+    word_timestamps: Optional[bool] = True
+
+def get_faster_whisper_model(model_name: str = "large-v3-turbo"):
+    global WHISPER_MODELS
+    resolved = model_name or "large-v3-turbo"
+    if resolved in WHISPER_MODELS:
+        return WHISPER_MODELS[resolved]
+
+    from faster_whisper import WhisperModel
+    import ctranslate2
+
+    device = "cuda" if (torch.cuda.is_available() and ctranslate2.get_cuda_device_count() > 0) else "cpu"
+    compute_type = "float16" if device == "cuda" else "int8"
+
+    print(f"[Faster-Whisper] Loading model '{resolved}' on {device.upper()} ({compute_type}) into {WHISPER_MODELS_DIR}...")
+    model = WhisperModel(
+        resolved,
+        device=device,
+        compute_type=compute_type,
+        download_root=WHISPER_MODELS_DIR
+    )
+    WHISPER_MODELS[resolved] = model
+    print(f"[Faster-Whisper] Model '{resolved}' loaded successfully.")
+    return model
+
+@app.post("/transcribe")
+def transcribe_media(req: TranscribeRequest):
+    source = req.videoPath or req.video_path or req.audioPath or req.audio_path
+    if not source or not os.path.exists(source):
+        raise HTTPException(status_code=400, detail=f"Source media file not found: {source}")
+
+    model_name = req.modelName or req.model_name or "large-v3-turbo"
+    lang = req.language
+    if lang:
+        lang = lang.lower().split("-")[0].strip()
+        if lang in ("auto", "source", ""):
+            lang = None
+
+    t0 = __import__('time').time()
+    temp_dir = tempfile.mkdtemp(prefix="tutin_whisper_")
+    try:
+        audio_target = source
+        is_video = source.lower().endswith(('.mp4', '.mkv', '.mov', '.avi', '.webm', '.flv', '.m4v', '.ts'))
+        if is_video or not source.lower().endswith('.wav'):
+            audio_target = os.path.join(temp_dir, "extracted_16k.wav")
+            cmd = [
+                "ffmpeg", "-y", "-i", source,
+                "-vn", "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1",
+                audio_target
+            ]
+            subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, check=True)
+
+        model = get_faster_whisper_model(model_name)
+        word_ts = req.wordTimestamps if req.wordTimestamps is not None else (req.word_timestamps or True)
+
+        segments, info = model.transcribe(
+            audio_target,
+            language=lang,
+            word_timestamps=word_ts,
+            vad_filter=True,
+            vad_parameters=dict(min_silence_duration_ms=500)
+        )
+
+        chunks = []
+        full_text_list = []
+        for s in segments:
+            cue_text = s.text.strip()
+            if not cue_text:
+                continue
+            full_text_list.append(cue_text)
+
+            chunk_obj = {
+                "text": cue_text,
+                "start": round(s.start, 2),
+                "end": round(s.end, 2),
+                "timestamp": [round(s.start, 2), round(s.end, 2)]
+            }
+            if s.words:
+                chunk_obj["words"] = [
+                    {
+                        "word": w.word,
+                        "start": round(w.start, 2),
+                        "end": round(w.end, 2),
+                        "probability": round(w.probability, 2)
+                    }
+                    for w in s.words
+                ]
+            chunks.append(chunk_obj)
+
+        elapsed = round(__import__('time').time() - t0, 2)
+        print(f"[Faster-Whisper] Transcribed {info.duration:.1f}s audio in {elapsed}s ({len(chunks)} cues) using '{model_name}'.")
+
+        return {
+            "text": " ".join(full_text_list),
+            "chunks": chunks,
+            "language": info.language,
+            "language_probability": round(info.language_probability, 2) if hasattr(info, 'language_probability') else 1.0,
+            "duration": round(info.duration, 2),
+            "elapsed_seconds": elapsed,
+            "model": model_name
+        }
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Transcription failed: {str(e)}")
+    finally:
+        try:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+        except Exception:
+            pass
+
+@app.get("/models/whisper")
+def list_whisper_models():
+    models = []
+    if os.path.exists(WHISPER_MODELS_DIR):
+        for item in os.listdir(WHISPER_MODELS_DIR):
+            p = os.path.join(WHISPER_MODELS_DIR, item)
+            if os.path.isdir(p):
+                size_bytes = sum(os.path.getsize(os.path.join(root, f)) for root, _, files in os.walk(p) for f in files)
+                models.append({
+                    "name": item,
+                    "sizeMb": round(size_bytes / (1024 * 1024), 1),
+                    "isLoaded": item in WHISPER_MODELS
+                })
+    return {
+        "models": models,
+        "loaded_models": list(WHISPER_MODELS.keys())
+    }
 
 
 if __name__ == "__main__":

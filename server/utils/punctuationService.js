@@ -2,14 +2,15 @@ import path from 'path'
 import { fileURLToPath } from 'url'
 import fs from 'fs'
 import { getOne } from '../database.js'
+import { getPunctuationModelsDir } from './modelManager.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
 const PYTHON_DUBBING_SERVER_URL = 'http://127.0.0.1:9475'
 
-// Punctuation cache directory: <workspace>/models/punctuation/
-export const PUNCTUATION_MODELS_DIR = path.join(__dirname, '..', '..', 'models', 'punctuation')
+// Punctuation cache directory: %APPDATA%/TutIn/models/punctuation/
+export const PUNCTUATION_MODELS_DIR = getPunctuationModelsDir()
 
 /**
  * Checks whether the given subtitle chunks lack adequate punctuation.

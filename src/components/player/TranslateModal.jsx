@@ -92,6 +92,7 @@ export default function TranslateModal({ isOpen, onClose, video, course, sourceL
 
     async function handleStart() {
         if (!video) return
+        const t0 = performance.now()
         setIsProcessing(true)
         setError(null)
         setProgress(0)
@@ -207,11 +208,12 @@ export default function TranslateModal({ isOpen, onClose, video, course, sourceL
                                     setProgress(Math.min(currentPct, 98))
                                     setStatusText(data.message)
                                 } else if (data.step === 'done') {
+                                    const modelLabel = targetLang.startsWith('ar-') ? 'OpenRouter GPT-4o-mini' : 'NLLB-200'
                                     const totalTranslationSec = (performance.now() - t0) / 1000
                                     console.group('%c[TutIn AI Translation Performance Debugger]', 'color: #8b5cf6; font-weight: bold; font-size: 13px;')
                                     console.log(`Video ID: ${video.id} | ${sourceLang.toUpperCase()} -> ${targetLang.toUpperCase()} | Total Duration: ${formatFriendlyDuration(totalTranslationSec)}`)
                                     console.table([
-                                        { Process: `NLLB-200 Neural Translation (${data.cuesCount || data.count || 'all'} cues)`, Role: 'Translates subtitle sentences with cue timestamp alignment', Time: formatFriendlyDuration(totalTranslationSec) }
+                                        { Process: `${modelLabel} Translation (${data.chunkCount || data.cuesCount || data.count || 'all'} cues)`, Role: 'Translates subtitle sentences with cue timestamp alignment', Time: formatFriendlyDuration(totalTranslationSec) }
                                     ])
                                     console.groupEnd()
 

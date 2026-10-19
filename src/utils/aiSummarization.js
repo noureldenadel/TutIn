@@ -6,8 +6,51 @@
  */
 
 import { updateVideo, getVideo } from './db'
-import { SERVER_URL, isServerAvailable, put } from './api'
+import { SERVER_URL, isServerAvailable, put, post } from './api'
 import { verifyPermission } from './fileSystem'
+
+export const TRANSCRIPTION_MODELS = [
+    {
+        id: 'whisper-tiny',
+        name: '⚡ Fast (whisper-tiny — 39 MB)',
+        shortName: 'whisper-tiny (39 MB)',
+        badge: 'Browser / Low RAM',
+        badgeColor: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20',
+        desc: 'Lightweight client-side model, fastest on low-end PCs without GPU',
+        type: 'browser',
+        size: '39 MB'
+    },
+    {
+        id: 'whisper-base',
+        name: '⚖️ Balanced (whisper-base — 73 MB)',
+        shortName: 'whisper-base (73 MB)',
+        badge: 'Browser / Balanced',
+        badgeColor: 'bg-blue-500/10 text-blue-600 dark:text-blue-400 border-blue-500/20',
+        desc: 'Noticeably fewer errors than tiny with quick loading and low overhead',
+        type: 'browser',
+        size: '73 MB'
+    },
+    {
+        id: 'whisper-small',
+        name: '🎯 High Accuracy (whisper-small — 240 MB)',
+        shortName: 'whisper-small (240 MB)',
+        badge: 'Browser WebGPU',
+        badgeColor: 'bg-purple-500/10 text-purple-600 dark:text-purple-400 border-purple-500/20',
+        desc: 'High precision for technical terms and accents running client-side',
+        type: 'browser',
+        size: '240 MB'
+    },
+    {
+        id: 'faster-whisper-large-v3-turbo',
+        name: '🚀 Studio GPU (faster-whisper large-v3-turbo)',
+        shortName: 'large-v3-turbo (GPU)',
+        badge: 'NVIDIA CUDA GPU',
+        badgeColor: 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20',
+        desc: 'High-performance local GPU transcription with true word-level timestamps',
+        type: 'gpu',
+        size: '~800 MB'
+    }
+]
 
 // Transformers.js pipeline (loaded on demand)
 let transcriptionPipeline = null
@@ -219,11 +262,13 @@ function getOrCreateWhisperWorker() {
     return whisperWorker
 }
 
-export async function transcribeAudio(audioData, onProgress, device = 'auto', language = 'en') {
+export async function transcribeAudio(audioData, onProgress, device = 'auto', language = 'en', modelTier = 'whisper-base') {
+    let result = null
+
     // Try Web Worker first for non-blocking transcription
     if (typeof Worker !== 'undefined') {
         try {
-            return await transcribeWithWorker(audioData, onProgress, device, language)
+            result = await transcribeWithWorker(audioData, onProgress, device, language, modelTier)
         } catch (err) {
             console.warn('Worker transcription failed, falling back to main thread:', err)
             // Fall through to main thread fallback
@@ -231,17 +276,26 @@ export async function transcribeAudio(audioData, onProgress, device = 'auto', la
     }
 
     // Fallback: Run on main thread (may freeze UI)
-    return await transcribeOnMainThread(audioData, onProgress, device, language)
+    if (!result) {
+        result = await transcribeOnMainThread(audioData, onProgress, device, language)
+    }
+
+    // Calibrate initial silence so first chunk doesn't falsely start at 0.00s if video starts silent
+    if (result && Array.isArray(result.chunks)) {
+        result.chunks = calibrateInitialSilenceOffset(result.chunks, audioData)
+    }
+
+    return result
 }
 
 /**
  * Transcribe using Web Worker (non-blocking with queue mutex)
  */
-async function transcribeWithWorker(audioData, onProgress, device = 'auto', language = 'en') {
+async function transcribeWithWorker(audioData, onProgress, device = 'auto', language = 'en', modelTier = 'whisper-base') {
     // Chain to queue to ensure only one worker transcription runs at a time (WebGPU safe)
     const resultPromise = workerQueuePromise.then(() => {
         return new Promise((resolve, reject) => {
-            console.log('[AI] Starting transcribeWithWorker, samples:', audioData.length, 'lang:', language)
+            console.log('[AI] Starting transcribeWithWorker, samples:', audioData.length, 'lang:', language, 'modelTier:', modelTier)
             const worker = getOrCreateWhisperWorker()
             const requestId = `req_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`
 
@@ -291,6 +345,7 @@ async function transcribeWithWorker(audioData, onProgress, device = 'auto', lang
                         audioBuffer: audioBuffer,
                         device: device,
                         language: language || 'en',
+                        modelTier: modelTier || 'whisper-base',
                         id: requestId
                     }, [audioBuffer])
                 } catch (postErr) {
@@ -321,7 +376,9 @@ async function transcribeOnMainThread(audioData, onProgress, device = 'auto', la
             chunk_length_s: 30,
             stride_length_s: 5,
             return_timestamps: true,
-            force_full_sequences: false
+            force_full_sequences: false,
+            condition_on_previous_text: false,
+            no_speech_threshold: 0.6
         }
         if (cleanLang !== 'en') {
             options.language = cleanLang
@@ -585,6 +642,110 @@ export function sanitizeTranscriptionChunks(chunks) {
 }
 
 /**
+ * Detects real physical speech onset in seconds from raw 16kHz audio buffer.
+ * Bypasses Whisper's default habit of snapping the first segment to 0.00s when a video begins with silence.
+ */
+export function detectSpeechOnset(audioData, sampleRate = 16000, maxSearchSec = 30) {
+    if (!audioData || audioData.length === 0) return 0
+
+    const frameSize = Math.round(sampleRate * 0.05) // 50ms = 800 samples
+    const hopSize = Math.round(sampleRate * 0.02)   // 20ms = 320 samples
+    const maxSamples = Math.min(audioData.length, Math.round(maxSearchSec * sampleRate))
+    const numFrames = Math.floor((maxSamples - frameSize) / hopSize)
+
+    if (numFrames <= 4) return 0
+
+    // Compute RMS energy for each 50ms window
+    const energies = new Float32Array(numFrames)
+    for (let f = 0; f < numFrames; f++) {
+        const offset = f * hopSize
+        let sum = 0
+        for (let i = 0; i < frameSize; i++) {
+            const s = audioData[offset + i]
+            sum += s * s
+        }
+        energies[f] = Math.sqrt(sum / frameSize)
+    }
+
+    // Dynamic noise floor from the quietest 20% of frames
+    const sorted = Array.from(energies).sort((a, b) => a - b)
+    const noiseFloor = sorted[Math.floor(sorted.length * 0.20)] || 0.001
+
+    // Adaptive speech threshold: at least 3.5x noise floor, clamped between 0.012 and 0.04
+    const threshold = Math.min(0.04, Math.max(0.012, noiseFloor * 3.5))
+
+    // Look for at least 3 consecutive frames (60ms) of sustained speech energy
+    let speechFrame = -1
+    for (let f = 0; f < numFrames - 3; f++) {
+        if (energies[f] >= threshold && energies[f + 1] >= threshold && energies[f + 2] >= threshold) {
+            speechFrame = f
+            break
+        }
+    }
+
+    if (speechFrame === -1) return 0
+
+    const speechSec = (speechFrame * hopSize) / sampleRate
+    // Add 150ms pre-roll safety margin so soft initial consonants ('p', 't', 's', 'k', 'th') aren't clipped
+    const onsetSec = Math.max(0, speechSec - 0.15)
+    return Math.round(onsetSec * 100) / 100
+}
+
+/**
+ * Calibrates the first subtitle cue's start timestamp if Whisper snapped it to 0.00s
+ * during an initial silent video intro.
+ */
+export function calibrateInitialSilenceOffset(chunks, audioData, sampleRate = 16000) {
+    if (!chunks || !Array.isArray(chunks) || chunks.length === 0 || !audioData || audioData.length === 0) {
+        return chunks
+    }
+
+    // Find the first valid speech chunk
+    const firstChunk = chunks[0]
+    if (!firstChunk) return chunks
+
+    const currentStart = Array.isArray(firstChunk.timestamp)
+        ? Number(firstChunk.timestamp[0])
+        : Number(firstChunk.start ?? 0)
+
+    // Only calibrate if the first chunk claims to start near 0 (< 0.5s)
+    if (currentStart >= 0.5) {
+        return chunks
+    }
+
+    const currentEnd = Array.isArray(firstChunk.timestamp)
+        ? Number(firstChunk.timestamp[1])
+        : Number(firstChunk.end ?? (currentStart + 5))
+
+    const onsetSec = detectSpeechOnset(audioData, sampleRate, Math.min(30, Math.max(10, currentEnd + 2)))
+
+    // If speech actually starts after 400ms or more of silence
+    if (onsetSec >= 0.4) {
+        const calibratedStart = Math.min(Number(onsetSec.toFixed(2)), Math.max(0.1, currentEnd - 0.5))
+        console.log(`[Whisper AI] ⏱️ Detected initial silence of ${calibratedStart}s. Calibrated first chunk start from ${currentStart}s -> ${calibratedStart}s.`)
+
+        const updatedChunks = [...chunks]
+        const updatedFirst = { ...firstChunk }
+
+        if (Array.isArray(updatedFirst.timestamp)) {
+            const end = Number(updatedFirst.timestamp[1] ?? (calibratedStart + 2))
+            updatedFirst.timestamp = [calibratedStart, Math.max(calibratedStart + 0.8, end)]
+        }
+        if (updatedFirst.start !== undefined) {
+            updatedFirst.start = calibratedStart
+            if (updatedFirst.end !== undefined && updatedFirst.end < calibratedStart + 0.8) {
+                updatedFirst.end = calibratedStart + 0.8
+            }
+        }
+
+        updatedChunks[0] = updatedFirst
+        return updatedChunks
+    }
+
+    return chunks
+}
+
+/**
  * Convert timestamp chunks to WebVTT format for CC display
  */
 export function chunksToVTT(chunks) {
@@ -657,7 +818,62 @@ export function formatFriendlyDuration(sec) {
     return `${mins} min (${m}m ${s}s / ${sec.toFixed(1)}s)`
 }
 
-export async function transcribeVideoCaptions(video, onProgress, device = 'auto', language = 'en') {
+function getSavedTranscriptionModel() {
+    try {
+        const saved = localStorage.getItem('tutin_settings')
+        if (saved) {
+            const parsed = JSON.parse(saved)
+            if (parsed.transcriptionModel) return parsed.transcriptionModel
+        }
+    } catch {}
+    return 'faster-whisper-large-v3-turbo'
+}
+
+export async function transcribeVideoCaptions(video, onProgress, device = 'auto', language = 'en', modelTier = null) {
+    const activeModelTier = modelTier || getSavedTranscriptionModel()
+    const t0 = performance.now()
+
+    // ── Studio GPU Backend Path: faster-whisper large-v3-turbo ──────────────
+    if (activeModelTier === 'faster-whisper-large-v3-turbo') {
+        const serverAvailable = await isServerAvailable()
+        if (serverAvailable && (video?.filePath || video?.id)) {
+            onProgress?.({ stage: 'transcribing', progress: 0.1, message: 'Running Studio GPU transcription (faster-whisper large-v3-turbo)...' })
+            try {
+                const tTransStart = performance.now()
+                const res = await post('/api/dub/transcribe', {
+                    videoId: video.id,
+                    filePath: video.filePath,
+                    language: language || 'en',
+                    modelName: 'large-v3-turbo'
+                })
+
+                if (res && Array.isArray(res.chunks) && res.chunks.length > 0) {
+                    const tTranscribe = performance.now() - tTransStart
+                    const totalElapsedSec = (performance.now() - t0) / 1000
+                    const rawChunks = res.chunks || []
+                    const captionChunks = sanitizeTranscriptionChunks(rawChunks)
+                    const transcript = (res.text || '').replace(WHISPER_HALLUCINATION_REGEX, '').trim()
+
+                    console.group('%c[TutIn AI Speech Transcription Debugger — Studio GPU]', 'color: #f59e0b; font-weight: bold; font-size: 13px;')
+                    console.log(`Video ID: ${video.id} | Model: faster-whisper large-v3-turbo | Language: ${res.language || language} | Duration: ${res.duration || 0}s | GPU Time: ${(tTranscribe / 1000).toFixed(2)}s`)
+                    console.table([
+                        { Process: `faster-whisper GPU (${captionChunks.length} cues)`, Role: 'CUDA-accelerated word-level alignment', Time: formatFriendlyDuration(tTranscribe / 1000) },
+                        { Process: 'Total GPU Transcription Pipeline', Role: 'Full high-performance audio recognition', Time: formatFriendlyDuration(totalElapsedSec) }
+                    ])
+                    console.groupEnd()
+
+                    await put(`/api/transcripts/${video.id}`, { chunks: captionChunks, language: language || 'en' })
+                    onProgress?.({ stage: 'complete', progress: 1, message: 'Captions generated successfully with Studio GPU!' })
+                    return { transcript, captionChunks }
+                }
+            } catch (gpuErr) {
+                console.warn('[AI] Backend GPU transcription failed, falling back to browser Whisper:', gpuErr)
+                onProgress?.({ stage: 'transcribing', progress: 0.15, message: 'GPU transcription unavailable, falling back to browser Whisper...' })
+            }
+        }
+    }
+
+    // ── Client-side Web Worker Path: whisper-tiny / whisper-base / whisper-small ──
     let fileSource = video?.fileHandle || (video?.filePath ? `${SERVER_URL}/video/${encodeURIComponent(video.filePath)}` : video?.url)
     if (!fileSource) {
         throw new Error('Video source file not accessible for transcription')
@@ -667,31 +883,30 @@ export async function transcribeVideoCaptions(video, onProgress, device = 'auto'
         if (!hasPerm) throw new Error('File access permission was denied')
     }
 
-    const t0 = performance.now()
-
     // Step 1: Extract audio
     const audioData = await extractAndProcessAudio(fileSource, onProgress, video?.id)
     const tExtract = performance.now() - t0
 
-    // Step 2: Transcribe using Whisper Web Worker or main thread
+    // Step 2: Transcribe using Whisper Web Worker with selected modelTier
+    const clientTier = (activeModelTier === 'faster-whisper-large-v3-turbo') ? 'whisper-base' : activeModelTier
     const tTransStart = performance.now()
-    const transcription = await transcribeAudio(audioData, onProgress, device, language)
+    const transcription = await transcribeAudio(audioData, onProgress, device, language, clientTier)
     const tTranscribe = performance.now() - tTransStart
     const totalElapsedSec = (performance.now() - t0) / 1000
     const audioDurationSec = audioData.length / 16000
     const speedX = (audioDurationSec / Math.max(0.1, totalElapsedSec)).toFixed(1)
 
     const rawChunks = transcription.chunks || []
-    const captionChunks = sanitizeTranscriptionChunks(rawChunks)
+    const captionChunks = calibrateInitialSilenceOffset(sanitizeTranscriptionChunks(rawChunks), audioData)
     const transcript = (transcription.text || '')
-        .replace(/(?:thank\s+you\s+for\s+watching|thanks\s+for\s+watching|please\s+like\s+and\s+subscribe|please\s+subscribe)[.!]?\s*$/gi, '')
+        .replace(WHISPER_HALLUCINATION_REGEX, '')
         .trim()
 
     console.group('%c[TutIn AI Speech Transcription Debugger]', 'color: #10b981; font-weight: bold; font-size: 13px;')
-    console.log(`Video ID: ${video.id} | Language: ${language} | Audio Duration: ${formatFriendlyDuration(audioDurationSec)} | Processing Speed: ${speedX}x real-time`)
+    console.log(`Video ID: ${video.id} | Model: ${clientTier} | Language: ${language} | Audio Duration: ${formatFriendlyDuration(audioDurationSec)} | Processing Speed: ${speedX}x real-time`)
     console.table([
         { Process: 'Audio Extraction & 16kHz Decoding', Role: 'Extracts video audio track and downsamples to 16kHz mono', Time: formatFriendlyDuration(tExtract / 1000) },
-        { Process: `Whisper Neural Transcription (${(captionChunks || []).length} cues)`, Role: 'Speech-to-text recognition with timestamp alignment', Time: formatFriendlyDuration(tTranscribe / 1000) },
+        { Process: `Whisper Neural Transcription (${clientTier}, ${(captionChunks || []).length} cues)`, Role: 'Speech-to-text recognition with timestamp alignment', Time: formatFriendlyDuration(tTranscribe / 1000) },
         { Process: 'Total Transcription Pipeline', Role: 'Full audio extraction and subtitle generation process', Time: formatFriendlyDuration(totalElapsedSec) }
     ])
     console.groupEnd()
@@ -756,8 +971,11 @@ export async function processVideoForSummary(videoIdOrVideo, fileSourceOrOnProgr
         const audioDurationSec = audioData.length / 16000
         const speedX = (audioDurationSec / Math.max(0.1, totalTransSec)).toFixed(1)
 
-        const transcript = transcription.text
-        const captionChunks = transcription.chunks
+        const rawChunks = transcription.chunks || []
+        const captionChunks = calibrateInitialSilenceOffset(sanitizeTranscriptionChunks(rawChunks), audioData)
+        const transcript = (transcription.text || '')
+            .replace(/(?:thank\s+you\s+for\s+watching|thanks\s+for\s+watching|please\s+like\s+and\s+subscribe|please\s+subscribe)[.!]?\s*$/gi, '')
+            .trim()
 
         console.group('%c[TutIn AI Speech Transcription Debugger]', 'color: #10b981; font-weight: bold; font-size: 13px;')
         console.log(`Video ID: ${videoId} | Language: ${lang} | Audio Duration: ${formatFriendlyDuration(audioDurationSec)} | Processing Speed: ${speedX}x real-time`)

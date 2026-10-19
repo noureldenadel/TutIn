@@ -2,6 +2,7 @@ import express from 'express'
 import fs from 'fs'
 import path from 'path'
 import { getAll, getOne, run, transaction, getDataDir, getDb, saveDatabase } from '../database.js'
+import { getPunctuationModelsDir } from '../utils/modelManager.js'
 
 const router = express.Router()
 
@@ -139,7 +140,7 @@ function getDirSizeBytes(dirPath) {
 // GET /api/settings/punctuation-models
 router.get('/punctuation-models', async (req, res) => {
     try {
-        const modelsDir = path.join(process.cwd(), 'models', 'punctuation')
+        const modelsDir = getPunctuationModelsDir()
         const langs = ['en', 'ar', 'es', 'fr', 'de', 'it']
         const models = []
         let totalBytes = 0
@@ -186,7 +187,7 @@ router.delete('/punctuation-models/:lang', async (req, res) => {
     try {
         const { lang } = req.params
         const norm = (lang || '').toLowerCase().trim()
-        const modelsDir = path.join(process.cwd(), 'models', 'punctuation')
+        const modelsDir = getPunctuationModelsDir()
         const langDir = path.join(modelsDir, norm)
 
         if (fs.existsSync(langDir)) {
@@ -207,7 +208,7 @@ router.delete('/punctuation-models/:lang', async (req, res) => {
 // DELETE /api/settings/punctuation-models
 router.delete('/punctuation-models', async (req, res) => {
     try {
-        const modelsDir = path.join(process.cwd(), 'models', 'punctuation')
+        const modelsDir = getPunctuationModelsDir()
         if (fs.existsSync(modelsDir)) {
             fs.rmSync(modelsDir, { recursive: true, force: true })
             fs.mkdirSync(modelsDir, { recursive: true })

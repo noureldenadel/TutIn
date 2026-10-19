@@ -10,31 +10,44 @@ assert.strictEqual(extractLangCode('video.ar-eg.tts.json', 'video'), null, 'Shou
 assert.strictEqual(extractLangCode('video.ar.vtt', 'video'), 'ar', 'Should extract standard language')
 
 console.log('--- 2. Testing applyDialectPhoneticNudges ---')
-const testText = 'أنا قلتله ييجي دلوقتي علشان نشوف إيه اللي هيحصل بعد كده'
-const nudgedEg = applyDialectPhoneticNudges(testText, 'ar-eg')
-console.log('Original:', testText)
+const testMsa = 'الآن يجب أن نذهب لكي نرى ماذا سيحدث هكذا'
+const nudgedEg = applyDialectPhoneticNudges(testMsa, 'ar-eg')
+console.log('Original MSA:', testMsa)
 console.log('Egyptian Nudged:', nudgedEg)
-assert.ok(nudgedEg.includes('دِلْوَأْتي'), 'Should nudge دلوقتي to دِلْوَأْتي')
-assert.ok(nudgedEg.includes('أُلتِلُه'), 'Should nudge قلتله to أُلتِلُه')
-assert.ok(nudgedEg.includes('كِدا'), 'Should nudge كده to كِدا')
-assert.ok(nudgedEg.includes('عَشَان'), 'Should nudge علشان to عَشَان')
+assert.ok(nudgedEg.includes('دلوقتي'), 'Should nudge الآن to دلوقتي')
+assert.ok(nudgedEg.includes('علشان'), 'Should nudge لكي to علشان')
+assert.ok(nudgedEg.includes('كده'), 'Should nudge هكذا to كده')
+assert.ok(nudgedEg.includes('إيه'), 'Should nudge ماذا to إيه')
+assert.strictEqual(/[\u0617-\u061A\u064B-\u065F\u0670]/.test(nudgedEg), false, 'Must not contain any Arabic tashkeel')
 
-const testGulf = 'الحين ابي اشوف ايش راح تسوي بعدين'
+const testGulf = 'الآن نريد أن نرى كيف حالك وماذا سنفعل هكذا'
 const nudgedSa = applyDialectPhoneticNudges(testGulf, 'ar-sa')
-console.log('Original Gulf:', testGulf)
+console.log('Original Gulf MSA:', testGulf)
 console.log('Gulf Nudged:', nudgedSa)
-assert.ok(nudgedSa.includes('إِلْحِين'), 'Should nudge الحين to إِلْحِين')
-assert.ok(nudgedSa.includes('أَبِي'), 'Should nudge ابي to أَبِي')
+assert.ok(nudgedSa.includes('الحين'), 'Should nudge الآن to الحين')
+assert.ok(nudgedSa.includes('نبي'), 'Should nudge نريد to نبي')
+assert.ok(nudgedSa.includes('شلونك'), 'Should nudge كيف حالك to شلونك')
+assert.ok(nudgedSa.includes('إيش'), 'Should nudge ماذا to إيش')
+assert.strictEqual(/[\u0617-\u061A\u064B-\u065F\u0670]/.test(nudgedSa), false, 'Must not contain any Arabic tashkeel')
 
-console.log('--- 3. Testing stitchCuesIntoSentences ---')
+console.log('--- 3. Testing stitchCuesIntoSentences (Empty Cue 1-to-1 Preservation) ---')
 const sampleCues = [
     { start: 0.0, end: 1.5, timestamp: [0.0, 1.5], text: 'Hello world.' },
-    { start: 1.6, end: 3.0, timestamp: [1.6, 3.0], text: 'Now we test.' }
+    { start: 1.5, end: 2.0, timestamp: [1.5, 2.0], text: '' }, // empty pause cue
+    { start: 2.0, end: 3.5, timestamp: [2.0, 3.5], text: '[Music]' }, // non-speech cue
+    { start: 3.5, end: 5.0, timestamp: [3.5, 5.0], text: 'Now we test.' }
 ]
 const stitched = stitchCuesIntoSentences(sampleCues)
-assert.strictEqual(stitched.length, 2)
+assert.strictEqual(stitched.length, 4, 'Must create 4 sentence structures preserving every cue')
 assert.strictEqual(stitched[0].text, 'Hello world.')
-assert.strictEqual(stitched[1].text, 'Now we test.')
+assert.strictEqual(stitched[1].text, '', 'Empty cue must have empty text')
+assert.strictEqual(stitched[1].isNonSpeech, true)
+assert.strictEqual(stitched[2].text, '', 'Music cue must have empty text')
+assert.strictEqual(stitched[2].isNonSpeech, true)
+assert.strictEqual(stitched[3].text, 'Now we test.')
+// Verify that total stitched cues equals original chunks length
+const totalPreservedCues = stitched.flatMap(s => s.cues).length
+assert.strictEqual(totalPreservedCues, sampleCues.length, 'Every single cue index and timestamp must be preserved 1-to-1')
 
 console.log('--- 4. Testing Companion Save & Load ---')
 const dummyMeta = {
@@ -44,7 +57,7 @@ const dummyMeta = {
     videoBaseName: 'test_vid_123'
 }
 const dummySegments = [
-    { start: 0.0, end: 1.5, timestamp: [0.0, 1.5], caption: 'مرحبا', text: 'مَرْحَبًا' }
+    { start: 0.0, end: 1.5, timestamp: [0.0, 1.5], caption: 'مرحبا', text: 'مرحبا' }
 ]
 
 const savedPath = saveTtsCompanionFile(dummyMeta, 'ar-eg', dummySegments)
@@ -54,7 +67,7 @@ assert.ok(fs.existsSync(savedPath), 'Saved file should exist on disk')
 const loadedSegments = loadTtsCompanionSegments(dummyMeta.id, 'ar-eg', dummyMeta)
 assert.ok(loadedSegments, 'Loaded segments should not be null')
 assert.strictEqual(loadedSegments.length, 1)
-assert.strictEqual(loadedSegments[0].text, 'مَرْحَبًا')
+assert.strictEqual(loadedSegments[0].text, 'مرحبا')
 
 // Clean up test file
 try { fs.unlinkSync(savedPath) } catch {}

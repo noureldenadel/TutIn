@@ -38,6 +38,7 @@ const defaultSettings = {
     openRouterApiKey: '',
     openRouterModel: 'google/gemini-2.0-flash-exp:free',
     aiDevice: 'auto', // 'auto', 'gpu', 'cpu'
+    transcriptionModel: 'faster-whisper-large-v3-turbo', // 'whisper-tiny', 'whisper-base', 'whisper-small', 'faster-whisper-large-v3-turbo'
     dubbingEnabled: false,
     dubbingDevice: 'auto', // 'auto', 'gpu', 'cpu'
 }
