@@ -22,11 +22,11 @@ type TabId = (typeof tabs)[number]["id"];
 
 function Section({ title, description, children }: { title: string; description?: string; children: ReactNode }) {
   return (
-    <section className="rounded-xl border border-border bg-card p-5">
+    <div className="py-5 first:pt-0 last:pb-0">
       <h3 className="text-sm font-semibold">{title}</h3>
-      {description && <p className="mt-1 text-xs leading-5 text-muted-foreground">{description}</p>}
-      <div className="mt-4">{children}</div>
-    </section>
+      {description && <p className="mt-1 text-xs text-muted-foreground">{description}</p>}
+      <div className="mt-3.5">{children}</div>
+    </div>
   );
 }
 
@@ -45,9 +45,9 @@ function Pill({ children }: { children: ReactNode }) {
 
 function StorageRow({ title, value, action, icon }: { title: string; value: string; action: string; icon?: ReactNode }) {
   return (
-     <div className="flex flex-col gap-3 rounded-xl border border-border bg-card p-5 sm:flex-row sm:items-center sm:justify-between">
+     <div className="flex flex-col gap-3 py-4 first:pt-0 last:pb-0 sm:flex-row sm:items-center sm:justify-between">
       <div className="min-w-0"><p className="text-sm font-semibold">{title}</p><p className="mt-1 truncate font-mono text-xs text-muted-foreground">{value}</p></div>
-       <Button variant="outline" size="sm" className="shrink-0 rounded-md">{icon}{action}</Button>
+       <Button variant="outline" size="sm" className="shrink-0 rounded-md gap-1.5">{icon}{action}</Button>
     </div>
   );
 }
@@ -63,7 +63,7 @@ export function SettingsModal({ open, onOpenChange, theme, onThemeChange }: { op
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
        <DialogContent className="flex h-[min(640px,90dvh)] max-w-4xl flex-col gap-0 overflow-hidden rounded-xl border-border bg-background p-0 shadow-workspace sm:flex-row sm:rounded-xl">
-        <nav className="flex shrink-0 gap-1 overflow-x-auto border-b border-border bg-shell p-3 sm:w-60 sm:flex-col sm:border-b-0 sm:border-r sm:p-4" aria-label="Settings sections">
+        <nav className="flex shrink-0 gap-1 overflow-x-auto border-b border-border bg-shell p-3 sm:w-60 sm:flex-col sm:border-b-0 sm:border-r sm:p-4 scrollbar-none" aria-label="Settings sections">
           <DialogTitle className="hidden px-3 pb-4 pt-1 text-lg sm:block">Settings</DialogTitle>
           {tabs.map((t) => (
             <button key={t.id} type="button" onClick={() => setTab(t.id)} aria-current={tab === t.id ? "page" : undefined}
@@ -73,10 +73,10 @@ export function SettingsModal({ open, onOpenChange, theme, onThemeChange }: { op
           ))}
         </nav>
 
-        <div className="min-w-0 flex-1 overflow-y-auto p-6 sm:p-8">
+        <div className="min-w-0 flex-1 overflow-y-auto p-6 sm:p-8 custom-scrollbar">
           <h2 className="text-xl font-semibold">{active.label}</h2>
           <DialogDescription className="mt-1">Saved locally.</DialogDescription>
-          <div className="mt-6 grid gap-4">
+          <div className="mt-4 divide-y divide-border/60">
             {tab === "general" && <>
               <Section title="Theme">
                  <div className="inline-flex rounded-lg border border-border bg-secondary/50 p-1">
@@ -104,7 +104,7 @@ export function SettingsModal({ open, onOpenChange, theme, onThemeChange }: { op
               <Section title="Playback">
                 <div className="flex items-center justify-between text-sm"><span>Default speed</span><span className="font-semibold">{speed.toFixed(2)}×</span></div>
                 <Slider className="mt-3" min={1} max={2} step={0.25} value={[speed]} onValueChange={([v]) => setSpeed(v ?? 1)} aria-label="Default speed" />
-                <div className="mt-4 divide-y divide-border">
+                <div className="mt-4 divide-y divide-border/60">
                   <ToggleRow label="Autoplay next" defaultChecked />
                   <ToggleRow label="Autoscroll transcript" defaultChecked />
                   <ToggleRow label="Pause in background" />
@@ -133,8 +133,8 @@ export function SettingsModal({ open, onOpenChange, theme, onThemeChange }: { op
                 <div className="grid gap-3 sm:grid-cols-2">
                   {([["gpu", Zap, "GPU / CUDA Acceleration", "Recommended"], ["cpu", Cpu, "CPU Mode", "Slower, no VRAM needed"]] as const).map(([id, Icon, label, sub]) => (
                     <button key={id} type="button" onClick={() => setDevice(id)} aria-pressed={device === id}
-                       className={cn("flex items-start gap-3 rounded-lg border border-border p-4 text-left transition-all hover:bg-accent", device === id && "border-foreground/40 bg-secondary shadow-card")}>
-                      <Icon className="mt-0.5 size-5 shrink-0" /><span><span className="block text-sm font-semibold">{label}</span><span className="text-xs text-muted-foreground">{sub}</span></span>
+                       className={cn("flex items-start gap-3 rounded-lg bg-secondary/40 p-3.5 text-left transition-colors hover:bg-secondary", device === id && "bg-secondary ring-1 ring-primary/40")}>
+                      <Icon className="mt-0.5 size-5 shrink-0 text-foreground" /><span><span className="block text-sm font-semibold text-foreground">{label}</span><span className="text-xs text-muted-foreground">{sub}</span></span>
                     </button>
                   ))}
                 </div>

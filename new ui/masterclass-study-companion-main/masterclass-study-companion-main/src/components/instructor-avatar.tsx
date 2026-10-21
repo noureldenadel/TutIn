@@ -65,15 +65,7 @@ export function InstructorAvatar({
       return { colors: c, sparkColor: customPalette.spark ?? c.bg };
     }
 
-    if (course) {
-      const courseSeed = seed ?? getCourseSeed(course);
-      const hue = getCourseHue(courseSeed, course.thumbnailHue, settings);
-      const p = computePalette(hue, settings.drift, settings.contrast);
-      const c = getAvatarColors(courseSeed, p, settings);
-      return { colors: c, sparkColor: p.spark };
-    }
-
-    const instPalette = getInstructorPalette(name, settings);
+    const instPalette = getInstructorPalette(name, settings, course);
     return {
       colors: { bg: instPalette.bg, fg: instPalette.fg },
       sparkColor: instPalette.spark,

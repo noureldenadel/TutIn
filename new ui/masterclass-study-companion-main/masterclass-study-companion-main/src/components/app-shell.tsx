@@ -6,6 +6,7 @@ import {
   Cloud,
   Compass,
   Edit3,
+  ExternalLink,
   Folder,
   FolderOpen,
   GraduationCap,
@@ -17,6 +18,7 @@ import {
   Moon,
   MoreHorizontal,
   Palette,
+  Play,
   Plus,
   RefreshCw,
   Search,
@@ -65,7 +67,7 @@ const navItems = [
   { label: "Instructors", icon: UsersRound, to: "/instructors" },
   { label: "History", icon: History, to: "/history" },
   { label: "Analytics", icon: BarChart3, to: "/analytics" },
-  { label: "Roadmap", icon: Compass },
+  { label: "Roadmap", icon: Compass, to: "/roadmap" },
   { label: "Admin", icon: Palette, to: "/admin" },
 ] as const;
 
@@ -170,15 +172,11 @@ function AddCourseControl() {
                 <DialogDescription className="leading-6">Files stay on this device.</DialogDescription>
               </DialogHeader>
                <Button type="button" variant="outline" onClick={() => inputRef.current?.click()} className="mt-3 flex min-h-52 h-auto w-full flex-col rounded-lg border-dashed bg-secondary/50 px-6 text-center shadow-none hover:bg-secondary">
-                <span className="flex size-12 items-center justify-center rounded-full bg-card text-foreground shadow-card"><UploadCloud className="size-5" /></span>
-                <span className="mt-4 font-semibold">Choose folder</span>
+                <UploadCloud className="size-9 text-muted-foreground" />
+                <span className="mt-3 font-semibold">Choose folder</span>
                 <span className="mt-1 text-sm font-normal text-muted-foreground">Videos, audio, subtitles, or PDFs</span>
               </Button>
               <input ref={inputRef} type="file" multiple accept="video/*,audio/*,.srt,.vtt,.pdf" className="sr-only" />
-              <div className="grid gap-3 sm:grid-cols-2">
-                 <div className="flex gap-3 rounded-lg border border-border bg-secondary/40 p-4"><FolderOpen className="size-5 shrink-0 text-foreground" /><div><p className="text-sm font-semibold">Automatic lessons</p><p className="mt-1 text-xs leading-5 text-muted-foreground">Follows folder structure.</p></div></div>
-                 <div className="flex gap-3 rounded-lg border border-border bg-secondary/40 p-4"><HardDrive className="size-5 shrink-0 text-foreground" /><div><p className="text-sm font-semibold">Private storage</p><p className="mt-1 text-xs leading-5 text-muted-foreground">Files remain offline.</p></div></div>
-              </div>
             </>
           ) : remoteSource ? (
             <>
@@ -195,39 +193,115 @@ function AddCourseControl() {
     </>
   );
 }
+function CourseMenu({ course }: { course: Course }) {
+  const isDirectLink = course.sourceType === "link" || Boolean(course.courseUrl);
 
-function CourseMenu({ id }: { id: number }) {
   return (
     <DropdownMenu>
-       <DropdownMenuTrigger asChild><Button variant="ghost" size="icon" aria-label="Course actions" className="size-9 shrink-0 rounded-md text-muted-foreground"><MoreHorizontal /></Button></DropdownMenuTrigger>
+       <DropdownMenuTrigger asChild>
+         <Button
+           variant="ghost"
+           size="icon"
+           aria-label="Course actions"
+           className="size-8 shrink-0 rounded-md border border-border/40 bg-card/85 text-foreground backdrop-blur-md shadow-sm transition-colors hover:bg-card hover:text-foreground"
+         >
+           <MoreHorizontal className="size-4" />
+         </Button>
+       </DropdownMenuTrigger>
        <DropdownMenuContent align="end" className="w-48 rounded-lg p-1.5 shadow-workspace">
-         <DropdownMenuItem asChild className="rounded-md"><Link to="/manage/$courseId" params={{ courseId: String(id) }}><Edit3 /> Curriculum</Link></DropdownMenuItem>
-         <DropdownMenuItem className="rounded-md"><RefreshCw /> Rescan folder</DropdownMenuItem>
-         <DropdownMenuItem className="rounded-md"><FolderOpen /> Show in Explorer</DropdownMenuItem>
-         <DropdownMenuItem className="rounded-md text-destructive focus:text-destructive"><Trash2 /> Delete</DropdownMenuItem>
+         {isDirectLink ? (
+           <>
+             {course.courseUrl && (
+               <DropdownMenuItem asChild className="rounded-md">
+                 <a href={course.courseUrl} target="_blank" rel="noopener noreferrer">
+                   <ExternalLink /> Open link
+                 </a>
+               </DropdownMenuItem>
+             )}
+             <DropdownMenuItem className="rounded-md text-destructive focus:text-destructive">
+               <Trash2 /> Delete
+             </DropdownMenuItem>
+           </>
+         ) : (
+           <>
+             <DropdownMenuItem asChild className="rounded-md">
+               <Link to="/manage/$courseId" params={{ courseId: String(course.id) }}>
+                 <Edit3 /> Curriculum
+               </Link>
+             </DropdownMenuItem>
+             <DropdownMenuItem className="rounded-md"><RefreshCw /> Rescan folder</DropdownMenuItem>
+             <DropdownMenuItem className="rounded-md"><FolderOpen /> Show in Explorer</DropdownMenuItem>
+             <DropdownMenuItem className="rounded-md text-destructive focus:text-destructive">
+               <Trash2 /> Delete
+             </DropdownMenuItem>
+           </>
+         )}
       </DropdownMenuContent>
     </DropdownMenu>
   );
 }
 
-function initials(name: string) {
-  return name.split(" ").map((part) => part[0]).slice(0, 2).join("");
-}
-
-function CourseCard({ course }: { course: Course }) {
+export function CourseCard({ course }: { course: Course }) {
   const completed = Math.round((course.lessons * course.progress) / 100);
+  const isDirectLink = course.sourceType === "link" || Boolean(course.courseUrl);
+
   return (
-     <article className="group relative min-w-0 overflow-hidden rounded-xl border border-border bg-card shadow-card transition-colors duration-200 hover:border-foreground/20">
-       <Link className="absolute inset-0 z-10 rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background" to="/learn/$courseId" params={{ courseId: String(course.id) }} aria-label={`Open ${course.title}`} title={course.title} />
+     <article className="group relative min-w-0 overflow-hidden rounded-xl border border-border bg-card shadow-card transition-transform duration-300 hover:-translate-y-1">
+       {isDirectLink ? (
+         <a
+           href={course.courseUrl}
+           target="_blank"
+           rel="noopener noreferrer"
+           className="absolute inset-0 z-10 rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+           aria-label={`Open ${course.title} in new tab`}
+           title={course.title}
+         />
+       ) : (
+         <Link
+           className="absolute inset-0 z-10 rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+           to="/learn/$courseId"
+           params={{ courseId: String(course.id) }}
+           aria-label={`Open ${course.title}`}
+           title={course.title}
+         />
+       )}
       <div className="relative aspect-video overflow-hidden">
-        <CourseThumbnail course={course} />
-         <span className="absolute bottom-3 right-3 z-20 rounded bg-course-ink/85 px-2 py-0.5 font-mono text-[11px] font-semibold tabular-nums text-progress-foreground backdrop-blur-sm">{course.duration}</span>
+        {/* Thumbnail with smooth 700ms hover zoom */}
+        <div className="size-full transition-transform duration-700 ease-out group-hover:scale-105">
+          <CourseThumbnail course={course} />
+        </div>
+
+        {/* Gradient Overlay for Depth */}
+        <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent opacity-0 dark:opacity-60 transition-opacity duration-300 group-hover:opacity-40 dark:group-hover:opacity-80" />
+
+        {/* Soft Dimming Overlay on Hover */}
+        <div className="pointer-events-none absolute inset-0 bg-black/30 opacity-0 transition-opacity duration-300 group-hover:opacity-100" />
+
+        {/* Play/Open Floating Overlay (Clean glassmorphic button with zero hard shadows) */}
+        <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+          <div className="size-14 rounded-full flex items-center justify-center bg-card/85 dark:bg-white/10 border border-border/40 dark:border-white/20 opacity-0 scale-90 backdrop-blur-md transition-all duration-200 ease-out group-hover:scale-100 group-hover:opacity-100">
+            {isDirectLink ? (
+              <Link2 className="size-6 text-foreground dark:text-white" />
+            ) : (
+              <Play className="size-6 text-foreground dark:text-white ml-1" fill="currentColor" />
+            )}
+          </div>
+        </div>
+
+        {isDirectLink && (
+          <span className="absolute bottom-3 left-3 z-20 flex items-center gap-1 rounded bg-black/70 px-2 py-0.5 font-mono text-[10px] font-semibold uppercase tracking-wider text-white backdrop-blur-md border border-white/10">
+            <Link2 className="size-3" />
+            Link
+          </span>
+        )}
+
+        <span className="absolute bottom-3 right-3 z-20 rounded bg-black/70 px-2 py-0.5 font-mono text-[10px] font-medium tabular-nums text-white backdrop-blur-md border border-white/10">{course.duration}</span>
         <div className="absolute right-3 top-3 z-20 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
-          <CourseMenu id={course.id} />
+          <CourseMenu course={course} />
         </div>
       </div>
       <div className="p-5">
-        <h2 className="truncate text-lg font-semibold leading-7 text-foreground" title={course.title}>{course.title}</h2>
+        <h2 className="truncate text-lg font-semibold leading-7 text-foreground transition-colors duration-200 group-hover:text-foreground/80 dark:group-hover:text-white" title={course.title}>{course.title}</h2>
         <div className="mt-3 flex items-center gap-2.5">
           <InstructorAvatar name={course.instructor} course={course} size="sm" />
           <span className="truncate text-sm text-muted-foreground">{course.instructor}</span>
@@ -245,8 +319,8 @@ function CourseCard({ course }: { course: Course }) {
 function EmptyState({ clear }: { clear: () => void }) {
   return (
      <div className="col-span-full flex min-h-96 flex-col items-center justify-center rounded-xl border border-dashed border-border bg-card px-6 py-14 text-center">
-      <div className="relative flex size-24 items-center justify-center rounded-full bg-secondary text-foreground"><Library className="size-9" /><span className="absolute right-0 top-1 flex size-8 items-center justify-center rounded-full bg-card shadow-card"><Plus className="size-4" /></span></div>
-      <h2 className="mt-6 text-lg font-semibold">No courses found</h2>
+      <Library className="size-10 text-muted-foreground" strokeWidth={1.5} />
+      <h2 className="mt-5 text-lg font-semibold">No courses found</h2>
       <p className="mt-2 max-w-sm text-sm leading-6 text-muted-foreground">No courses match this view.</p>
        <Button variant="outline" className="mt-6 rounded-md" onClick={clear}>Clear filters</Button>
     </div>
@@ -278,9 +352,11 @@ export function AppShell({ children }: { children?: ReactNode }) {
       <div className="flex h-dvh overflow-hidden bg-shell text-foreground">
         <IconDock dark={dark} onThemeToggle={toggleTheme} onSettings={() => setSettingsOpen(true)} />
         <SettingsModal open={settingsOpen} onOpenChange={setSettingsOpen} theme={mode} onThemeChange={applyMode} />
-         <main className="my-2 mr-2 min-w-0 flex-1 overflow-y-auto rounded-2xl border border-border bg-background shadow-workspace sm:my-3 sm:mr-3">
-          {children ?? <HomePage />}
-        </main>
+        <div className="flex-1 min-w-0 h-dvh overflow-y-auto custom-scrollbar">
+          <main className="my-2 mr-2 min-w-0 rounded-2xl border border-border bg-background shadow-workspace sm:my-3 sm:mr-3 min-h-[calc(100dvh-1rem)] sm:min-h-[calc(100dvh-1.5rem)]">
+            {children ?? <HomePage />}
+          </main>
+        </div>
         <Toaster />
       </div>
     </TooltipProvider>
@@ -312,22 +388,62 @@ function HomePage() {
 
   return (
           <div className="mx-auto max-w-[1440px] px-5 pb-12 pt-6 sm:px-8 sm:pt-8 lg:px-10">
-            <header className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-end">
-                <label className="flex h-11 min-w-0 items-center gap-2 rounded-lg border border-border bg-card px-3 shadow-card sm:flex-1 lg:max-w-96"><Search className="size-4 shrink-0 text-muted-foreground" /><input ref={searchRef} value={query} onChange={(event) => setQuery(event.target.value)} className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground" placeholder="Search courses" /><kbd className="hidden shrink-0 rounded border border-border bg-secondary px-1.5 py-1 text-[10px] font-semibold text-muted-foreground sm:inline">⌘K / Ctrl+K</kbd></label>
-               <AddCourseControl />
+            <header className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex h-11 shrink-0 items-center gap-1 rounded-lg border border-border bg-secondary/50 p-1">
+                {(["All", "In Progress", "Completed"] as Filter[]).map((item) => (
+                  <Button
+                    key={item}
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => setFilter(item)}
+                    className={cn(
+                      "h-9 rounded-sm px-3.5 text-xs font-normal text-muted-foreground shadow-none sm:px-4 sm:text-sm",
+                      filter === item && "bg-card font-medium text-foreground shadow-card hover:bg-card"
+                    )}
+                  >
+                    {item}
+                  </Button>
+                ))}
+              </div>
+
+              <div className="flex items-center gap-3">
+                <label className="flex h-11 min-w-0 items-center gap-2 rounded-lg border border-border bg-card px-3 shadow-card sm:w-64 lg:w-80">
+                  <Search className="size-4 shrink-0 text-muted-foreground" />
+                  <input
+                    ref={searchRef}
+                    value={query}
+                    onChange={(event) => setQuery(event.target.value)}
+                    className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+                    placeholder="Search courses"
+                  />
+                  <kbd className="hidden shrink-0 rounded border border-border bg-secondary px-1.5 py-1 text-[10px] font-semibold text-muted-foreground sm:inline">
+                    ⌘K / Ctrl+K
+                  </kbd>
+                </label>
+                <AddCourseControl />
+              </div>
             </header>
 
-            <div className="mt-8 flex flex-col gap-4 border-b border-border pb-5 sm:flex-row sm:items-center sm:justify-between">
-               <div className="flex items-center gap-1 rounded-lg border border-border bg-secondary/50 p-1">
-                 {(["All", "In Progress", "Completed"] as Filter[]).map((item) => <Button key={item} type="button" size="sm" variant="ghost" onClick={() => setFilter(item)} className={cn("rounded-sm px-4 text-muted-foreground shadow-none", filter === item && "bg-card font-medium text-foreground shadow-card hover:bg-card")}>{item}</Button>)}
-              </div>
+            <div className="mt-6 flex items-center justify-end border-b border-border pb-3.5">
               <DropdownMenu>
-                 <DropdownMenuTrigger asChild><Button variant="ghost" size="sm" className="self-start rounded-md text-muted-foreground sm:self-auto">Sort: {sort} <ChevronDown /></Button></DropdownMenuTrigger>
-                 <DropdownMenuContent align="end" className="rounded-lg p-1.5">{["Recently opened", "Progress", "Course title"].map((item) => <DropdownMenuItem key={item} onClick={() => setSort(item)} className="rounded-md">{item}{sort === item && <Check className="ml-auto" />}</DropdownMenuItem>)}</DropdownMenuContent>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="sm" className="rounded-md text-muted-foreground hover:text-foreground">
+                    Sort: {sort} <ChevronDown className="size-4 ml-1" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="rounded-lg p-1.5 shadow-workspace">
+                  {["Recently opened", "Progress", "Course title"].map((item) => (
+                    <DropdownMenuItem key={item} onClick={() => setSort(item)} className="rounded-md">
+                      {item}
+                      {sort === item && <Check className="ml-auto" />}
+                    </DropdownMenuItem>
+                  ))}
+                </DropdownMenuContent>
               </DropdownMenu>
             </div>
 
-            <section className="mt-7 grid gap-5 md:grid-cols-2 xl:grid-cols-4" aria-label="Course library">
+            <section className="mt-8 grid gap-5 md:grid-cols-2 xl:grid-cols-4" aria-label="Course library">
               {visibleCourses.length ? visibleCourses.map((course) => <CourseCard key={course.id} course={course} />) : <EmptyState clear={() => { setQuery(""); setFilter("All"); }} />}
             </section>
           </div>

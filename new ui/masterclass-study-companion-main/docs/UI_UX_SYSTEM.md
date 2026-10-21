@@ -50,6 +50,8 @@ Colors are defined strictly in the **OKLCH** color space in `src/styles.css` wit
 | `--secondary` | `oklch(0.963 0.003 255)` | `oklch(0.27 0.006 270)` | Inset trays, button backgrounds, badges |
 | `--border` / `--input` | `oklch(0.925 0.004 255)` | `oklch(0.32 0.005 270)` | Structural boundary lines, input outlines |
 | `--primary` | `oklch(0.32 0.008 260)` | `oklch(0.8 0.006 255)` | High-emphasis interactive elements |
+| `--scrollbar-thumb` | `oklch(0.205 0.012 258 / 0.18)` | `oklch(0.94 0.005 255 / 0.18)` | Resting scrollbar thumb pill fill |
+| `--scrollbar-thumb-hover` | `oklch(0.205 0.012 258 / 0.38)` | `oklch(0.94 0.005 255 / 0.38)` | Hovered scrollbar thumb pill fill |
 
 ### Iconography Rules
 - **Solid Silhouettes:** For media sources, course import types, and key quick-recognition targets, use solid vector silhouettes (`size-4 shrink-0 fill-current text-foreground`) instead of faint stroked lines.
@@ -97,6 +99,15 @@ Defined in `src/styles.css` under `@theme inline` with strict geometric roles to
   - *Rule:* Avoid deep, dark fuzzy halos (no wide 28–32px blurs). Cards stay crisp and grounded.
 - `--shadow-workspace`: `0 18px 48px oklch(0.2 0.01 260 / 0.08)` (light) / `0 22px 60px oklch(0 0 0 / 0.24)` (dark) — Reserved exclusively for the main surface container (`<main>`) elevation over `--shell`. Never apply to individual cards on hover.
 
+### Scrollbar Architecture & Non-Overlapping Gutters
+- **Universal Custom Styling:** Replaced default blocky OS scrollbars with sleek, floating pill thumbs (`width: 8px`, `border: 2px solid transparent`, `background-clip: padding-box`). The thumb floats centered inside an invisible track with 2px inset breathing space, preventing any visual collision with curved container boundaries (`rounded-2xl`).
+- **Non-Overlapping Gutters (`scrollbar-gutter: stable`):** Dedicated gutter space is permanently reserved along the scroll edge of `<main>` and internal scroll panels. Content cards, search inputs, buttons, and text never slide underneath the thumb, and switching between long and short views produces zero horizontal layout shifting.
+- **Utility System:**
+  - `custom-scrollbar`: Standard 8px width with `scrollbar-gutter: stable` for the main workstation surface, settings modal, and full-height views.
+  - `custom-scrollbar-sm`: Compact 6px width for sidebars, playlist tabs, transcript lists, command menus, and drawers.
+  - `scrollbar-none`: Eliminates visual scrollbars on horizontal navigation bars (e.g. mobile settings tabs).
+- **Single Scroll Responsibility:** Avoid nested `overflow-y-auto` containers inside `<main>`. Outer views defer vertical scrolling to `<main>` so users never encounter competing scrollbars.
+
 ---
 
 ## 4. Component System
@@ -104,18 +115,36 @@ Defined in `src/styles.css` under `@theme inline` with strict geometric roles to
 ### 1. App Shell (`src/components/app-shell.tsx`)
 - **Structure:** Root flex layout bounded by viewport height (`h-dvh overflow-hidden bg-shell`).
 - **Left Dock (`IconDock`):** Pinned permanently to the left (`sticky top-0 h-dvh w-16`). Contains brand logo, route navigation icons with active indicator bars (`absolute -left-[13px] h-5 w-1 rounded-full bg-foreground/70`), theme toggle, and settings trigger. Never scrolls with the page.
-- **Workspace Surface (`<main>`):** Floating surface with `rounded-2xl border border-border bg-background overflow-y-auto`. Hosts all page content and handles internal scrolling independently.
+- **Workspace Surface (`<main>`):** Floating surface with `rounded-2xl border border-border bg-background shadow-workspace my-2 mr-2 sm:my-3 sm:mr-3`. It contains no internal scrollbar; scrolling is delegated entirely to the outer frame canvas (`<div className="flex-1 min-w-0 h-dvh overflow-y-auto custom-scrollbar">`), positioning the scrollbar on the far right window edge outside the floating card surface.
 
 ### 2. Course Card (`CourseCard`)
 - **Composition:** 16:9 ratio thumbnail + text body + progress bar.
-- **Grounded Interaction Rule:** Cards remain anchored in their grid cell on hover. No vertical floating translation (`-translate-y-1` removed) and no heavy elevation jumps (`hover:shadow-workspace` banned) to prevent spilling shadows and overlapping adjacent cards.
-- **Tactile Border Feedback:** Hover state uses calm border illumination (`transition-colors duration-200 hover:border-foreground/20`), preserving calm workstation aesthetics without visual clutter.
-- **Thumbnail Layer:** Renders `<CourseThumbnail>` which outputs either uploaded covers or crisp generative vector SVG without dark hover overlays or aggressive zoom.
+- **Card Hover Animation (Zero Hard Shadows & Static Stroke):**
+  - Smooth card lift on hover: `transition-transform duration-300 hover:-translate-y-1`.
+  - **Static Outer Border:** The outer card stroke remains clean and constant at `border border-border` without any distracting color or opacity changes on hover.
+  - **No Hover Shadow:** Individual cards maintain their flat, subtle resting depth (`shadow-card`) and never produce hard hover drop shadows (`hover:shadow-xl` banned).
+  - Title hover transition: `group-hover:text-foreground/80 dark:group-hover:text-white transition-colors duration-200`.
+- **Thumbnail Layer & Hover Zoom:**
+  - Thumbnail container with `aspect-video overflow-hidden`.
+  - Artwork zooms subtly on hover: `size-full transition-transform duration-700 ease-out group-hover:scale-105`.
+  - Gradient depth overlay: `bg-gradient-to-t from-black/60 via-transparent to-transparent opacity-0 dark:opacity-60 transition-opacity duration-300 group-hover:opacity-40 dark:group-hover:opacity-80`.
+  - Soft dimming overlay: `bg-black/30 opacity-0 transition-opacity duration-300 group-hover:opacity-100`.
+- **Central Action Button (Glassmorphic, Shadow-Free):**
+  - Smooth frosted floating action circle: `size-14 rounded-full flex items-center justify-center bg-card/85 dark:bg-white/10 border border-border/40 dark:border-white/20 opacity-0 scale-90 backdrop-blur-md transition-all duration-200 ease-out group-hover:scale-100 group-hover:opacity-100`. Zero harsh drop shadows.
+  - Video Courses: `<Play className="size-6 text-foreground dark:text-white ml-1" fill="currentColor" />`.
+  - Direct Link Courses: `<Link2 className="size-6 text-foreground dark:text-white" />`.
+- **Dual-Route Card Interaction:**
+  - Direct Link Courses (`sourceType: "link"` or `courseUrl`): Card hit area is an anchor tag (`<a>`) opening the destination in a new tab (`target="_blank" rel="noopener noreferrer"`). Displays a subtle `"Link"` badge on the bottom-left of the thumbnail (`bg-black/70 backdrop-blur-md border border-white/10 text-white`).
+  - Video Courses: Card hit area is `<Link to="/learn/$courseId">` navigating to the internal player.
 - **Metadata:** Single-line truncated title (`truncate`), instructor chip with uppercase initials, progress bar, lesson counter, and duration badge.
-- **Action Menu:** Top-right hover-revealed 3-dot dropdown with curriculum management and folder actions.
+- **Action Menu:** Top-right hover-revealed 3-dot dropdown with frosted glass trigger (`bg-card/85 backdrop-blur-md border border-border/40`). Automatically adapts actions based on source type (`Open link` for external URLs; `Curriculum`, `Rescan folder`, and `Show in Explorer` for local video courses).
 
-### 3. Generative Artwork Engine (`src/lib/thumbnail-generator.ts` & `course-thumbnail.tsx`)
-- **Purpose:** Automatically generates distinct, high-aesthetic algorithmic SVG thumbnails for courses without uploaded covers.
+### 3. Generative Artwork & Cover Source Engine (`src/lib/thumbnail-generator.ts` & `course-thumbnail.tsx`)
+- **Purpose:** Manages thumbnail presentation across the application with dual capabilities: rendering uploaded user cover images or automatically generating distinct, algorithmic SVG vector artwork for courses without custom covers.
+- **Cover Artwork Modes (`ThumbnailCoverMode`):**
+  - `generated`: Pure algorithmic vector SVG engine for all courses without uploaded covers.
+  - `images`: Simulates all courses having user-uploaded covers using 4 bundled placeholder assets (`thumbnail (1).jpg`, `thumbnail (1).png`, `thumbnail (1).webp`, `thumbnail (2).jpg`).
+  - `mixed`: Combines both worlds in a realistic ~50/50 distribution to evaluate how uploaded photo covers and generative vector artwork sit harmoniously side-by-side in the library.
 - **Algorithms:** Supports 4 geometric patterns:
   - `0`: Binary ramp (column block grid)
   - `1`: Thin strips (horizontal regular cuts)
@@ -145,7 +174,7 @@ Defined in `src/styles.css` under `@theme inline` with strict geometric roles to
 - **Contrast Tuning Strategies:** Supports `Balanced` (calm delta without harsh glare), `High` (prototype ends), `Soft` (adjacent tones), and `Manual` (direct tone index binding), persistent app-wide via `ThumbnailSettings`.
 - **Brand Typography (Plus Jakarta Sans):** Initials rendered in SVG `<text>` using the new UI's signature primary font (`var(--font-sans), 'Plus Jakarta Sans', system-ui, sans-serif`) at `fontSize="9.5"` and `fontWeight="600"` (SemiBold). Gives open glyph counters and balanced negative space inside the circular boundary without visual heaviness.
 - **Harmonized Two-Tone Palette Contrast:** Text color is directly selected from the palette tones, maintaining high contrast and 100% color temperature harmony with the course thumbnail artwork.
-- **Universal Cross-Screen Consistency:** Appears across `/instructors` (size 64px), home page `CourseCard` (size 28px, inheriting the course palette), `/admin` live preview (size 20px, dynamically reactive to playground sliders), and `/learn` video header (size 28px).
+- **Universal Cross-Screen Consistency:** Each instructor's avatar palette is bound to their signature course from the library (e.g. Maya Chen is bound to Course 1). This guarantees 100% color and style parity across the Home Page, Instructors Page list, Instructor Detail Profile view, and Course Player.
 - **Live Real-Time Tuning:** Listens to `tutin:thumbnail_settings_changed` so when global contrast, drift, or hue changes in `/admin`, all instructor avatars adapt together with course thumbnails in real time.
 
 ---
@@ -153,8 +182,8 @@ Defined in `src/styles.css` under `@theme inline` with strict geometric roles to
 ## 5. Page & Layout Patterns
 
 ### Home / Dashboard (`/`)
-- **Header:** Quick search input (`⌘K / Ctrl+K` shortcut) + `AddCourseControl`.
-- **Sub-header Bar:** Segmented status filter (`All`, `In Progress`, `Completed`) + Sort dropdown.
+- **Header:** Status filter segmented control (`All | In Progress | Completed`) on the left, paired on the same level with the quick search input (`⌘K / Ctrl+K`) and `AddCourseControl` on the right (`h-11`).
+- **Sub-header Bar:** Sub-row with right-aligned Sort dropdown (`Recently opened`, `Progress`, `Course title`) above the course grid.
 - **Grid Layout:** Responsive 4-column card grid (`grid gap-5 md:grid-cols-2 xl:grid-cols-4`).
 - **Empty State:** Centered card with clear filter action when no courses match.
 
@@ -165,11 +194,32 @@ Defined in `src/styles.css` under `@theme inline` with strict geometric roles to
 ### Admin Settings (`/admin`)
 - **Layout:** Two-column control grid (interactive playground on left, parameters on right) followed by full-width live course library preview.
 
+### Instructors Page (`/instructors`)
+- **Layout:** Full-width single-column list stack (`max-w-[1440px] px-5 pb-12 pt-6 sm:px-8 sm:pt-8 lg:px-10 flex flex-col gap-1`) matching the exact container dimensions and responsive padding of the Home Page. Zero dividing lines between instructors to eliminate visual clutter.
+- **Row Anatomy:** Borderless interactive row with `w-full flex items-center gap-4 rounded-xl px-4 py-3 sm:px-5 sm:py-3.5 hover:bg-secondary/60 focus-visible:ring-2 focus-visible:ring-ring`. The entire row is directly clickable without trailing button clutter.
+- **Avatar:** Circular avatar without spark dot badge (`size="lg"` 48px in list, `size="xl"` 64px in profile view, `InstructorAvatar` duotone system).
+- **Metadata:** Name (`text-base font-medium text-foreground flex-1 truncate`) with right-aligned muted course count (`font-mono text-sm text-muted-foreground`).
+- **Instructor Detail View:** Clicking any instructor opens their dedicated view (`?instructor=:id`) with back navigation (`<ArrowLeft /> Instructors`), instructor profile hero (duotone avatar, name, category capsule, lesson/duration summary), and a 4-column responsive grid of their enrolled courses rendered via `<CourseCard>`.
+
+### History Page (`/history`)
+- **Layout:** Full-width single-column stack (`max-w-[1440px] px-5 pb-12 pt-6 sm:px-8 sm:pt-8 lg:px-10`) matching the Instructors and Home pages.
+- **Header:** Clean title `History` with top-right quick search input (`w-80` to `w-96`).
+- **Sub-header Bar:** Date filter segmented pills (`All Time`, `This Week`, `This Month`) on the left, paired with lesson count and clear history trigger on the right.
+- **Row Anatomy (Instructors Pattern):** Borderless interactive rows (`rounded-xl px-3 py-2.5 sm:px-4 sm:py-3 hover:bg-secondary/60 transition-colors`). The entire row is directly clickable to resume the course, eliminating separate resume button clutter.
+- **Visuals & Actions:** Left aspect-video thumbnail rendered via `<CourseThumbnail>` with lesson duration badge and progress bar. Middle content follows authentic TutIn hierarchy: video name (primary) -> course title below it -> instructor name paired with `<Clock /> xx% watched` and timestamp. Right side features a clean hover-reveal remove button (`Trash2`, `opacity-0 group-hover:opacity-100`) with stop propagation, eliminating three-dot dropdown clutter.
+
+### Analytics Dashboard (`/analytics`)
+- **Metric Cards:** Watch time, streak, completed courses (`2 / 25` with dynamic progress bar derived from library data), and notes count.
+- **Heatmap:** 52-week / 3-month study consistency calendar.
+- **Velocity & Focus Grid:** Two-column layout pairing weekly study velocity with the **Learning Focus** donut chart.
+- **Learning Focus (`LearningFocus`):** Replaces legacy audio/subtitles with the user's top learning fields (Design & UI/UX, Programming, Motion Graphics, AI & Machine Learning) derived from course tags and watch time. Shows extracted tags per field, percentage distribution using brand token opacity steps, and top field summary in the donut center.
+- **Streamlined Focus:** Removed redundant "Course Progress" list to eliminate duplicate content with the home library and keep analytics focused on high-level study patterns.
+
 ---
 
 ## 6. UX Writing & Copy Economy
 
-- **Buttons:** 1 to 2 words, verb-first ("Add Course", "Resume", "Save", "Reset defaults", "Import videos").
+- **Buttons:** 1 to 2 words, verb-first ("Add Course", "Resume", "Save", "Reset defaults", "Import videos", "Instructors").
 - **Nav Items & Tabs:** 1 word where possible ("Home", "Instructors", "History", "Analytics", "Admin", "Playlist", "Notes", "Transcript", "General", "AI", "Voice", "Storage", "About").
 - **Dropdown Items:** Clean nouns ("Course folder", "YouTube", "Google Drive", "Direct link", "Curriculum", "Rescan folder").
 - **Empty States:** Exactly 1 short sentence plus 1 action button. No paragraphs.
@@ -198,6 +248,14 @@ Defined in `src/styles.css` under `@theme inline` with strict geometric roles to
 | **2026-10-20** | **Client Hydration Persistence & Code Export** | Fixed SSR client hydration gap in `useThumbnailSettings` and `AdminDashboard` so saved settings persist in `localStorage` on browser reload without reverting to server defaults. Added "Copy code" button in Admin to export active configuration for hardcoded code defaults. |
 | **2026-10-20** | **Permanent Avatar Baseline in Codebase** | Applied user-selected configuration directly to `DEFAULT_GENERATOR_SETTINGS`: manual contrast mode, background tone 4 (`avatarBgTone: 3`), initials text tone 2 (`avatarFgTone: 1`), Plus Jakarta Sans font, 500 Medium weight, and 8px glyph size. |
 | **2026-10-21** | **Strict Copy Economy Enforcement ("Say Less, Show More")** | Audited all screens against `ui-rules.md`. Removed redundant introductory descriptions under headings (History, Instructors, Admin, Settings), shortened multi-word nav tabs and buttons to 1-2 words (verb-first), trimmed empty states to single concise sentences with direct actions, and removed repetitive metric values. |
+| **2026-10-21** | **Instructors List & Instructor Course Detail View** | Adopted a full-width borderless clickable list view (`max-w-[1440px]`) aligned with the Home Page. Clicking an instructor opens their dedicated course page (`?instructor=:id`) with profile summary, enrolled courses grid via `<CourseCard>`, and seamless back navigation matching the real TutIn app experience. |
+| **2026-10-21** | **Container Decluttering & Stroke Minimization Audit** | Audited all screens against `ui-rules.md`. Eliminated nested cards inside cards across Settings, Admin, and Add Course modal. Stripped decorative icon circles and rounded squares. Swapped card-in-dialog boxes for clean `divide-y` section dividers. Replaced `hover:shadow-workspace` in History with calm border illumination, and removed translation bounce in Curriculum. |
+| **2026-10-21** | **Course Card Clean Hover, Zero Shadows & Static Stroke** | Eliminated all harsh hover drop shadows (`hover:shadow-xl` and `shadow-2xl` removed) and removed outer stroke color/opacity shifts (`hover:border-foreground` removed). The card boundary remains a steady `border border-border` with smooth lift (`hover:-translate-y-1`), 700ms thumbnail zoom (`group-hover:scale-105`), and a shadow-free glassmorphic action button (`bg-card/85 dark:bg-white/10 border border-border/40 backdrop-blur-md`). |
+| **2026-10-21** | **Custom Inset Scrollbars & Non-Overlapping Gutter Architecture** | Replaced default OS scrollbars with sleek, floating pill thumbs (`--scrollbar-thumb` OKLCH tokens, 8px width with 2px transparent inset border) that float inside an invisible track without clipping `rounded-2xl` corners. Enforced `scrollbar-gutter: stable` on `<main>`, settings modal, and internal panels so scrollbars never overlap cards, controls, or text, and prevent layout jumps. Removed duplicate nested scroll containers in Analytics. |
+| **2026-10-21** | **Outer Frame Workstation Scrollbar** | Relocated the main viewport scrollbar from inside the floating card surface (`<main>`) to the outer shell frame (`flex-1 min-w-0 h-dvh overflow-y-auto custom-scrollbar`). The card surface floats cleanly with a 12px margin on the right, keeping the scrollbar on the far right edge of the screen completely outside `<main>`. |
+| **2026-10-21** | **Thumbnail Cover Source Modes (Images, Generated & Mixed)** | Added multi-mode cover management in `/admin` using 4 bundled placeholder assets (`thumbnail (1).jpg`, `thumbnail (1).png`, `thumbnail (1).webp`, `thumbnail (2).jpg`). Added 3 distinct options: `Generated` (pure algorithmic SVG vector art), `Sample images` (all courses with image covers), and `Mixed` (both side-by-side: ~50% image covers, ~50% vector placeholders). Integrated interactive format chips and preview selection with app-wide real-time sync. |
+| **2026-10-21** | **Analytics Streamlining: Learning Focus & Completed Courses** | Removed redundant "Course Progress" section from `/analytics`. Changed "Completed lessons" metric card to "Completed courses" with dynamic `completed / total` counts and progress bar. Replaced legacy audio/subtitles donut chart with "Learning focus", dynamically breaking down user watch time across disciplines (Design & UI/UX, Programming, Motion Graphics, AI & ML) derived directly from course tags. |
+| **2026-10-21** | **History Page Redesign: Instructors Row Pattern & Full-Row Click** | Simplified title to "History". Eliminated bulky bordered card containers and removed the separate "Resume" button in favor of full-row clickable navigation matching the Instructors page list aesthetic (`hover:bg-secondary/60`, `rounded-xl`). Integrated `<CourseThumbnail>` for visual consistency. |
 
 ---
 
@@ -207,5 +265,6 @@ Defined in `src/styles.css` under `@theme inline` with strict geometric roles to
 - **Shell Layout & Navigation:** `src/components/app-shell.tsx`
 - **Thumbnail Engine:** `src/lib/thumbnail-generator.ts` & `src/components/course-thumbnail.tsx`
 - **Admin Dashboard:** `src/routes/admin.tsx` & `src/components/admin-dashboard.tsx`
+- **Instructors Page:** `src/routes/instructors.tsx` & `src/components/instructors-page.tsx`
 - **Course Player:** `src/routes/learn.$courseId.tsx` & `src/components/course-player.tsx`
 - **UI Primitives:** `src/components/ui/` (Radix UI + Tailwind v4 components)

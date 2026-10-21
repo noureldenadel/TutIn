@@ -1,8 +1,47 @@
 import { useEffect, useState } from "react";
+import { courses, type Course } from "./courses";
 
 export type AvatarContrastMode = "balanced" | "high" | "soft" | "manual";
 export type AvatarFontWeight = "400" | "500" | "600" | "700";
 export type AvatarFontFamily = "sans" | "mono";
+export type ThumbnailCoverMode = "generated" | "images" | "mixed";
+
+export const SAMPLE_COVERS = [
+  "/thumbnails/thumb-1.jpg",
+  "/thumbnails/thumb-2.png",
+  "/thumbnails/thumb-3.webp",
+  "/thumbnails/thumb-4.jpg",
+] as const;
+
+export const SAMPLE_COVER_DETAILS = [
+  { url: "/thumbnails/thumb-1.jpg", originalName: "thumbnail (1).jpg", format: "JPG", label: "Cover 1" },
+  { url: "/thumbnails/thumb-2.png", originalName: "thumbnail (1).png", format: "PNG", label: "Cover 2" },
+  { url: "/thumbnails/thumb-3.webp", originalName: "thumbnail (1).webp", format: "WEBP", label: "Cover 3" },
+  { url: "/thumbnails/thumb-4.jpg", originalName: "thumbnail (2).jpg", format: "JPG", label: "Cover 4" },
+] as const;
+
+export function getCourseCoverUrl(
+  course: Pick<Course, "id"> & { thumbnailUrl?: string },
+  coverMode: ThumbnailCoverMode = "generated"
+): string | undefined {
+  if (coverMode === "generated") {
+    // Only generative algorithmic placeholders
+    return undefined;
+  }
+  if (coverMode === "images") {
+    // All courses use uploaded sample cover images
+    return course.thumbnailUrl || SAMPLE_COVERS[Math.abs(course.id - 1) % SAMPLE_COVERS.length];
+  }
+  if (coverMode === "mixed") {
+    // Realistic mix: ~50% with uploaded cover images, ~50% with generative vector placeholders
+    const hasImage = (course.id * 7 + 3) % 2 === 0;
+    if (hasImage) {
+      return course.thumbnailUrl || SAMPLE_COVERS[Math.abs(course.id - 1) % SAMPLE_COVERS.length];
+    }
+    return undefined;
+  }
+  return course.thumbnailUrl;
+}
 
 export interface ThumbnailSettings {
   hue: number;
@@ -13,6 +52,8 @@ export interface ThumbnailSettings {
   spark: number;
   bands: number;
   pattern: "auto" | "0" | "1" | "2" | "3";
+  coverMode?: ThumbnailCoverMode;
+  previewImageIndex?: number;
   lockHue?: boolean;
   avatarContrastMode?: AvatarContrastMode;
   avatarFontWeight?: AvatarFontWeight;
@@ -31,6 +72,8 @@ export const DEFAULT_GENERATOR_SETTINGS: ThumbnailSettings = {
   spark: 20,
   bands: 3,
   pattern: "auto",
+  coverMode: "generated",
+  previewImageIndex: 0,
   lockHue: false,
   avatarContrastMode: "manual",
   avatarFontWeight: "500",
@@ -164,12 +207,24 @@ export interface InstructorPalette {
 
 export function getInstructorPalette(
   nameOrId: string,
-  settings: ThumbnailSettings = DEFAULT_GENERATOR_SETTINGS
+  settings: ThumbnailSettings = DEFAULT_GENERATOR_SETTINGS,
+  fallbackCourse?: Pick<Course, "id" | "title" | "thumbnailSeed" | "thumbnailHue">
 ): InstructorPalette {
-  const seed = hashString(nameOrId);
-  const baseHue = HUES[seed % HUES.length] ?? 142;
-  const hueShift = settings.lockHue ? 0 : ((settings.hue - DEFAULT_GENERATOR_SETTINGS.hue) % 360);
-  const hue = (((baseHue + hueShift) % 360) + 360) % 360;
+  const normName = (nameOrId || "").toLowerCase().trim();
+  const matchedCourse =
+    courses.find((c) => {
+      const inst = c.instructor.toLowerCase().trim();
+      return inst === normName || inst.includes(normName) || normName.includes(inst);
+    }) ?? fallbackCourse;
+
+  const seed = matchedCourse ? getCourseSeed(matchedCourse) : hashString(nameOrId);
+  const hue = matchedCourse
+    ? getCourseHue(seed, matchedCourse.thumbnailHue, settings)
+    : (() => {
+        const baseHue = HUES[seed % HUES.length] ?? 142;
+        const hueShift = settings.lockHue ? 0 : ((settings.hue - DEFAULT_GENERATOR_SETTINGS.hue) % 360);
+        return (((baseHue + hueShift) % 360) + 360) % 360;
+      })();
 
   const palette = computePalette(hue, settings.drift, settings.contrast);
   const { bg, fg } = getAvatarColors(seed, palette, settings);

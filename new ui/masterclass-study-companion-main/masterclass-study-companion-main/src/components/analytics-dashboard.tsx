@@ -1,6 +1,5 @@
 import { useMemo, useState, type ReactNode } from "react";
-import { Link } from "@tanstack/react-router";
-import { ArrowRight, BookOpen, CheckCircle2, Clock, Flame } from "lucide-react";
+import { BookOpen, CheckCircle2, Clock, Flame } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { courses } from "@/lib/courses";
 import { cn } from "@/lib/utils";
@@ -12,8 +11,8 @@ function Card({ className, children }: { className?: string; children: ReactNode
 function Metric({ icon, label, value, children, warm }: { icon: ReactNode; label: string; value: string; children: ReactNode; warm?: boolean }) {
   return (
     <Card className="flex flex-col gap-4">
-      <div className="flex items-center gap-3">
-        <span className={cn("flex size-10 items-center justify-center rounded-lg bg-secondary text-foreground/80", warm && "bg-streak/15 text-streak")}>{icon}</span>
+      <div className="flex items-center gap-2.5">
+        <span className={cn("text-muted-foreground [&_svg]:size-5", warm && "text-streak")}>{icon}</span>
         <span className="text-sm font-medium text-muted-foreground">{label}</span>
       </div>
       <p className="text-2xl font-bold tracking-tight text-foreground">{value}</p>
@@ -55,7 +54,7 @@ function Heatmap() {
           ))}
         </div>
       </div>
-      <div className="overflow-x-auto pb-1">
+      <div className="overflow-x-auto pb-2 custom-scrollbar-sm">
         <div className="flex w-max gap-[3px]">
           {weeks.map((w, wi) => (
             <div key={wi} className="flex flex-col gap-[3px]">
@@ -102,33 +101,128 @@ function Velocity() {
   );
 }
 
-const usage = [
-  { label: "Original audio", pct: 55, cls: "stroke-foreground/75 bg-foreground/75" },
-  { label: "Dubbed audio", pct: 30, cls: "stroke-foreground/40 bg-foreground/40" },
-  { label: "Translated subtitles", pct: 15, cls: "stroke-foreground/15 bg-foreground/15" },
-];
+interface FieldFocus {
+  label: string;
+  shortLabel: string;
+  tags: string;
+  pct: number;
+  cls: string;
+}
 
-function Donut() {
+function LearningFocus() {
+  const fields = useMemo<FieldFocus[]>(() => {
+    const targets = [
+      { id: "Design & UI/UX", label: "Design & UI/UX", shortLabel: "Design" },
+      { id: "Programming", label: "Programming", shortLabel: "Code" },
+      { id: "Motion Graphics", label: "Motion Graphics", shortLabel: "Motion" },
+      { id: "AI & Machine Learning", label: "AI & Machine Learning", shortLabel: "AI & ML" },
+    ];
+
+    const stats: Record<string, { minutes: number; tags: Set<string> }> = {};
+    targets.forEach((t) => {
+      stats[t.id] = { minutes: 0, tags: new Set() };
+    });
+
+    for (const c of courses) {
+      const cat = c.category;
+      const entry = cat ? stats[cat] : undefined;
+      if (entry) {
+        const h = parseInt(c.duration.match(/(\d+)h/)?.[1] ?? "0", 10);
+        const m = parseInt(c.duration.match(/(\d+)m/)?.[1] ?? "0", 10);
+        const watched = ((h * 60 + m) * (c.progress || 0)) / 100;
+        entry.minutes += watched;
+        c.tags?.forEach((tag) => entry.tags.add(tag));
+      }
+    }
+
+    const palette = [
+      "stroke-foreground bg-foreground",
+      "stroke-foreground/75 bg-foreground/75",
+      "stroke-foreground/45 bg-foreground/45",
+      "stroke-foreground/20 bg-foreground/20",
+    ];
+
+    const totalMin = Object.values(stats).reduce((acc, s) => acc + s.minutes, 0) || 1;
+
+    const list = targets
+      .map((t) => {
+        const entry = stats[t.id] ?? { minutes: 0, tags: new Set<string>() };
+        const pct = Math.round((entry.minutes / totalMin) * 100);
+        const tagPreview = Array.from(entry.tags).slice(0, 3).join(" · ") || t.label;
+        return {
+          label: t.label,
+          shortLabel: t.shortLabel,
+          tags: tagPreview,
+          pct,
+          minutes: entry.minutes,
+        };
+      })
+      .sort((a, b) => b.minutes - a.minutes);
+
+    const sum = list.reduce((acc, item) => acc + item.pct, 0);
+    if (sum !== 100 && list[0]) {
+      list[0].pct += 100 - sum;
+    }
+
+    return list.map((item, idx) => ({
+      label: item.label,
+      shortLabel: item.shortLabel,
+      tags: item.tags,
+      pct: item.pct,
+      cls: palette[idx] || "stroke-foreground/20 bg-foreground/20",
+    }));
+  }, []);
+
   const r = 52, c = 2 * Math.PI * r;
   let offset = 0;
+  const topField = fields[0] ?? { pct: 0, shortLabel: "Focus" };
+
   return (
     <Card>
-      <h2 className="text-base font-semibold">Audio and subtitles</h2>
+      <div className="flex items-center justify-between">
+        <h2 className="text-base font-semibold">Learning focus</h2>
+        <span className="text-xs text-muted-foreground">From course tags</span>
+      </div>
       <div className="mt-6 flex flex-col items-center gap-8 sm:flex-row">
         <div className="relative size-44 shrink-0">
           <svg viewBox="0 0 128 128" className="size-full -rotate-90">
-            {usage.map((u) => { const len = (u.pct / 100) * c; const el = <circle key={u.label} cx="64" cy="64" r={r} fill="none" strokeWidth="16" className={u.cls.split(" ")[0]} strokeDasharray={`${len - 2} ${c - len + 2}`} strokeDashoffset={-offset} />; offset += len; return el; })}
+            {fields.map((u) => {
+              const len = (u.pct / 100) * c;
+              const el = (
+                <circle
+                  key={u.label}
+                  cx="64"
+                  cy="64"
+                  r={r}
+                  fill="none"
+                  strokeWidth="16"
+                  className={u.cls.split(" ")[0]}
+                  strokeDasharray={`${Math.max(0, len - 2)} ${c - len + 2}`}
+                  strokeDashoffset={-offset}
+                />
+              );
+              offset += len;
+              return el;
+            })}
           </svg>
-          <div className="absolute inset-0 flex flex-col items-center justify-center">
-            <span className="text-2xl font-bold">55%</span><span className="text-[11px] text-muted-foreground">Original</span>
+          <div className="absolute inset-0 flex flex-col items-center justify-center px-2 text-center">
+            <span className="text-2xl font-bold">{topField.pct}%</span>
+            <span className="max-w-[100px] truncate text-[11px] font-medium text-muted-foreground">
+              {topField.shortLabel}
+            </span>
           </div>
         </div>
         <ul className="w-full space-y-3">
-          {usage.map((u) => (
-            <li key={u.label} className="flex items-center gap-3 text-sm">
-              <span className={cn("size-2.5 shrink-0 rounded-full", u.cls.split(" ")[1])} />
-              <span className="flex-1 text-muted-foreground">{u.label}</span>
-              <span className="font-semibold">{u.pct}%</span>
+          {fields.map((u) => (
+            <li key={u.label} className="flex items-start gap-3 text-sm">
+              <span className={cn("mt-1.5 size-2.5 shrink-0 rounded-full", u.cls.split(" ")[1])} />
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-medium text-foreground">{u.label}</span>
+                  <span className="font-semibold text-foreground/85">{u.pct}%</span>
+                </div>
+                <p className="truncate text-xs text-muted-foreground">{u.tags}</p>
+              </div>
             </li>
           ))}
         </ul>
@@ -137,51 +231,35 @@ function Donut() {
   );
 }
 
-const lastWatched = ["Today", "Yesterday", "Sep 24, 2026", "Sep 18, 2026"];
-
-function CourseProgress() {
-  return (
-    <Card>
-      <h2 className="mb-4 text-base font-semibold">Course Progress</h2>
-      <div className="divide-y divide-border/60">
-        {courses.map((c, i) => (
-          <div key={c.id} className="flex flex-col gap-3 py-4 sm:flex-row sm:items-center sm:gap-6">
-             <div className={cn("hidden size-12 shrink-0 rounded-md sm:block", c.art)} />
-            <div className="min-w-0 flex-1">
-              <p className="truncate font-semibold">{c.title}</p>
-              <p className="text-xs text-muted-foreground">{c.instructor} · Last watched {lastWatched[i] ?? "—"}</p>
-            </div>
-            <div className="flex w-full items-center gap-3 sm:w-56">
-              <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-secondary"><div className="h-full rounded-full bg-foreground/55" style={{ width: `${c.progress}%` }} /></div>
-              <span className="w-10 text-right text-xs font-semibold text-foreground/75">{c.progress}%</span>
-            </div>
-             <Link to="/learn/$courseId" params={{ courseId: String(c.id) }} className="inline-flex items-center gap-1.5 self-start rounded-md bg-secondary px-4 py-2 text-xs font-semibold transition hover:bg-accent sm:self-auto">
-              {c.progress === 100 ? "Review" : "Continue"} <ArrowRight className="size-3.5" />
-            </Link>
-          </div>
-        ))}
-      </div>
-    </Card>
-  );
-}
-
 export function AnalyticsDashboard() {
+  const completedCourses = useMemo(
+    () => courses.filter((c) => c.progress === 100).length,
+    []
+  );
+
   return (
-    <div className="h-full overflow-y-auto">
+    <div className="min-h-full">
       <div className="mx-auto max-w-7xl space-y-6 p-5 sm:p-8">
         <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-4">
           <Metric icon={<Clock className="size-5" />} label="Watch time" value="46h 20m">
-             <span className="rounded bg-secondary px-2 py-1 font-semibold text-foreground/75">+4.2h this week</span>
+            <span className="rounded bg-secondary px-2 py-1 font-semibold text-foreground/75">+4.2h this week</span>
           </Metric>
           <Metric warm icon={<Flame className="size-5" />} label="Streak" value="12 days">Personal best: 19 days</Metric>
-          <Metric icon={<CheckCircle2 className="size-5" />} label="Completed lessons" value="128 / 180">
-            <div className="h-1.5 overflow-hidden rounded-full bg-secondary"><div className="h-full w-[71%] rounded-full bg-foreground/55" /></div>
+          <Metric icon={<CheckCircle2 className="size-5" />} label="Completed courses" value={`${completedCourses} / ${courses.length}`}>
+            <div className="h-1.5 overflow-hidden rounded-full bg-secondary">
+              <div
+                className="h-full rounded-full bg-foreground/55"
+                style={{ width: `${Math.round((completedCourses / courses.length) * 100)}%` }}
+              />
+            </div>
           </Metric>
           <Metric icon={<BookOpen className="size-5" />} label="Notes" value="342">Across 8 courses</Metric>
         </div>
         <Heatmap />
-        <div className="grid gap-6 lg:grid-cols-2"><Velocity /><Donut /></div>
-        <CourseProgress />
+        <div className="grid gap-6 lg:grid-cols-2">
+          <Velocity />
+          <LearningFocus />
+        </div>
       </div>
     </div>
   );

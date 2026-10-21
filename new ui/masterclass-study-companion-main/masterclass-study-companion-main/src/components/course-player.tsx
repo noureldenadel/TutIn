@@ -251,7 +251,7 @@ function PlaylistTab({ active, done, setDone, onSelect }: { active: number; done
           </div>
         )}
       </div>
-      <ol className="min-h-0 flex-1 space-y-1.5 overflow-y-auto px-3 pb-4">
+      <ol className="min-h-0 flex-1 space-y-1.5 overflow-y-auto px-3 pb-4 custom-scrollbar-sm">
         {lessonTitles.map((title, i) => {
           const isActive = i === active;
           return (
@@ -314,7 +314,7 @@ function NotesTab({ time, seek }: { time: number; seek: (t: number) => void }) {
   return (
     <div className="flex h-full flex-col px-4 pb-4">
       <div className="flex items-center gap-2">
-        <Button size="sm" variant="secondary" className="flex-1 rounded-md" onClick={() => { setNotes((n) => `${n}\n\n📷 Snapshot at [${fmt(time)}]`); setEditing(false); }}><Camera /> Screenshot [{fmt(time)}]</Button>
+        <Button size="sm" variant="secondary" className="flex-1 rounded-md" onClick={() => { setNotes((n) => `${n}\n\n[Snapshot at ${fmt(time)}]`); setEditing(false); }}><Camera /> Screenshot [{fmt(time)}]</Button>
         <Button size="icon" variant="ghost" aria-label="Export notes" title="Export notes" className="size-9 rounded-md text-muted-foreground" onClick={exportNotes}><Download /></Button>
       </div>
       <div className="mt-3 flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-border bg-background">
@@ -326,9 +326,9 @@ function NotesTab({ time, seek }: { time: number; seek: (t: number) => void }) {
           <button type="button" onClick={() => setEditing(!editing)} className="ml-auto rounded-md px-3 py-1 text-xs font-semibold text-muted-foreground hover:bg-secondary hover:text-foreground">{editing ? "Done" : "Edit"}</button>
         </div>
         {editing ? (
-          <textarea ref={ref} value={notes} onChange={(e) => setNotes(e.target.value)} autoFocus className="min-h-0 flex-1 resize-none bg-transparent p-4 font-mono text-[13px] leading-6 outline-none" placeholder="Start writing…" />
+          <textarea ref={ref} value={notes} onChange={(e) => setNotes(e.target.value)} autoFocus className="min-h-0 flex-1 resize-none bg-transparent p-4 font-mono text-[13px] leading-6 outline-none custom-scrollbar-sm" placeholder="Start writing…" />
         ) : (
-          <div className="min-h-0 flex-1 cursor-text space-y-1.5 overflow-y-auto p-4 text-sm leading-6" onDoubleClick={() => setEditing(true)}>
+          <div className="min-h-0 flex-1 cursor-text space-y-1.5 overflow-y-auto p-4 text-sm leading-6 custom-scrollbar-sm" onDoubleClick={() => setEditing(true)}>
             {notes.split("\n").map((line, i) => line.startsWith("- ")
               ? <p key={i} className="flex gap-2 pl-1"><span className="mt-2.5 size-1 shrink-0 rounded-full bg-muted-foreground" /><span>{renderInline(line.slice(2), seek, String(i))}</span></p>
               : line.trim() ? <p key={i}>{renderInline(line, seek, String(i))}</p> : <div key={i} className="h-2" />)}
@@ -381,7 +381,7 @@ function TranscriptTab({ time, seek }: { time: number; seek: (t: number) => void
           </div>
         )}
       </div>
-      <ol ref={listRef} dir={current.rtl ? "rtl" : "ltr"} className="relative min-h-0 flex-1 space-y-1 overflow-y-auto px-3 pb-4">
+      <ol ref={listRef} dir={current.rtl ? "rtl" : "ltr"} className="relative min-h-0 flex-1 space-y-1 overflow-y-auto px-3 pb-4 custom-scrollbar-sm">
         {cues.map((cue, i) => (
           <li key={i}>
             <button type="button" onClick={() => seek(cue.start)} className={cn("flex w-full gap-3 rounded-lg px-3 py-2.5 text-start transition-colors duration-300 hover:bg-secondary/60", i === activeIdx && "bg-primary-soft hover:bg-primary-soft")}>

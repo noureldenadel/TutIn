@@ -72,6 +72,9 @@
   --color-progress-surface: var(--progress-surface);
   --color-progress-track: var(--progress-track);
   --color-progress-foreground: var(--progress-foreground);
+  --color-scrollbar-thumb: var(--scrollbar-thumb);
+  --color-scrollbar-thumb-hover: var(--scrollbar-thumb-hover);
+  --color-scrollbar-track: var(--scrollbar-track);
   --shadow-card: var(--shadow-card);
   --shadow-workspace: var(--shadow-workspace);
   --shadow-brand: var(--shadow-brand);
@@ -106,6 +109,9 @@
   --progress-surface: oklch(0.18 0.004 255 / 0.78);
   --progress-track: oklch(0.9 0.003 255 / 0.25);
   --progress-foreground: oklch(0.94 0.003 255);
+  --scrollbar-track: transparent;
+  --scrollbar-thumb: oklch(0.205 0.012 258 / 0.18);
+  --scrollbar-thumb-hover: oklch(0.205 0.012 258 / 0.38);
   --shadow-card: 0 1px 2px 0 oklch(0.2 0.01 260 / 0.04), 0 1px 3px 0 oklch(0.2 0.01 260 / 0.02);
   --shadow-workspace: 0 18px 48px oklch(0.2 0.01 260 / 0.08);
   --shadow-brand: 0 8px 22px oklch(0.2 0.006 260 / 0.18);
@@ -152,6 +158,9 @@
   --progress-surface: oklch(0.1 0.004 255 / 0.82);
   --progress-track: oklch(0.88 0.004 255 / 0.18);
   --progress-foreground: oklch(0.92 0.003 255);
+  --scrollbar-track: transparent;
+  --scrollbar-thumb: oklch(0.94 0.005 255 / 0.18);
+  --scrollbar-thumb-hover: oklch(0.94 0.005 255 / 0.38);
   --shadow-card: 0 1px 2px 0 oklch(0 0 0 / 0.25);
   --shadow-workspace: 0 22px 60px oklch(0 0 0 / 0.24);
   --shadow-brand: 0 8px 24px oklch(0 0 0 / 0.2);
@@ -174,7 +183,36 @@
 @layer base {
   * {
     border-color: var(--color-border);
+    scrollbar-width: thin;
+    scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
   }
+
+  /* Universal custom scrollbar: sleek, inset floating pill, non-overlapping */
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background-color: var(--scrollbar-thumb);
+    border-radius: 9999px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+    transition: background-color 0.15s ease;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: var(--scrollbar-thumb-hover);
+  }
+
+  ::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+
 
   body {
     background-color: var(--color-background);
@@ -183,6 +221,75 @@
     letter-spacing: 0;
     min-width: 320px;
     text-rendering: optimizeLegibility;
+  }
+}
+
+@utility custom-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
+  scrollbar-gutter: stable;
+
+  &::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  &::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  &::-webkit-scrollbar-thumb {
+    background-color: var(--scrollbar-thumb);
+    border-radius: 9999px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+  }
+
+  &::-webkit-scrollbar-thumb:hover {
+    background-color: var(--scrollbar-thumb-hover);
+  }
+
+  &::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+}
+
+@utility custom-scrollbar-sm {
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
+  scrollbar-gutter: stable;
+
+  &::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  &::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  &::-webkit-scrollbar-thumb {
+    background-color: var(--scrollbar-thumb);
+    border-radius: 9999px;
+    border: 1.5px solid transparent;
+    background-clip: padding-box;
+  }
+
+  &::-webkit-scrollbar-thumb:hover {
+    background-color: var(--scrollbar-thumb-hover);
+  }
+
+  &::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+}
+
+@utility scrollbar-none {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+
+  &::-webkit-scrollbar {
+    display: none;
   }
 }
 

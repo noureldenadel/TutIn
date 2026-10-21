@@ -16,6 +16,7 @@ import {
   BookOpen,
   UserCheck,
   Copy,
+  ImageIcon,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -46,7 +47,11 @@ import {
   computePalette,
   getAvatarColors,
   rng,
+  SAMPLE_COVERS,
+  SAMPLE_COVER_DETAILS,
+  getCourseCoverUrl,
   type ThumbnailSettings,
+  type ThumbnailCoverMode,
 } from "@/lib/thumbnail-generator";
 import { CourseThumbnail } from "@/components/course-thumbnail";
 import { InstructorAvatar } from "@/components/instructor-avatar";
@@ -148,13 +153,11 @@ export function AdminDashboard() {
       <div className="flex flex-col gap-4 border-b border-border pb-6 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <div className="flex items-center gap-2.5">
-            <span className="flex size-9 items-center justify-center rounded-lg bg-primary text-primary-foreground shadow-sm">
-              <Palette className="size-5" />
-            </span>
+            <Palette className="size-6 text-foreground" />
             <h1 className="text-2xl font-bold tracking-tight text-foreground sm:text-3xl">
-              Thumbnail Generator Admin
+              Artwork Generator
             </h1>
-            <Badge variant="outline" className="hidden sm:inline-flex gap-1.5 font-mono text-xs rounded-full px-2.5">
+            <Badge variant="secondary" className="hidden sm:inline-flex gap-1.5 font-mono text-xs rounded-full px-2.5">
               <Sparkles className="size-3 text-primary" /> Live Engine
             </Badge>
           </div>
@@ -213,15 +216,39 @@ export function AdminDashboard() {
             </div>
 
             {/* Simulated Course Card */}
-            <div className="mt-5 overflow-hidden rounded-xl border border-border bg-card shadow-sm">
+            <div className="mt-5 overflow-hidden rounded-xl bg-background">
               <div className="relative aspect-video overflow-hidden bg-black/90">
-                <div
-                  className="size-full [&>svg]:size-full [&>svg]:block"
-                  dangerouslySetInnerHTML={{ __html: livePreview.svg }}
-                />
+                {draft.coverMode === "images" ? (
+                  <img
+                    src={SAMPLE_COVERS[draft.previewImageIndex ?? 0]}
+                    alt="Sample preview"
+                    className="size-full object-cover"
+                  />
+                ) : draft.coverMode === "mixed" && ((previewSeed * 7 + 3) % 2 === 0) ? (
+                  <img
+                    src={SAMPLE_COVERS[Math.abs(previewSeed - 1) % SAMPLE_COVERS.length]}
+                    alt="Sample preview"
+                    className="size-full object-cover"
+                  />
+                ) : (
+                  <div
+                    className="size-full [&>svg]:size-full [&>svg]:block"
+                    dangerouslySetInnerHTML={{ __html: livePreview.svg }}
+                  />
+                )}
                 <span className="absolute bottom-2.5 right-2.5 z-20 rounded bg-black/75 px-2 py-0.5 font-mono text-[11px] font-semibold text-white backdrop-blur-sm">
                   4h 20m
                 </span>
+                {draft.coverMode === "images" && (
+                  <span className="absolute bottom-2.5 left-2.5 z-20 rounded bg-black/75 px-2 py-0.5 font-mono text-[10px] font-semibold text-white backdrop-blur-sm">
+                    {SAMPLE_COVER_DETAILS[draft.previewImageIndex ?? 0]?.format ?? "Cover"} Cover
+                  </span>
+                )}
+                {draft.coverMode === "mixed" && (
+                  <span className="absolute bottom-2.5 left-2.5 z-20 rounded bg-black/75 px-2 py-0.5 font-mono text-[10px] font-semibold text-white backdrop-blur-sm">
+                    {((previewSeed * 7 + 3) % 2 === 0) ? "Uploaded Cover" : "Vector Art"}
+                  </span>
+                )}
               </div>
               <div className="p-4">
                 <p className="font-serif text-lg font-semibold leading-snug text-foreground">
@@ -255,7 +282,7 @@ export function AdminDashboard() {
                   {PATTERN_NAMES[String(activePatternIndex)] || "Pattern"}
                 </span>
               </div>
-              <div className="flex gap-1.5 h-6 rounded-md overflow-hidden p-0.5 bg-secondary/50 border border-border">
+              <div className="flex gap-1.5 h-6 rounded-md overflow-hidden p-0.5 bg-secondary/50">
                 {activePalette.tones.map((t, idx) => (
                   <div
                     key={idx}
@@ -284,19 +311,14 @@ export function AdminDashboard() {
             </div>
 
             {/* Lock Hue toggle */}
-            <div className="mt-4 flex items-center justify-between rounded-lg border border-border bg-secondary/30 px-3.5 py-2.5">
+            <div className="mt-4 flex items-center justify-between px-1 pt-2">
               <div className="flex items-center gap-2">
                 {draft.lockHue ? (
                   <Lock className="size-4 text-primary" />
                 ) : (
                   <Unlock className="size-4 text-muted-foreground" />
                 )}
-                <div>
-                  <p className="text-xs font-semibold text-foreground">Lock Hue on Regenerate</p>
-                  <p className="text-[11px] text-muted-foreground">
-                    Keep the base hue and only randomize geometry & drift
-                  </p>
-                </div>
+                <span className="text-xs font-medium text-foreground">Lock hue on regenerate</span>
               </div>
               <Switch
                 checked={draft.lockHue ?? false}
@@ -311,6 +333,106 @@ export function AdminDashboard() {
 
         {/* Right Column: Settings Sliders & App-Wide Controls */}
         <div className="lg:col-span-7 flex flex-col gap-6">
+          {/* Cover Artwork Source Selector */}
+          <div className="rounded-xl border border-border bg-card p-6 shadow-card">
+            <div className="flex items-center justify-between pb-4 border-b border-border">
+              <div className="flex items-center gap-2">
+                <ImageIcon className="size-4 text-primary" />
+                <h2 className="text-base font-semibold text-foreground">Thumbnail Cover Source</h2>
+              </div>
+              <Badge variant="secondary" className="font-mono text-[11px] capitalize">
+                {draft.coverMode ?? "generated"}
+              </Badge>
+            </div>
+
+            <div className="mt-4 space-y-4">
+              <p className="text-xs text-muted-foreground">
+                Choose whether courses use uploaded thumbnail images or algorithmic SVG vector placeholders.
+              </p>
+
+              {/* 3-way Segmented Control */}
+              <div className="grid grid-cols-3 gap-1 rounded-lg border border-border bg-secondary/50 p-1">
+                {([
+                  ["generated", "Generated", "Vector SVG only"],
+                  ["images", "Sample images", "All 4 images"],
+                  ["mixed", "Mixed (Both)", "Covers + Vector"],
+                ] as const).map(([mode, label, sub]) => {
+                  const isActive = (draft.coverMode ?? "generated") === mode;
+                  return (
+                    <button
+                      key={mode}
+                      type="button"
+                      onClick={() => {
+                        setDraft((prev) => ({ ...prev, coverMode: mode }));
+                        setIsSaved(false);
+                      }}
+                      className={cn(
+                        "flex flex-col items-center justify-center rounded-sm px-2 py-2 text-center transition-all",
+                        isActive
+                          ? "bg-card text-foreground shadow-card font-medium"
+                          : "text-muted-foreground hover:text-foreground"
+                      )}
+                    >
+                      <span className="text-xs font-semibold">{label}</span>
+                      <span className="text-[10px] text-muted-foreground">{sub}</span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Sample Images Gallery */}
+              {((draft.coverMode ?? "generated") !== "generated") && (
+                <div className="mt-4 pt-3 border-t border-border/60">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-xs font-medium text-foreground">Sample Cover Images</span>
+                    {draft.coverMode === "images" && (
+                      <span className="text-[11px] text-muted-foreground">Click to select card preview</span>
+                    )}
+                  </div>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                    {SAMPLE_COVER_DETAILS.map((sample, idx) => {
+                      const isSelected = (draft.previewImageIndex ?? 0) === idx && draft.coverMode === "images";
+                      return (
+                        <button
+                          key={sample.url}
+                          type="button"
+                          onClick={() => {
+                            setDraft((prev) => ({ ...prev, previewImageIndex: idx }));
+                            setIsSaved(false);
+                          }}
+                          className={cn(
+                            "group relative aspect-video overflow-hidden rounded-lg border text-left transition-all",
+                            isSelected
+                              ? "border-primary ring-2 ring-primary/40 shadow-sm"
+                              : "border-border hover:border-foreground/30"
+                          )}
+                        >
+                          <img
+                            src={sample.url}
+                            alt={sample.label}
+                            className="size-full object-cover transition-transform group-hover:scale-105 duration-200"
+                          />
+                          <div className="absolute inset-0 bg-gradient-to-t from-black/75 via-transparent to-transparent pointer-events-none" />
+                          <div className="absolute bottom-1.5 left-1.5 right-1.5 flex items-center justify-between pointer-events-none">
+                            <span className="text-[10px] font-semibold text-white drop-shadow-sm truncate">
+                              {sample.label}
+                            </span>
+                            <span className="rounded bg-black/60 px-1 py-0.2 font-mono text-[9px] font-semibold text-white">
+                              {sample.format}
+                            </span>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <p className="mt-2 text-[11px] text-muted-foreground">
+                    Placeholder files: <code className="font-mono">thumbnail (1).jpg</code>, <code className="font-mono">thumbnail (1).png</code>, <code className="font-mono">thumbnail (1).webp</code>, <code className="font-mono">thumbnail (2).jpg</code>
+                  </p>
+                </div>
+              )}
+            </div>
+          </div>
+
           {/* Settings Control Panel */}
           <div className="rounded-xl border border-border bg-card p-6 shadow-card">
             <div className="flex items-center justify-between pb-4 border-b border-border">
@@ -437,10 +559,10 @@ export function AdminDashboard() {
 
         <div className="mt-6 grid gap-8 lg:grid-cols-12 items-start">
           {/* Left Column: Live Visual Showcase */}
-          <div className="lg:col-span-6 flex flex-col gap-5">
+          <div className="lg:col-span-6 flex flex-col gap-6">
             {/* Interactive Name Tester */}
-            <div className="rounded-lg border border-border bg-secondary/30 p-4">
-              <label className="text-xs font-semibold text-foreground block mb-2">
+            <div className="space-y-2.5">
+              <label className="text-xs font-semibold text-foreground block">
                 Test Instructor Name / Initials
               </label>
               <div className="flex gap-2">
@@ -464,17 +586,17 @@ export function AdminDashboard() {
                   <RefreshCw className="size-3.5 mr-1" /> Cycle name
                 </Button>
               </div>
-              <div className="flex flex-wrap gap-1.5 mt-2.5">
+              <div className="flex flex-wrap gap-1.5 pt-1">
                 {["Maya Chen", "Alex Rivera", "David Kim", "Priya Patel"].map((sample) => (
                   <button
                     key={sample}
                     type="button"
                     onClick={() => setTestName(sample)}
                     className={cn(
-                      "rounded px-2 py-0.5 text-xs transition-colors border",
+                      "rounded px-2.5 py-1 text-xs transition-colors",
                       testName === sample
-                        ? "bg-primary text-primary-foreground border-primary"
-                        : "bg-card text-muted-foreground border-border hover:text-foreground"
+                        ? "bg-primary text-primary-foreground font-medium shadow-sm"
+                        : "bg-secondary/60 text-muted-foreground hover:bg-secondary hover:text-foreground"
                     )}
                   >
                     {sample}
@@ -484,11 +606,11 @@ export function AdminDashboard() {
             </div>
 
             {/* Size Spectrum Showcase */}
-            <div className="rounded-lg border border-border bg-card p-4">
-              <span className="text-xs font-semibold text-foreground block mb-3">
+            <div className="space-y-2.5">
+              <span className="text-xs font-semibold text-foreground block">
                 Size Spectrum Preview
               </span>
-              <div className="flex items-end justify-between gap-3 py-3 px-4 rounded-lg bg-secondary/40 border border-border/60">
+              <div className="flex items-end justify-between gap-3 py-3.5 px-4 rounded-xl bg-secondary/50">
                 {(["xs", "sm", "md", "lg", "xl"] as const).map((s) => (
                   <div key={s} className="flex flex-col items-center gap-2">
                     <InstructorAvatar
@@ -512,13 +634,13 @@ export function AdminDashboard() {
             </div>
 
             {/* Multi-Surface Showcase */}
-            <div className="rounded-lg border border-border bg-card p-4">
-              <span className="text-xs font-semibold text-foreground block mb-3">
+            <div className="space-y-2.5">
+              <span className="text-xs font-semibold text-foreground block">
                 Surface Contrast Comparison
               </span>
               <div className="grid grid-cols-3 gap-3">
                 {/* On canvas */}
-                <div className="rounded-lg bg-background border border-border p-3 text-center flex flex-col items-center gap-2">
+                <div className="rounded-lg bg-background p-3 text-center flex flex-col items-center gap-2 shadow-inner">
                   <InstructorAvatar
                     name={testName}
                     size="md"
@@ -526,11 +648,11 @@ export function AdminDashboard() {
                     seed={previewSeed}
                     customSettings={draft}
                   />
-                  <span className="text-[11px] text-muted-foreground font-medium">On Canvas</span>
+                  <span className="text-[11px] text-muted-foreground font-medium">Canvas</span>
                 </div>
 
                 {/* On Card */}
-                <div className="rounded-lg bg-card border border-border shadow-sm p-3 text-center flex flex-col items-center gap-2">
+                <div className="rounded-lg bg-card p-3 text-center flex flex-col items-center gap-2 shadow-card">
                   <InstructorAvatar
                     name={testName}
                     size="md"
@@ -538,11 +660,11 @@ export function AdminDashboard() {
                     seed={previewSeed}
                     customSettings={draft}
                   />
-                  <span className="text-[11px] text-muted-foreground font-medium">On Card</span>
+                  <span className="text-[11px] text-muted-foreground font-medium">Card</span>
                 </div>
 
                 {/* On Inset Tray */}
-                <div className="rounded-lg bg-secondary border border-border/80 p-3 text-center flex flex-col items-center gap-2">
+                <div className="rounded-lg bg-secondary p-3 text-center flex flex-col items-center gap-2">
                   <InstructorAvatar
                     name={testName}
                     size="md"
@@ -550,13 +672,13 @@ export function AdminDashboard() {
                     seed={previewSeed}
                     customSettings={draft}
                   />
-                  <span className="text-[11px] text-muted-foreground font-medium">On Secondary</span>
+                  <span className="text-[11px] text-muted-foreground font-medium">Secondary</span>
                 </div>
               </div>
             </div>
 
             {/* Active Color Swatch Info */}
-            <div className="flex items-center justify-between rounded-lg border border-border bg-secondary/20 p-3">
+            <div className="flex items-center justify-between rounded-lg bg-secondary/40 p-3">
               <div className="flex items-center gap-3">
                 <div className="flex items-center gap-2">
                   <span
@@ -591,8 +713,8 @@ export function AdminDashboard() {
           {/* Right Column: Controls */}
           <div className="lg:col-span-6 flex flex-col gap-5">
             {/* Contrast Mode Selector */}
-            <div className="rounded-lg border border-border bg-card p-4">
-              <div className="flex items-center justify-between mb-2">
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
                 <label className="text-xs font-semibold text-foreground">
                   Contrast Strategy
                 </label>
@@ -622,10 +744,10 @@ export function AdminDashboard() {
                       setIsSaved(false);
                     }}
                     className={cn(
-                      "flex flex-col items-center justify-center p-2.5 rounded-lg border text-center transition-all",
+                      "flex flex-col items-center justify-center p-2.5 rounded-lg text-center transition-all",
                       draft.avatarContrastMode === mode.id || (!draft.avatarContrastMode && mode.id === "balanced")
-                        ? "border-primary bg-primary/10 text-foreground ring-1 ring-primary/30"
-                        : "border-border bg-secondary/30 text-muted-foreground hover:bg-secondary hover:text-foreground"
+                        ? "bg-primary/10 text-foreground ring-1 ring-primary/40 font-semibold"
+                        : "bg-secondary/40 text-muted-foreground hover:bg-secondary hover:text-foreground"
                     )}
                   >
                     <span className="text-xs font-semibold">{mode.label}</span>
@@ -636,7 +758,7 @@ export function AdminDashboard() {
 
               {/* Manual Swatch Selector (Shown only when in Manual mode) */}
               {draft.avatarContrastMode === "manual" && (
-                <div className="mt-4 pt-4 border-t border-border grid gap-3">
+                <div className="mt-4 pt-4 border-t border-border/60 grid gap-3">
                   <div>
                     <span className="text-[11px] font-semibold text-foreground block mb-1.5">
                       Background Tone (Tone 1 to 5)
@@ -693,7 +815,7 @@ export function AdminDashboard() {
             </div>
 
             {/* Typography Controls */}
-            <div className="rounded-lg border border-border bg-card p-4 grid gap-4">
+            <div className="space-y-4 pt-4 border-t border-border/60">
               {/* Font Weight */}
               <div>
                 <label className="text-xs font-semibold text-foreground block mb-2">
@@ -741,10 +863,10 @@ export function AdminDashboard() {
                         setIsSaved(false);
                       }}
                       className={cn(
-                        "flex flex-col items-center justify-center p-2 rounded-lg border text-center transition-all",
+                        "flex flex-col items-center justify-center p-2 rounded-lg text-center transition-all",
                         (draft.avatarFontFamily ?? "sans") === f.id
-                          ? "border-primary bg-primary/10 text-foreground ring-1 ring-primary/30"
-                          : "border-border bg-secondary/30 text-muted-foreground hover:bg-secondary hover:text-foreground"
+                          ? "bg-primary/10 text-foreground ring-1 ring-primary/40 font-semibold"
+                          : "bg-secondary/40 text-muted-foreground hover:bg-secondary hover:text-foreground"
                       )}
                     >
                       <span className="text-xs font-semibold">{f.label}</span>
@@ -755,7 +877,7 @@ export function AdminDashboard() {
               </div>
 
               {/* Font Size Slider */}
-              <div className="pt-2 border-t border-border/60">
+              <div className="pt-2">
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-xs font-semibold text-foreground">
                     Glyph Font Size
@@ -791,7 +913,7 @@ export function AdminDashboard() {
               </h2>
             </div>
           </div>
-          <span className="text-xs font-medium text-muted-foreground bg-secondary px-3 py-1.5 rounded-lg border border-border">
+          <span className="font-mono text-xs text-muted-foreground">
             {initialCourses.length} courses loaded
           </span>
         </div>
@@ -824,9 +946,22 @@ export function AdminDashboard() {
                   <p className="mt-1 text-xs text-muted-foreground truncate">{course.instructor}</p>
 
                   <div className="mt-3 flex items-center justify-between pt-2 border-t border-border/60 text-xs">
-                    <span className="text-muted-foreground font-mono text-[11px]">
-                      seed: {currentCourseSeed || "default"}
-                    </span>
+                    {(() => {
+                      const coverUrl = getCourseCoverUrl(activeCourseData, draft.coverMode ?? "generated");
+                      if (coverUrl) {
+                        const filename = coverUrl.split("/").pop();
+                        return (
+                          <span className="text-muted-foreground font-mono text-[11px] truncate" title={filename}>
+                            cover: {filename}
+                          </span>
+                        );
+                      }
+                      return (
+                        <span className="text-muted-foreground font-mono text-[11px]">
+                          seed: {currentCourseSeed || "default"}
+                        </span>
+                      );
+                    })()}
                     <Button
                       variant="ghost"
                       size="sm"

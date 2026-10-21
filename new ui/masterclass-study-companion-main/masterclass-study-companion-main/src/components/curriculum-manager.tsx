@@ -164,7 +164,7 @@ export function CurriculumManager({ course }: { course: Course }) {
                       onDragStart={(e) => { e.stopPropagation(); drag.current = { kind: "lesson", m, l }; }}
                       onDragOver={(e) => { e.preventDefault(); }}
                       onDrop={(e) => { e.preventDefault(); e.stopPropagation(); if (drag.current?.kind === "lesson") onDrop({ kind: "lesson", m, l }); }}
-                       className="group flex flex-wrap items-center gap-3 rounded-lg border border-transparent bg-background px-3 py-2.5 transition-all hover:-translate-y-px hover:border-border hover:shadow-card md:flex-nowrap">
+                       className="group flex flex-wrap items-center gap-3 rounded-lg border border-transparent bg-background px-3 py-2.5 transition-colors duration-200 hover:border-border hover:bg-secondary/40 md:flex-nowrap">
                       <GripVertical className="size-4 shrink-0 cursor-grab text-muted-foreground/60 group-hover:text-muted-foreground" />
                       <button type="button" aria-label={ls.watched ? "Mark unwatched" : "Mark watched"} onClick={() => patchLesson(m, l, { watched: !ls.watched })}
                         className={cn("flex size-5 shrink-0 items-center justify-center rounded-full border-2 border-border", ls.watched && "border-primary bg-primary text-primary-foreground")}>

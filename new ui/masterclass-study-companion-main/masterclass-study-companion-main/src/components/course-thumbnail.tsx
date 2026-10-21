@@ -4,6 +4,7 @@ import {
   generateThumbnailSvg,
   getCourseHue,
   getCourseSeed,
+  getCourseCoverUrl,
   useThumbnailSettings,
   type ThumbnailSettings,
 } from "@/lib/thumbnail-generator";
@@ -25,6 +26,10 @@ export function CourseThumbnail({
   const [globalSettings] = useThumbnailSettings();
   const effectiveSettings = customSettings || globalSettings;
 
+  const coverUrl = useMemo(() => {
+    return getCourseCoverUrl(course, effectiveSettings.coverMode ?? "generated");
+  }, [course, effectiveSettings.coverMode]);
+
   const seed = useMemo(() => getCourseSeed(course), [course.id, course.title, course.thumbnailSeed]);
 
   const hue = useMemo(
@@ -37,11 +42,11 @@ export function CourseThumbnail({
     [seed, effectiveSettings, hue]
   );
 
-  if (course.thumbnailUrl) {
+  if (coverUrl) {
     return (
       <div className={cn("relative size-full overflow-hidden bg-muted", className)}>
         <img
-          src={course.thumbnailUrl}
+          src={coverUrl}
           alt={course.title}
           className="size-full object-cover"
           loading="lazy"
