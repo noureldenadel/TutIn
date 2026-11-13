@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { cn } from "@/lib/utils";
 import {
   getInstructorPalette,
@@ -74,6 +74,45 @@ export function InstructorAvatar({
 
   const initials = useMemo(() => getInitials(name), [name]);
 
+  const [storedAvatar, setStoredAvatar] = useState<string | undefined>(() => {
+    if (typeof window === "undefined" || !name) return undefined;
+    try {
+      const raw = localStorage.getItem("tutin_instructor_avatars");
+      if (!raw) return undefined;
+      const map = JSON.parse(raw);
+      const key = name.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+      return map[key] || map[name] || undefined;
+    } catch {
+      return undefined;
+    }
+  });
+
+  useEffect(() => {
+    if (!name) return;
+    const handler = () => {
+      try {
+        const raw = localStorage.getItem("tutin_instructor_avatars");
+        if (!raw) {
+          setStoredAvatar(undefined);
+          return;
+        }
+        const map = JSON.parse(raw);
+        const key = name.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+        setStoredAvatar(map[key] || map[name] || undefined);
+      } catch {
+        setStoredAvatar(undefined);
+      }
+    };
+    window.addEventListener("tutin:instructor_avatar_changed", handler);
+    window.addEventListener("storage", handler);
+    return () => {
+      window.removeEventListener("tutin:instructor_avatar_changed", handler);
+      window.removeEventListener("storage", handler);
+    };
+  }, [name]);
+
+  const effectiveImageUrl = imageUrl || storedAvatar;
+
   const fontFamily = settings.avatarFontFamily === "mono"
     ? "ui-monospace, Consolas, monospace"
     : "var(--font-sans), 'Plus Jakarta Sans', system-ui, sans-serif";
@@ -91,11 +130,11 @@ export function InstructorAvatar({
       )}
     >
       <div className="size-full overflow-hidden rounded-full">
-        {imageUrl ? (
+        {effectiveImageUrl ? (
           <img
-            src={imageUrl}
+            src={effectiveImageUrl}
             alt={name}
-            className="size-full object-cover"
+            className="size-full object-cover rounded-full"
           />
         ) : (
           <svg
@@ -103,7 +142,7 @@ export function InstructorAvatar({
             className="size-full block"
             aria-hidden="true"
           >
-            <rect width="24" height="24" fill={colors.bg} />
+            <circle cx="12" cy="12" r="12" fill={colors.bg} />
             <text
               x="12"
               y="12"

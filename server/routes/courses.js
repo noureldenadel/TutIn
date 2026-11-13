@@ -163,6 +163,14 @@ router.post('/', (req, res) => {
 
 // Exportable function to recalculate a single course's progress
 export function recalculateCourseProgress(courseId, dbMode = null) {
+    const course = getOne(
+        'SELECT source_type, course_url, total_videos, total_duration, completed_videos, completion_percentage FROM courses WHERE id = ?',
+        [courseId]
+    )
+    if (!course) {
+        return { completedVideos: 0, totalVideos: 0, totalDuration: 0, completionPercentage: 0 }
+    }
+
     let mode = dbMode
     if (!mode) {
         const modeRow = getOne("SELECT value FROM settings WHERE key = 'progressCalculationMode'")
@@ -172,45 +180,85 @@ export function recalculateCourseProgress(courseId, dbMode = null) {
              mode = 'videos'
         }
     }
-    
+
+    // Heal any orphaned videos left behind by deleted modules before PRAGMA foreign_keys persistence fix
+    const hasOrphanedVideos = getOne(
+        'SELECT 1 as found FROM videos WHERE course_id = ? AND NOT EXISTS (SELECT 1 FROM modules m WHERE m.id = videos.module_id) LIMIT 1',
+        [courseId]
+    )
+    if (hasOrphanedVideos) {
+        run(
+            'DELETE FROM videos WHERE course_id = ? AND NOT EXISTS (SELECT 1 FROM modules m WHERE m.id = videos.module_id)',
+            [courseId]
+        )
+    }
+
     const videos = getAll(
-        'SELECT is_completed, duration, watch_progress FROM videos WHERE course_id = ?',
+        'SELECT is_completed, duration FROM videos WHERE course_id = ?',
         [courseId]
     )
     const totalVideos = videos.length
-    if (totalVideos === 0) return { completedVideos: 0, completionPercentage: 0 }
-
-    let completedVideos, completionPercentage
-
-    if (mode === 'duration') {
-        // Progress based on total watch time
-        const totalDuration = videos.reduce((s, v) => s + (v.duration || 0), 0)
-        // If a video is marked complete, treat as 100%. Otherwise require at least 15s watched to avoid phantom preview progress.
-        const watchedDuration = videos.reduce((s, v) => {
-            if (v.is_completed === 1) {
-                return s + (v.duration || 0)
+    if (totalVideos === 0) {
+        // External-link courses manage summary counts manually without rows in `videos`
+        if (course.source_type === 'external-link' || Boolean(course.course_url)) {
+            return {
+                completedVideos: course.completed_videos || 0,
+                totalVideos: course.total_videos || 0,
+                totalDuration: course.total_duration || 0,
+                completionPercentage: course.completion_percentage || 0
             }
-            const videoDuration = v.duration || 0
-            const watchedSecs = videoDuration * (v.watch_progress || 0)
-            // Ignore accidental clicks/previews under 15 seconds
-            if (watchedSecs < 15) return s
-            return s + watchedSecs
-        }, 0)
-        completedVideos = videos.filter(v => v.is_completed === 1).length
-        completionPercentage = totalDuration > 0 ? (watchedDuration / totalDuration) * 100 : 0
-        if (completionPercentage < 0.5) completionPercentage = 0
+        }
+
+        run(
+            'UPDATE courses SET total_videos = 0, total_duration = 0, completed_videos = 0, completion_percentage = 0 WHERE id = ?',
+            [courseId]
+        )
+        return { completedVideos: 0, totalVideos: 0, totalDuration: 0, completionPercentage: 0 }
+    }
+
+    const totalDuration = videos.reduce((s, v) => s + Math.max(0, Number(v.duration) || 0), 0)
+    const completedVideos = videos.filter(v => Number(v.is_completed) === 1).length
+    let completionPercentage
+
+    if (completedVideos === totalVideos) {
+        completionPercentage = 100
+    } else if (mode === 'duration') {
+        if (totalDuration > 0) {
+            // Course completion only sums checked/completed videos so playback resume (`watch_progress`) stays independent.
+            const completedDuration = videos.reduce((s, v) => {
+                if (Number(v.is_completed) !== 1) return s
+                return s + Math.max(0, Number(v.duration) || 0)
+            }, 0)
+
+            completionPercentage = (completedDuration / totalDuration) * 100
+
+            // Do not let durationless incomplete videos make the course appear 100% completed
+            const hasIncompleteWithoutDuration = videos.some(
+                v => Number(v.is_completed) !== 1 && Math.max(0, Number(v.duration) || 0) === 0
+            )
+            if (hasIncompleteWithoutDuration && completionPercentage >= 100) {
+                completionPercentage = 99
+            } else if (completionPercentage >= 100) {
+                // Keep incomplete courses below strict 100% due to float arithmetic
+                completionPercentage = 99.9
+            }
+        } else {
+            // Durationless courses (e.g. unprobed .mkv/YouTube) fall back to completed video ratio
+            completionPercentage = (completedVideos / totalVideos) * 100
+        }
     } else {
         // Default: progress based on completed video count
-        completedVideos = videos.filter(v => v.is_completed === 1).length
         completionPercentage = (completedVideos / totalVideos) * 100
     }
 
+    completionPercentage = Math.min(100, Math.max(0, completionPercentage))
+
     run(
-        'UPDATE courses SET completed_videos = ?, completion_percentage = ? WHERE id = ?',
-        [completedVideos, completionPercentage, courseId]
+        'UPDATE courses SET total_videos = ?, total_duration = ?, completed_videos = ?, completion_percentage = ? WHERE id = ?',
+        [totalVideos, totalDuration, completedVideos, completionPercentage, courseId]
     )
     
-    return { completedVideos, completionPercentage, totalVideos }
+    return { completedVideos, totalVideos, totalDuration, completionPercentage }
 }
 
 // POST /api/courses/recalculate-progress — MUST be before PUT /:id
@@ -227,6 +275,39 @@ router.post('/recalculate-progress', (req, res) => {
         })
 
         res.json({ success: true, coursesUpdated: courses.length })
+    } catch (err) {
+        res.status(500).json({ error: err.message })
+    }
+})
+
+// POST /api/courses/:id/recalculate-progress — Recheck and recalculate a single course's progress
+router.post('/:id/recalculate-progress', (req, res) => {
+    const { id } = req.params
+    const { mode } = req.body || {}
+
+    try {
+        const existing = getOne(
+            'SELECT id, total_videos, total_duration, completed_videos, completion_percentage FROM courses WHERE id = ?',
+            [id]
+        )
+        if (!existing) return res.status(404).json({ error: 'Course not found' })
+
+        const previous = {
+            completedVideos: existing.completed_videos || 0,
+            totalVideos: existing.total_videos || 0,
+            totalDuration: existing.total_duration || 0,
+            completionPercentage: existing.completion_percentage || 0
+        }
+
+        const stats = recalculateCourseProgress(id, mode || null)
+        const updatedCourse = getOne('SELECT * FROM courses WHERE id = ?', [id])
+
+        res.json({
+            success: true,
+            previous,
+            ...stats,
+            course: mapCourseRow(updatedCourse)
+        })
     } catch (err) {
         res.status(500).json({ error: err.message })
     }
@@ -274,8 +355,16 @@ router.post('/:id/hydrate-vault', (req, res) => {
         let hydratedNotes = 0
         let hydratedNodes = 0
         let hydratedEdges = 0
+        let hydratedSummaries = 0
 
         transaction(() => {
+            const needsVideos =
+                (Array.isArray(vaultData.notes) && vaultData.notes.length > 0) ||
+                (vaultData.summaries?.files?.length > 0)
+            const videos = needsVideos
+                ? getAll('SELECT id, title, file_name, file_path FROM videos WHERE course_id = ?', [id])
+                : []
+
             // 1. Hydrate Metadata if available
             if (vaultData.metadata) {
                 const meta = vaultData.metadata
@@ -309,7 +398,6 @@ router.post('/:id/hydrate-vault', (req, res) => {
 
             // 2. Hydrate Notes
             if (Array.isArray(vaultData.notes) && vaultData.notes.length > 0) {
-                const videos = getAll('SELECT id, title, file_name, file_path FROM videos WHERE course_id = ?', [id])
                 const now = new Date().toISOString()
 
                 for (const note of vaultData.notes) {
@@ -446,7 +534,6 @@ router.post('/:id/hydrate-vault', (req, res) => {
             }
 
             // 4. Hydrate Summaries
-            let hydratedSummaries = 0
             if (vaultData.summaries?.files?.length > 0) {
                 const now = new Date().toISOString()
                 for (const s of vaultData.summaries.files) {

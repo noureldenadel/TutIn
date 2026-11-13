@@ -6,7 +6,7 @@ import {
 } from 'lucide-react'
 // YouTube videos use native iframe embed
 import { getVideoUrl, releaseVideoUrl } from '../../utils/fileSystem'
-import { updateVideoProgress, markVideoComplete, formatDuration, getCourse, updateVideo, updateCourse, getVideosByCourse } from '../../utils/db'
+import { updateVideoProgress, markVideoComplete, formatDuration, getCourse, updateVideo, updateCourse, recalculateCourseProgress } from '../../utils/db'
 import { useSettings } from '../../contexts/SettingsContext'
 import { SERVER_URL } from '../../utils/api'
 import CaptionOverlay from './CaptionOverlay'
@@ -76,9 +76,30 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
     const durationRef = useRef(duration)
     const isPlayingRef = useRef(isPlaying)
     const lastParentTimeUpdateRef = useRef(0)
+    const videoDataRef = useRef(video)
+    const settingsRef = useRef(settings)
+    const onCompleteRef = useRef(onComplete)
+    const onTimeUpdateRef = useRef(onTimeUpdate)
+    const saveProgressRef = useRef(null)
+    const handleEndedRef = useRef(null)
+    const autoCompletedVideoIdRef = useRef(null)
+    videoDataRef.current = video
+    settingsRef.current = settings
+    onCompleteRef.current = onComplete
+    onTimeUpdateRef.current = onTimeUpdate
     useEffect(() => { currentTimeRef.current = currentTime }, [currentTime])
     useEffect(() => { durationRef.current = duration }, [duration])
     useEffect(() => { isPlayingRef.current = isPlaying }, [isPlaying])
+    useEffect(() => {
+        autoCompletedVideoIdRef.current = null
+        currentTimeRef.current = 0
+        durationRef.current = video?.duration || 0
+    }, [video?.id])
+    useEffect(() => {
+        if (!video?.isCompleted) {
+            autoCompletedVideoIdRef.current = null
+        }
+    }, [video?.isCompleted])
     const [volume, setVolume] = useState(() => settings.volume)
     const [isMuted, setIsMuted] = useState(false)
     const [isFullscreen, setIsFullscreen] = useState(false)
@@ -360,7 +381,8 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
             countdownRef.current = null
         }
 
-        // Clear old video URL immediately to prevent play/pause sync from acting on stale source
+        // Clear old video URL and stop any prior tracking interval before loading the next video
+        stopProgressTracking()
         if (videoUrl) {
             releaseVideoUrl(videoUrl)
             setVideoUrl(null)
@@ -373,17 +395,16 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
 
         loadVideo()
 
+        let timer = null
         if (video?.id && autoPlay) {
             // Keep transition overlay for a bit to cover the load
-            const timer = setTimeout(() => setIsTransitioning(false), 600)
-            return () => clearTimeout(timer)
+            timer = setTimeout(() => setIsTransitioning(false), 600)
         } else {
             setIsTransitioning(false)
         }
         return () => {
-            if (progressIntervalRef.current) {
-                clearInterval(progressIntervalRef.current)
-            }
+            if (timer) clearTimeout(timer)
+            stopProgressTracking()
         }
     }, [video?.id, autoPlay])
 
@@ -463,6 +484,7 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
     function handleLoadedMetadata() {
         if (videoRef.current) {
             const detectedDuration = videoRef.current.duration
+            durationRef.current = detectedDuration
             setDuration(detectedDuration)
             setIsLoading(false)
 
@@ -477,16 +499,11 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
             // Persist detected duration if the stored value is 0/missing
             if (video?.id && detectedDuration > 0 && (!video.duration || video.duration < 1)) {
                 const roundedDuration = Math.floor(detectedDuration)
-                updateVideo(video.id, { duration: roundedDuration }).then(() => {
-                    // Recalculate the parent course's total duration
+                updateVideo(video.id, { duration: roundedDuration }).then(async () => {
                     if (courseId) {
-                        getVideosByCourse(courseId).then(videos => {
-                            const totalDuration = videos.reduce((sum, v) => {
-                                return sum + (v.id === video.id ? roundedDuration : (v.duration || 0))
-                            }, 0)
-                            updateCourse(courseId, { totalDuration })
-                        }).catch(err => console.warn('Failed to update course duration:', err))
+                        await recalculateCourseProgress(courseId, settingsRef.current?.progressCalculationMode)
                     }
+                    onVideoDataChange?.()
                 }).catch(err => console.warn('Failed to persist video duration:', err))
             }
 
@@ -524,6 +541,10 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
     function handleTimeUpdate() {
         if (videoRef.current) {
             const vTime = videoRef.current.currentTime
+            currentTimeRef.current = vTime
+            if (videoRef.current.duration > 0) {
+                durationRef.current = videoRef.current.duration
+            }
             setCurrentTime(vTime)
 
             const now = performance.now()
@@ -734,19 +755,49 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
         }
     }
 
-    function handleEnded() {
+    async function handleEnded() {
+        const activeVideo = videoDataRef.current
         setIsPlaying(false)
+        isPlayingRef.current = false
         stopProgressTracking()
 
-        const currentT = currentTimeRef.current
-        const currentD = durationRef.current
+        if (activeVideo?.id) {
+            const isEmbedded = activeVideo.youtubeId || activeVideo.driveFileId ||
+                (activeVideo.url && (activeVideo.url.includes('youtube.com') || activeVideo.url.includes('youtu.be') || activeVideo.url.includes('drive.google.com')))
 
-        // Mark as complete if threshold reached
-        if (currentD > 0) {
-            const watchPercentage = (currentT / currentD) * 100
-            if (watchPercentage >= settings.autoMarkCompleteAt) {
-                markVideoComplete(video.id, true)
-                onComplete?.(video.id)
+            let currentT = (!isEmbedded && videoRef.current && videoRef.current.nodeName === 'VIDEO')
+                ? videoRef.current.currentTime
+                : currentTimeRef.current
+            const currentD = (!isEmbedded && videoRef.current && videoRef.current.nodeName === 'VIDEO' && videoRef.current.duration > 0)
+                ? videoRef.current.duration
+                : (durationRef.current || activeVideo.duration || 0)
+
+            try {
+                if (currentD > 0) {
+                    currentT = Math.min(currentD, Math.max(0, Number(currentT) || 0))
+                    await updateVideoProgress(activeVideo.id, currentT, currentD)
+                    const watchPercentage = (currentT / currentD) * 100
+                    const threshold = settingsRef.current?.autoMarkCompleteAt ?? 90
+                    if (
+                        watchPercentage >= threshold &&
+                        !activeVideo.isCompleted &&
+                        autoCompletedVideoIdRef.current !== activeVideo.id
+                    ) {
+                        autoCompletedVideoIdRef.current = activeVideo.id
+                        await markVideoComplete(activeVideo.id, true)
+                        onCompleteRef.current?.(activeVideo.id)
+                    }
+                } else if (!activeVideo.isCompleted && autoCompletedVideoIdRef.current !== activeVideo.id) {
+                    // Durationless stream/embed still reached natural end
+                    autoCompletedVideoIdRef.current = activeVideo.id
+                    await markVideoComplete(activeVideo.id, true)
+                    onCompleteRef.current?.(activeVideo.id)
+                }
+            } catch (err) {
+                if (autoCompletedVideoIdRef.current === activeVideo.id) {
+                    autoCompletedVideoIdRef.current = null
+                }
+                console.error('Failed to finalize video completion:', err)
             }
         }
 
@@ -792,7 +843,7 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
         if (progressIntervalRef.current) return
 
         progressIntervalRef.current = setInterval(() => {
-            saveProgress()
+            saveProgressRef.current?.()
         }, 5000) // Save every 5 seconds
     }
 
@@ -804,18 +855,19 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
     }
 
     async function saveProgress() {
-        if (!videoRef.current || !video) return
+        const activeVideo = videoDataRef.current
+        if (!videoRef.current || !activeVideo) return
 
         try {
-            const isEmbedded = video?.youtubeId || video?.driveFileId || 
-                (video?.url && (video.url.includes('youtube.com') || video.url.includes('youtu.be') || video.url.includes('drive.google.com')))
+            const isEmbedded = activeVideo.youtubeId || activeVideo.driveFileId || 
+                (activeVideo.url && (activeVideo.url.includes('youtube.com') || activeVideo.url.includes('youtu.be') || activeVideo.url.includes('drive.google.com')))
             const currentT = isEmbedded ? currentTimeRef.current : videoRef.current.currentTime
-            const currentD = isEmbedded ? durationRef.current : videoRef.current.duration
+            const currentD = isEmbedded ? (durationRef.current || activeVideo.duration || 0) : videoRef.current.duration
 
-            if (currentT === undefined || currentD === undefined) return
+            if (currentT === undefined || currentD === undefined || Number.isNaN(currentT) || Number.isNaN(currentD)) return
 
             await updateVideoProgress(
-                video.id,
+                activeVideo.id,
                 currentT,
                 currentD
             )
@@ -823,15 +875,27 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
             // Check if should auto-complete
             if (currentD > 0) {
                 const watchPercentage = (currentT / currentD) * 100
-                if (watchPercentage >= settings.autoMarkCompleteAt && !video.isCompleted) {
-                    await markVideoComplete(video.id, true)
-                    onComplete?.(video.id)
+                const threshold = settingsRef.current?.autoMarkCompleteAt ?? 90
+                if (
+                    watchPercentage >= threshold &&
+                    !activeVideo.isCompleted &&
+                    autoCompletedVideoIdRef.current !== activeVideo.id
+                ) {
+                    autoCompletedVideoIdRef.current = activeVideo.id
+                    await markVideoComplete(activeVideo.id, true)
+                    onCompleteRef.current?.(activeVideo.id)
                 }
             }
         } catch (err) {
+            if (autoCompletedVideoIdRef.current === activeVideo?.id) {
+                autoCompletedVideoIdRef.current = null
+            }
             console.error('Failed to save progress:', err)
         }
     }
+
+    saveProgressRef.current = saveProgress
+    handleEndedRef.current = handleEnded
 
     // Controls
     function togglePlay() {
@@ -882,6 +946,7 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
         if (selectedDubLang !== 'none' && dubAudioRef.current) {
             dubAudioRef.current.currentTime = newTime
         }
+        currentTimeRef.current = newTime
         setCurrentTime(newTime)
         lastParentTimeUpdateRef.current = performance.now()
         onTimeUpdate?.(newTime)
@@ -1007,10 +1072,15 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
                 try {
                     const data = typeof e.data === 'string' ? JSON.parse(e.data) : e.data
                     if (data?.event === 'infoDelivery') {
+                        if (data.info?.duration > 0 && durationRef.current < 1) {
+                            durationRef.current = data.info.duration
+                            setDuration(data.info.duration)
+                        }
                         if (data.info?.currentTime != null) {
                             const t = data.info.currentTime
+                            currentTimeRef.current = t
                             setCurrentTime(t)
-                            onTimeUpdate?.(t)
+                            onTimeUpdateRef.current?.(t)
                         }
                         // Sync playing state from YouTube's playerState:
                         // 1 = playing, 2 = paused, 0 = ended, 3 = buffering, 5 = cued
@@ -1026,9 +1096,9 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
                                 isPlayingRef.current = false
                                 setIsPlaying(false)
                                 stopProgressTracking()
-                                saveProgress()
+                                saveProgressRef.current?.()
                             } else if (ps === 0) {
-                                handleEnded()
+                                handleEndedRef.current?.()
                             }
                         }
                     }
@@ -1050,6 +1120,7 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
             return () => {
                 window.removeEventListener('message', handleMessage)
                 clearInterval(poll)
+                stopProgressTracking()
             }
         }
 
@@ -1058,11 +1129,13 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
             let elapsed = 0
             const ticker = setInterval(() => {
                 elapsed += 1
+                currentTimeRef.current = elapsed
                 setCurrentTime(elapsed)
-                onTimeUpdate?.(elapsed)
+                onTimeUpdateRef.current?.(elapsed)
                 
-                if (video?.duration > 0 && elapsed >= video.duration) {
-                    handleEnded()
+                const activeDuration = durationRef.current || videoDataRef.current?.duration || 0
+                if (activeDuration > 0 && elapsed >= activeDuration) {
+                    handleEndedRef.current?.()
                 }
             }, 1000)
 
@@ -1483,12 +1556,13 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
                 if (lang) {
                     setDubLanguages(prev => Array.from(new Set([...prev, lang])))
                     setSelectedDubLang(lang)
+                    updateSettings({ dubLanguage: lang, isDubbingEnabled: true })
                 }
             }
         }
         window.addEventListener('tutin:dub-updated', handleDubUpdated)
         return () => window.removeEventListener('tutin:dub-updated', handleDubUpdated)
-    }, [video?.id, fetchDubLanguages])
+    }, [video?.id, fetchDubLanguages, updateSettings])
 
     // Sync selected language with settings
     useEffect(() => {
@@ -2337,6 +2411,7 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
                 onSuccess={(lang) => {
                     setDubLanguages(prev => Array.from(new Set([...prev, lang])))
                     setSelectedDubLang(lang)
+                    updateSettings({ dubLanguage: lang, isDubbingEnabled: true })
                     fetchDubLanguages(video?.id)
                     onVideoDataChange?.()
                     window.dispatchEvent(new CustomEvent('tutin:dub-updated', {
@@ -2367,8 +2442,11 @@ const VideoPlayer = forwardRef(function VideoPlayer({ video, onComplete, onNext,
                 }}
                 onError={(e) => {
                     console.warn('[VideoPlayer] Dubbed audio load error:', e)
-                    // If dubbing is disabled, restore original video volume
-                    if (videoRef.current && selectedDubLang === 'none') {
+                    if (selectedDubLang !== 'none') {
+                        setSelectedDubLang('none')
+                        updateSettings({ isDubbingEnabled: false })
+                    }
+                    if (videoRef.current) {
                         videoRef.current.muted = isMuted
                         videoRef.current.volume = isMuted ? 0 : volume
                     }

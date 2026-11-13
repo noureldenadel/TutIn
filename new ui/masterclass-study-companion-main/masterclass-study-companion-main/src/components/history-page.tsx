@@ -24,28 +24,26 @@ type HistoryEntry = {
   courseTitle: string;
   lesson: string;
   module: string;
-  watched: string;
   leftAt: string;
   percent: number;
   duration: string;
   art: string;
-  group: "Today" | "Yesterday" | "Last Week";
+  group: string;
   completed?: boolean;
 };
 
 const initialEntries: HistoryEntry[] = [
-  { id: 1, courseId: 1, courseTitle: "Product Design Fundamentals", lesson: "08. Designing with Constraints", module: "Module 2 • Core Principles", watched: "Watched 2 hours ago", leftAt: "12:40", percent: 68, duration: "18:45", art: "course-art-mint", group: "Today" },
-  { id: 2, courseId: 2, courseTitle: "Documentary Storytelling", lesson: "03. Finding the Story Arc", module: "Module 1 • Narrative Foundations", watched: "Watched 5 hours ago", leftAt: "09:12", percent: 41, duration: "22:10", art: "course-art-gold", group: "Today" },
-  { id: 3, courseId: 4, courseTitle: "The Art of Thoughtful Leadership", lesson: "01. Leading with Calm", module: "Module 1 • Foundations", watched: "Watched yesterday at 21:14", leftAt: "14:03", percent: 87, duration: "16:08", art: "course-art-coral", group: "Yesterday" },
-  { id: 4, courseId: 3, courseTitle: "Practical Spanish: Everyday Conversations", lesson: "12. Ordering Food & Small Talk", module: "Module 3 • Daily Life", watched: "Watched yesterday at 08:40", leftAt: "20:00", percent: 100, duration: "20:00", art: "course-art-blue", group: "Yesterday", completed: true },
-  { id: 5, courseId: 1, courseTitle: "Product Design Fundamentals", lesson: "07. Typography as Interface", module: "Module 2 • Core Principles", watched: "Watched 3 days ago", leftAt: "11:26", percent: 52, duration: "21:54", art: "course-art-mint", group: "Last Week" },
-  { id: 6, courseId: 2, courseTitle: "Documentary Storytelling", lesson: "02. Interviewing with Empathy", module: "Module 1 • Narrative Foundations", watched: "Watched 5 days ago", leftAt: "17:44", percent: 74, duration: "24:31", art: "course-art-gold", group: "Last Week" },
+  { id: 1, courseId: 1, courseTitle: "Product Design Fundamentals", lesson: "08. Designing with Constraints", module: "Module 2 • Core Principles", leftAt: "12:40", percent: 68, duration: "18:45", art: "course-art-mint", group: "Today" },
+  { id: 2, courseId: 2, courseTitle: "Documentary Storytelling", lesson: "03. Finding the Story Arc", module: "Module 1 • Narrative Foundations", leftAt: "09:12", percent: 41, duration: "22:10", art: "course-art-gold", group: "Today" },
+  { id: 3, courseId: 4, courseTitle: "The Art of Thoughtful Leadership", lesson: "01. Leading with Calm", module: "Module 1 • Foundations", leftAt: "14:03", percent: 87, duration: "16:08", art: "course-art-coral", group: "Yesterday" },
+  { id: 4, courseId: 3, courseTitle: "Practical Spanish: Everyday Conversations", lesson: "12. Ordering Food & Small Talk", module: "Module 3 • Daily Life", leftAt: "20:00", percent: 100, duration: "20:00", art: "course-art-blue", group: "Yesterday", completed: true },
+  { id: 5, courseId: 1, courseTitle: "Product Design Fundamentals", lesson: "07. Typography as Interface", module: "Module 2 • Core Principles", leftAt: "11:26", percent: 52, duration: "21:54", art: "course-art-mint", group: "October 18, 2026" },
+  { id: 6, courseId: 2, courseTitle: "Documentary Storytelling", lesson: "02. Interviewing with Empathy", module: "Module 1 • Narrative Foundations", leftAt: "17:44", percent: 74, duration: "24:31", art: "course-art-gold", group: "October 16, 2026" },
 ];
 
 type DateFilter = "All Time" | "This Week" | "This Month";
 
 const dateFilters: DateFilter[] = ["All Time", "This Week", "This Month"];
-const groups: HistoryEntry["group"][] = ["Today", "Yesterday", "Last Week"];
 
 export function HistoryPage() {
   const [entries, setEntries] = useState(initialEntries);
@@ -56,10 +54,26 @@ export function HistoryPage() {
     const q = query.trim().toLowerCase();
     return entries.filter((entry) => {
       const matchesQuery = !q || `${entry.lesson} ${entry.courseTitle} ${entry.module}`.toLowerCase().includes(q);
-      const matchesDate = dateFilter === "All Time" || (dateFilter === "This Week" ? true : entry.group !== "Last Week");
+      const matchesDate =
+        dateFilter === "All Time" ||
+        (dateFilter === "This Week"
+          ? entry.group === "Today" || entry.group === "Yesterday" || entry.group === "October 18, 2026"
+          : true);
       return matchesQuery && matchesDate;
     });
   }, [entries, query, dateFilter]);
+
+  const groups = useMemo(() => {
+    const seen = new Set<string>();
+    const list: string[] = [];
+    for (const item of visible) {
+      if (!seen.has(item.group)) {
+        seen.add(item.group);
+        list.push(item.group);
+      }
+    }
+    return list;
+  }, [visible]);
 
   const removeEntry = (id: number) => setEntries((list) => list.filter((entry) => entry.id !== id));
 
@@ -67,7 +81,7 @@ export function HistoryPage() {
     <div className="mx-auto w-full max-w-[1440px] px-5 pb-12 pt-6 sm:px-8 sm:pt-8 lg:px-10">
       <header className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <h1 className="text-2xl font-bold tracking-tight text-foreground sm:text-3xl">History</h1>
-        <label className="flex h-11 min-w-0 items-center gap-2 rounded-lg border border-border bg-card px-3 shadow-card sm:w-80 lg:w-96">
+        <label className="flex h-11 min-w-0 items-center gap-2 rounded-lg bg-secondary/75 px-3 transition-colors focus-within:bg-card focus-within:ring-2 focus-within:ring-ring/30 sm:w-80 lg:w-96">
           <Search className="size-4 shrink-0 text-muted-foreground" />
           <input
             value={query}
@@ -78,8 +92,8 @@ export function HistoryPage() {
         </label>
       </header>
 
-      <div className="mt-8 flex flex-col gap-4 border-b border-border pb-5 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex w-fit max-w-full flex-wrap items-center gap-1 rounded-lg border border-border bg-secondary/50 p-1">
+      <div className="mt-7 flex flex-col gap-4 border-b border-border/50 pb-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex w-fit max-w-full flex-wrap items-center gap-1 rounded-lg bg-secondary/75 p-1">
           {dateFilters.map((item) => (
             <Button
               key={item}
@@ -97,9 +111,6 @@ export function HistoryPage() {
           ))}
         </div>
         <div className="flex items-center gap-3">
-          <span className="font-mono text-xs text-muted-foreground">
-            {visible.length} {visible.length === 1 ? "lesson" : "lessons"}
-          </span>
           {entries.length > 0 && (
             <AlertDialog>
               <AlertDialogTrigger asChild>
@@ -107,7 +118,7 @@ export function HistoryPage() {
                   <Trash2 className="size-3.5" /> Clear
                 </Button>
               </AlertDialogTrigger>
-              <AlertDialogContent className="rounded-xl">
+              <AlertDialogContent className="rounded-xl border-0 shadow-workspace">
                 <AlertDialogHeader>
                   <AlertDialogTitle>Clear watch history?</AlertDialogTitle>
                   <AlertDialogDescription>Course progress is kept.</AlertDialogDescription>
@@ -123,14 +134,14 @@ export function HistoryPage() {
       </div>
 
       {visible.length === 0 ? (
-        <div className="mt-16 flex flex-col items-center rounded-xl border border-dashed border-border bg-card/60 px-6 py-16 text-center">
+        <div className="mt-16 flex flex-col items-center rounded-xl bg-secondary/40 px-6 py-16 text-center">
           <History className="size-10 text-muted-foreground" strokeWidth={1.5} />
           <p className="mt-4 text-base font-semibold text-foreground">No history found</p>
           <p className="mt-1 max-w-sm text-sm text-muted-foreground">
             No watched lessons match this view.
           </p>
           <Button
-            variant="outline"
+            variant="secondary"
             size="sm"
             className="mt-4 rounded-md"
             onClick={() => {
@@ -214,9 +225,6 @@ function HistoryRow({
             <Clock className="size-3.5 shrink-0 text-muted-foreground" />
             {entry.percent}% watched
           </span>
-          {entry.watched && (
-            <span className="text-muted-foreground/60">· {entry.watched}</span>
-          )}
         </div>
       </div>
 

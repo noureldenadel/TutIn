@@ -2,7 +2,7 @@ import express from 'express'
 import { getDb, getOne, run, getAll, getDataDir } from '../database.js'
 import { submitDubJob, pollJobStatus, cancelJob, isServiceRunning, ensureServiceRunning } from '../services/dubbingService.js'
 import { getDubsDir, getDubFilePath, loadCaptionChunks, listDubLanguages, getDubFilePathForPlayback } from '../utils/courseAssets.js'
-import { stitchCuesIntoSentences } from '../utils/aiTranslation.js'
+import { stitchCuesIntoSentences, isDubbingLanguageSupported } from '../utils/aiTranslation.js'
 import fs from 'fs'
 import path from 'path'
 
@@ -63,6 +63,11 @@ router.post('/video/:videoId', async (req, res) => {
     try {
         const { targetLanguage, voiceReferencePath, device, preserveBackgroundAudio, sourceLanguage } = req.body
         if (!targetLanguage) return res.status(400).json({ error: 'targetLanguage required' })
+        if (!isDubbingLanguageSupported(targetLanguage)) {
+            return res.status(400).json({
+                error: `Language '${targetLanguage}' is not supported by the XTTS v2 neural voice cloning model.`
+            })
+        }
         
         const { video, videoPath, coursePath, courseLanguage, relModPath, videoBaseName } = getVideoInfo(req.params.videoId)
         
@@ -82,6 +87,7 @@ router.post('/video/:videoId', async (req, res) => {
             }
         }
         let chunks = loadCaptionChunks(video.id, langToLoad, subtitleSources, coursePath, relModPath, videoBaseName)
+        const { needsPunctuationRestoration, restorePunctuation } = await import('../utils/punctuationService.js')
         
         // If no target-language captions exist, auto-translate from source before dubbing
         if (!chunks || chunks.length === 0) {
@@ -114,6 +120,16 @@ router.post('/video/:videoId', async (req, res) => {
                 chunks = sourceChunks
                 console.log(`[Dub] Source and target language are the same (${normalizedTarget}), using source captions directly.`)
             } else {
+                // Restore punctuation on unpunctuated source captions BEFORE sentence stitching & translation
+                if (needsPunctuationRestoration(sourceChunks)) {
+                    console.log(`[Dub] Source captions lack punctuation prior to translation. Restoring for '${normalizedSource}'...`)
+                    try {
+                        sourceChunks = await restorePunctuation(sourceChunks, normalizedSource)
+                    } catch (pErr) {
+                        console.warn(`[Dub] Source punctuation restoration warning: ${pErr.message}`)
+                    }
+                }
+
                 // Different language — run translation now
                 const { translateChunks } = await import('../utils/aiTranslation.js')
                 const { saveCaptionFile } = await import('../utils/courseAssets.js')
@@ -164,18 +180,7 @@ router.post('/video/:videoId', async (req, res) => {
             } catch {}
         }
 
-        // 3. Auto-restore punctuation if cues lack sentence boundaries prior to TTS synthesis
-        const { needsPunctuationRestoration, restorePunctuation } = await import('../utils/punctuationService.js')
-        if (needsPunctuationRestoration(chunks)) {
-            console.log(`[Dub] Dubbing captions lack punctuation. Restoring for '${targetLanguage}'...`)
-            try {
-                chunks = await restorePunctuation(chunks, targetLanguage)
-            } catch (pErr) {
-                console.warn(`[Dub] Punctuation restoration warning: ${pErr.message}`)
-            }
-        }
-
-        // 4. Check for phonetically-nudged TTS companion segments first
+        // 3. Check for phonetically-nudged TTS companion segments first
         let dubSegments = null
         try {
             const { loadTtsCompanionSegments } = await import('../utils/courseAssets.js')
@@ -200,8 +205,16 @@ router.post('/video/:videoId', async (req, res) => {
             console.warn('[Dub] Could not load companion TTS segments:', compErr.message)
         }
 
-        // If no companion TTS segments exist, stitch standard caption chunks
+        // 4. If no companion TTS segments exist, restore punctuation if needed and stitch standard caption chunks
         if (!dubSegments || dubSegments.length === 0) {
+            if (needsPunctuationRestoration(chunks)) {
+                console.log(`[Dub] Dubbing captions lack punctuation. Restoring for '${targetLanguage}'...`)
+                try {
+                    chunks = await restorePunctuation(chunks, targetLanguage)
+                } catch (pErr) {
+                    console.warn(`[Dub] Punctuation restoration warning: ${pErr.message}`)
+                }
+            }
             const stitchedSegments = stitchCuesIntoSentences(chunks).map(s => ({
                 start: s.start,
                 end: s.end,
@@ -302,15 +315,19 @@ router.get('/video/:videoId/status', async (req, res) => {
                     run(`UPDATE dub_jobs SET completed_at = ?, audio_path = ? WHERE id = ?`, 
                         [completedAt, finalPath, job.id])
 
+                    // Clean up Python job temp directory now that final MP3 has been copied
+                    cancelJob(job.id).catch(() => {})
+
                     // Update video dubbed_tracks column
                     try {
                         const existingTracks = JSON.parse(video.dubbed_tracks || '[]')
+                        const prevTrack = existingTracks.find(t => t.language === job.language)
                         const updatedTracks = existingTracks.filter(t => t.language !== job.language)
                         updatedTracks.push({
                             language: job.language,
                             filePath: finalPath,
                             generatedAt: completedAt,
-                            voiceReferenceUsed: 'extracted_voice',
+                            voiceReferenceUsed: prevTrack?.voiceReferenceUsed || 'extracted_voice',
                             status: 'ready'
                         })
                         run(`UPDATE videos SET dubbed_tracks = ? WHERE id = ?`, [JSON.stringify(updatedTracks), video.id])

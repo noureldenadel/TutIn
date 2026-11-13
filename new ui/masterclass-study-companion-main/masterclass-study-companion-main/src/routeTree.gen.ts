@@ -15,6 +15,7 @@ import { Route as AnalyticsRouteImport } from './routes/analytics'
 import { Route as HistoryRouteImport } from './routes/history'
 import { Route as InstructorsRouteImport } from './routes/instructors'
 import { Route as RoadmapRouteImport } from './routes/roadmap'
+import { Route as CanvasCourseIdRouteImport } from './routes/canvas.$courseId'
 import { Route as LearnCourseIdRouteImport } from './routes/learn.$courseId'
 import { Route as ManageCourseIdRouteImport } from './routes/manage.$courseId'
 
@@ -48,6 +49,11 @@ const RoadmapRoute = RoadmapRouteImport.update({
   path: '/roadmap',
   getParentRoute: () => rootRouteImport,
 } as any)
+const CanvasCourseIdRoute = CanvasCourseIdRouteImport.update({
+  id: '/canvas/$courseId',
+  path: '/canvas/$courseId',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const LearnCourseIdRoute = LearnCourseIdRouteImport.update({
   id: '/learn/$courseId',
   path: '/learn/$courseId',
@@ -66,6 +72,7 @@ export interface FileRoutesByFullPath {
   '/history': typeof HistoryRoute
   '/instructors': typeof InstructorsRoute
   '/roadmap': typeof RoadmapRoute
+  '/canvas/$courseId': typeof CanvasCourseIdRoute
   '/learn/$courseId': typeof LearnCourseIdRoute
   '/manage/$courseId': typeof ManageCourseIdRoute
 }
@@ -76,6 +83,7 @@ export interface FileRoutesByTo {
   '/history': typeof HistoryRoute
   '/instructors': typeof InstructorsRoute
   '/roadmap': typeof RoadmapRoute
+  '/canvas/$courseId': typeof CanvasCourseIdRoute
   '/learn/$courseId': typeof LearnCourseIdRoute
   '/manage/$courseId': typeof ManageCourseIdRoute
 }
@@ -87,6 +95,7 @@ export interface FileRoutesById {
   '/history': typeof HistoryRoute
   '/instructors': typeof InstructorsRoute
   '/roadmap': typeof RoadmapRoute
+  '/canvas/$courseId': typeof CanvasCourseIdRoute
   '/learn/$courseId': typeof LearnCourseIdRoute
   '/manage/$courseId': typeof ManageCourseIdRoute
 }
@@ -99,6 +108,7 @@ export interface FileRouteTypes {
     | '/history'
     | '/instructors'
     | '/roadmap'
+    | '/canvas/$courseId'
     | '/learn/$courseId'
     | '/manage/$courseId'
   fileRoutesByTo: FileRoutesByTo
@@ -109,6 +119,7 @@ export interface FileRouteTypes {
     | '/history'
     | '/instructors'
     | '/roadmap'
+    | '/canvas/$courseId'
     | '/learn/$courseId'
     | '/manage/$courseId'
   id:
@@ -119,6 +130,7 @@ export interface FileRouteTypes {
     | '/history'
     | '/instructors'
     | '/roadmap'
+    | '/canvas/$courseId'
     | '/learn/$courseId'
     | '/manage/$courseId'
   fileRoutesById: FileRoutesById
@@ -130,6 +142,7 @@ export interface RootRouteChildren {
   HistoryRoute: typeof HistoryRoute
   InstructorsRoute: typeof InstructorsRoute
   RoadmapRoute: typeof RoadmapRoute
+  CanvasCourseIdRoute: typeof CanvasCourseIdRoute
   LearnCourseIdRoute: typeof LearnCourseIdRoute
   ManageCourseIdRoute: typeof ManageCourseIdRoute
 }
@@ -178,6 +191,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof RoadmapRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/canvas/$courseId': {
+      id: '/canvas/$courseId'
+      path: '/canvas/$courseId'
+      fullPath: '/canvas/$courseId'
+      preLoaderRoute: typeof CanvasCourseIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/learn/$courseId': {
       id: '/learn/$courseId'
       path: '/learn/$courseId'
@@ -202,6 +222,7 @@ const rootRouteChildren: RootRouteChildren = {
   HistoryRoute: HistoryRoute,
   InstructorsRoute: InstructorsRoute,
   RoadmapRoute: RoadmapRoute,
+  CanvasCourseIdRoute: CanvasCourseIdRoute,
   LearnCourseIdRoute: LearnCourseIdRoute,
   ManageCourseIdRoute: ManageCourseIdRoute,
 }

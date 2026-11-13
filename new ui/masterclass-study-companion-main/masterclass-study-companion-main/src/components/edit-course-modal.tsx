@@ -1,0 +1,473 @@
+import { useState, useEffect, useRef } from "react";
+import {
+  Clock,
+  Globe,
+  Image as ImageIcon,
+  Plus,
+  Trash2,
+  Upload,
+  X,
+} from "lucide-react";
+import { toast } from "sonner";
+
+import { CourseThumbnail } from "@/components/course-thumbnail";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import type { Course } from "@/lib/courses";
+import { cn } from "@/lib/utils";
+
+const COMMON_LANGUAGES = [
+  { code: "English", label: "English" },
+  { code: "Spanish", label: "Spanish" },
+  { code: "French", label: "French" },
+  { code: "German", label: "German" },
+  { code: "Arabic", label: "Arabic" },
+  { code: "Japanese", label: "Japanese" },
+  { code: "Chinese", label: "Chinese" },
+  { code: "Portuguese", label: "Portuguese" },
+  { code: "Italian", label: "Italian" },
+];
+
+export interface EditCourseModalProps {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  course: Course | null;
+  onSave?: ((updatedCourse: Course) => void) | undefined;
+}
+
+export function EditCourseModal({
+  open,
+  onOpenChange,
+  course,
+  onSave,
+}: EditCourseModalProps) {
+  const [activeTab, setActiveTab] = useState<"details" | "cover" | "progress">("details");
+  const [title, setTitle] = useState("");
+  const [instructor, setInstructor] = useState("");
+  const [language, setLanguage] = useState("English");
+  const [tags, setTags] = useState<string[]>([]);
+  const [tagInput, setTagInput] = useState("");
+  const [thumbnailUrl, setThumbnailUrl] = useState<string | null>(null);
+  const [courseUrl, setCourseUrl] = useState("");
+  const [lessons, setLessons] = useState(1);
+  const [completedLessons, setCompletedLessons] = useState(0);
+  const [duration, setDuration] = useState("");
+  const [isSaving, setIsSaving] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (course && open) {
+      setTitle(course.title ?? "");
+      setInstructor(course.instructor ?? "");
+      setLanguage(course.language ?? "English");
+      setTags(course.tags ? [...course.tags] : []);
+      setThumbnailUrl(course.thumbnailUrl ?? null);
+      setCourseUrl(course.courseUrl ?? "");
+      setLessons(course.lessons ?? 1);
+      const completed = Math.round(((course.lessons ?? 1) * (course.progress ?? 0)) / 100);
+      setCompletedLessons(completed);
+      setDuration(course.duration ?? "1h 00m");
+      setActiveTab("details");
+    }
+  }, [course, open]);
+
+  if (!course) return null;
+
+  const isLinkCourse = course.sourceType === "link" || Boolean(course.courseUrl);
+
+  const handleAddTag = () => {
+    const trimmed = tagInput.trim();
+    if (trimmed && !tags.includes(trimmed) && tags.length < 10) {
+      setTags((prev) => [...prev, trimmed]);
+      setTagInput("");
+    }
+  };
+
+  const handleRemoveTag = (tagToRemove: string) => {
+    setTags((prev) => prev.filter((t) => t !== tagToRemove));
+  };
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith("image/")) {
+      toast.error("Please upload an image file");
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const dataUrl = event.target?.result as string;
+      setThumbnailUrl(dataUrl);
+      toast.success("Cover image uploaded");
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleSave = () => {
+    if (!title.trim()) {
+      toast.error("Course title is required");
+      return;
+    }
+
+    setIsSaving(true);
+    setTimeout(() => {
+      const calculatedProgress =
+        lessons > 0 ? Math.min(100, Math.max(0, Math.round((completedLessons / lessons) * 100))) : course.progress;
+
+      const updated: Course = {
+        ...course,
+        title: title.trim(),
+        instructor: instructor.trim() || course.instructor,
+        language,
+        tags,
+        thumbnailUrl: thumbnailUrl ?? undefined,
+        courseUrl: isLinkCourse ? courseUrl.trim() : course.courseUrl,
+        lessons: Math.max(1, lessons),
+        progress: isLinkCourse ? calculatedProgress : course.progress,
+        duration: duration.trim() || course.duration,
+      };
+
+      try {
+        const stored = localStorage.getItem("tutin_courses_override");
+        const parsed = stored ? JSON.parse(stored) : {};
+        parsed[course.id] = updated;
+        localStorage.setItem("tutin_courses_override", JSON.stringify(parsed));
+      } catch {
+        // ignore
+      }
+
+      window.dispatchEvent(new CustomEvent("tutin:course_updated", { detail: { course: updated } }));
+      setIsSaving(false);
+      onSave?.(updated);
+      onOpenChange(false);
+      toast.success("Course details saved", {
+        description: updated.title,
+      });
+    }, 450);
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="flex h-[min(640px,88dvh)] w-full max-w-2xl flex-col gap-0 overflow-hidden rounded-xl border-0 bg-card p-0 shadow-workspace sm:rounded-xl">
+        {/* Header (pr-12 ensures space for built-in X button) */}
+        <div className="flex items-center justify-between border-b border-border/50 px-6 py-4 pr-12">
+          <DialogTitle className="truncate text-base font-semibold tracking-tight text-foreground">
+            Edit course
+          </DialogTitle>
+          <DialogDescription className="sr-only">Modify course metadata and settings</DialogDescription>
+        </div>
+
+        {/* Segmented Control Track */}
+        <div className="border-b border-border/50 bg-card/60 px-6 py-2.5">
+          <div className="inline-flex rounded-lg bg-secondary/75 p-1 text-xs">
+            <button
+              type="button"
+              onClick={() => setActiveTab("details")}
+              className={cn(
+                "rounded-sm px-3.5 py-1.5 font-medium transition-colors",
+                activeTab === "details"
+                  ? "bg-card text-foreground shadow-card"
+                  : "text-muted-foreground hover:text-foreground"
+              )}
+            >
+              Details
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab("cover")}
+              className={cn(
+                "rounded-sm px-3.5 py-1.5 font-medium transition-colors",
+                activeTab === "cover"
+                  ? "bg-card text-foreground shadow-card"
+                  : "text-muted-foreground hover:text-foreground"
+              )}
+            >
+              Cover image
+            </button>
+            {isLinkCourse && (
+              <button
+                type="button"
+                onClick={() => setActiveTab("progress")}
+                className={cn(
+                  "rounded-sm px-3.5 py-1.5 font-medium transition-colors",
+                  activeTab === "progress"
+                    ? "bg-card text-foreground shadow-card"
+                    : "text-muted-foreground hover:text-foreground"
+                )}
+              >
+                Progress
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Content Body */}
+        <div className="flex-1 overflow-y-auto p-6 custom-scrollbar">
+          {activeTab === "details" && (
+            <div className="space-y-4">
+              <div className="space-y-1.5">
+                <Label htmlFor="course-title" className="text-xs font-medium text-foreground">
+                  Course title
+                </Label>
+                <Input
+                  id="course-title"
+                  value={title}
+                  onChange={(e) => setTitle(e.target.value)}
+                  placeholder="e.g. Design Systems"
+                  className="rounded-lg border-0 bg-secondary/75 text-sm focus-visible:bg-background"
+                />
+              </div>
+
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <div className="space-y-1.5">
+                  <Label htmlFor="course-instructor" className="text-xs font-medium text-foreground">
+                    Instructor
+                  </Label>
+                  <Input
+                    id="course-instructor"
+                    value={instructor}
+                    onChange={(e) => setInstructor(e.target.value)}
+                    placeholder="e.g. Maya Chen"
+                    className="rounded-lg border-0 bg-secondary/75 text-sm focus-visible:bg-background"
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label htmlFor="course-language" className="text-xs font-medium text-foreground">
+                    Language
+                  </Label>
+                  <select
+                    id="course-language"
+                    value={language}
+                    onChange={(e) => setLanguage(e.target.value)}
+                    className="h-10 w-full rounded-lg border-0 bg-secondary/75 px-3 text-sm text-foreground focus-visible:bg-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    {COMMON_LANGUAGES.map((lang) => (
+                      <option key={lang.code} value={lang.code}>
+                        {lang.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div className="space-y-2 pt-1">
+                <Label className="text-xs font-medium text-foreground">Tags &amp; topics</Label>
+                <div className="flex gap-2">
+                  <Input
+                    value={tagInput}
+                    onChange={(e) => setTagInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        handleAddTag();
+                      }
+                    }}
+                    placeholder="Type tag and press Enter"
+                    className="rounded-lg border-0 bg-secondary/75 text-sm focus-visible:bg-background"
+                  />
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    onClick={handleAddTag}
+                    className="rounded-md shrink-0"
+                  >
+                    <Plus className="size-4 mr-1" /> Add
+                  </Button>
+                </div>
+
+                {tags.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5 pt-1">
+                    {tags.map((tag) => (
+                      <span
+                        key={tag}
+                        className="inline-flex items-center gap-1.5 rounded-md bg-secondary/90 px-2.5 py-1 text-xs font-medium text-foreground"
+                      >
+                        {tag}
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveTag(tag)}
+                          className="text-muted-foreground hover:text-foreground"
+                          aria-label={`Remove ${tag}`}
+                        >
+                          <X className="size-3" />
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {activeTab === "cover" && (
+            <div className="space-y-5">
+              <div className="flex flex-col gap-5 sm:flex-row sm:items-center">
+                <div className="relative aspect-video w-full max-w-[240px] shrink-0 overflow-hidden rounded-xl bg-secondary shadow-card">
+                  {thumbnailUrl ? (
+                    <img
+                      src={thumbnailUrl}
+                      alt={title}
+                      className="size-full object-cover"
+                    />
+                  ) : (
+                    <CourseThumbnail course={course} />
+                  )}
+                </div>
+
+                <div className="space-y-3">
+                  <div>
+                    <p className="text-sm font-semibold text-foreground">Cover preview</p>
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      {thumbnailUrl
+                        ? "Custom uploaded cover image"
+                        : "Deterministic artwork generated from course title & instructor"}
+                    </p>
+                  </div>
+
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => fileInputRef.current?.click()}
+                      className="rounded-md gap-1.5"
+                    >
+                      <Upload className="size-3.5" /> Upload image
+                    </Button>
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept="image/*"
+                      onChange={handleFileUpload}
+                      className="sr-only"
+                    />
+
+                    {thumbnailUrl && (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setThumbnailUrl(null)}
+                        className="rounded-md text-destructive hover:text-destructive gap-1.5"
+                      >
+                        <Trash2 className="size-3.5" /> Revert to artwork
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {activeTab === "progress" && isLinkCourse && (
+            <div className="space-y-4">
+              <div className="space-y-1.5">
+                <Label htmlFor="course-url" className="text-xs font-medium text-foreground">
+                  Course or playlist URL
+                </Label>
+                <Input
+                  id="course-url"
+                  value={courseUrl}
+                  onChange={(e) => setCourseUrl(e.target.value)}
+                  placeholder="https://..."
+                  className="rounded-lg border-0 bg-secondary/75 text-sm focus-visible:bg-background"
+                />
+              </div>
+
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                <div className="space-y-1.5">
+                  <Label htmlFor="total-lessons" className="text-xs font-medium text-foreground">
+                    Total lessons
+                  </Label>
+                  <Input
+                    id="total-lessons"
+                    type="number"
+                    min={1}
+                    value={lessons}
+                    onChange={(e) => setLessons(Math.max(1, parseInt(e.target.value) || 1))}
+                    className="rounded-lg border-0 bg-secondary/75 text-sm focus-visible:bg-background"
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label htmlFor="completed-lessons" className="text-xs font-medium text-foreground">
+                    Completed lessons
+                  </Label>
+                  <Input
+                    id="completed-lessons"
+                    type="number"
+                    min={0}
+                    max={lessons}
+                    value={completedLessons}
+                    onChange={(e) =>
+                      setCompletedLessons(Math.max(0, Math.min(lessons, parseInt(e.target.value) || 0)))
+                    }
+                    className="rounded-lg border-0 bg-secondary/75 text-sm focus-visible:bg-background"
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label htmlFor="course-duration" className="text-xs font-medium text-foreground">
+                    Duration
+                  </Label>
+                  <Input
+                    id="course-duration"
+                    value={duration}
+                    onChange={(e) => setDuration(e.target.value)}
+                    placeholder="e.g. 5h 30m"
+                    className="rounded-lg border-0 bg-secondary/75 text-sm focus-visible:bg-background"
+                  />
+                </div>
+              </div>
+
+              <div className="rounded-xl bg-secondary/40 p-3.5 text-xs text-muted-foreground">
+                <span className="font-semibold text-foreground">Calculated Progress: </span>
+                <span className="font-semibold text-foreground">
+                  {lessons > 0 ? Math.round((completedLessons / lessons) * 100) : 0}%
+                </span>{" "}
+                ({completedLessons}/{lessons} completed)
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="flex items-center justify-between border-t border-border/50 bg-card px-6 py-4">
+          <span className="font-mono text-xs text-muted-foreground">
+            {isLinkCourse ? "External course" : "Local course"}
+          </span>
+          <div className="flex items-center gap-2">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => onOpenChange(false)}
+              disabled={isSaving}
+              className="rounded-md"
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              onClick={handleSave}
+              disabled={isSaving}
+              className="rounded-md"
+            >
+              {isSaving ? "Saving..." : "Save changes"}
+            </Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+

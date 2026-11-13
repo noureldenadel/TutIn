@@ -2,7 +2,7 @@ import * as api from './api.js'
 import {
     getVideosByCourse, getModulesByCourse, getCourse,
     addVideo, deleteVideo, updateVideo, addModule,
-    deleteModule, updateCourse
+    deleteModule, updateCourse, recalculateCourseProgress
 } from './db.js'
 
 /**
@@ -193,8 +193,8 @@ export async function syncCoursePreview(courseId, scannedData) {
                 hasSummary: Boolean(sv.hasSummary)
             })
         } else {
-            // Check for metadata changes (duration)
-            const isChanged = Math.abs(existing.duration - sv.duration) > 1
+            // Check for metadata changes (duration) — never overwrite valid stored duration with an unprobed 0
+            const isChanged = sv.duration > 0 && Math.abs((existing.duration || 0) - sv.duration) > 1
 
             // Check for asset diffs
             const assetDiff = checkAssetChanges(existing, sv)
@@ -358,19 +358,16 @@ export async function syncCoursePreview(courseId, scannedData) {
 /**
  * Apply sync changes to the database (v4)
  */
-export async function applySyncChanges(courseId, preview) {
+export async function applySyncChanges(courseId, preview, mode = null) {
     const { added, removed, updated, moved, removedModules, flatScannedModules, scannedData } = preview
 
-    // 0. Update course thumbnail and metadata if found during scan
+    // 0. Update course thumbnail and relocated folder path if detected during scan
     const courseUpdates = {}
     if (scannedData?.thumbnailData) {
         courseUpdates.thumbnailData = scannedData.thumbnailData
     }
-    if (scannedData?.totalDuration !== undefined) {
-        courseUpdates.totalDuration = scannedData.totalDuration
-    }
-    if (scannedData?.totalVideos !== undefined) {
-        courseUpdates.totalVideos = scannedData.totalVideos
+    if (scannedData?.folderPath && scannedData.folderPath !== preview.course?.folderPath) {
+        courseUpdates.folderPath = scannedData.folderPath
     }
     
     if (Object.keys(courseUpdates).length > 0) {
@@ -487,6 +484,9 @@ export async function applySyncChanges(courseId, preview) {
         console.warn('Sync vault hydration notice:', e)
     }
 
-    return true
+    // 8. Recalculate course totals & completion progress from actual database rows
+    const recalcResult = await recalculateCourseProgress(courseId, mode)
+
+    return { success: true, progress: recalcResult }
 }
 

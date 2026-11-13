@@ -9,6 +9,7 @@ import {
   Maximize2,
   PanelLeftClose,
   PanelLeftOpen,
+  Pencil,
   Play,
   Plus,
   Search,
@@ -20,7 +21,6 @@ import {
 
 import { courses, type Course } from "@/lib/courses";
 import { CourseThumbnail } from "@/components/course-thumbnail";
-import { InstructorAvatar } from "@/components/instructor-avatar";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -213,6 +213,36 @@ export function RoadmapPage() {
     },
     [currentRoadmap, roadmaps, saveRoadmaps]
   );
+
+  const [isEditingTitle, setIsEditingTitle] = useState(false);
+  const [titleDraft, setTitleDraft] = useState("");
+  const titleInputRef = useRef<HTMLInputElement>(null);
+
+  const startEditingTitle = useCallback(() => {
+    if (!currentRoadmap) return;
+    setTitleDraft(currentRoadmap.title);
+    setIsEditingTitle(true);
+    setTimeout(() => {
+      titleInputRef.current?.focus();
+      titleInputRef.current?.select();
+    }, 20);
+  }, [currentRoadmap]);
+
+  const saveTitleEdit = useCallback(() => {
+    const trimmed = titleDraft.trim();
+    if (trimmed && currentRoadmap && trimmed !== currentRoadmap.title) {
+      updateCurrentRoadmap((prev) => ({
+        ...prev,
+        title: trimmed,
+        updatedAt: new Date().toISOString(),
+      }));
+    }
+    setIsEditingTitle(false);
+  }, [titleDraft, currentRoadmap, updateCurrentRoadmap]);
+
+  const cancelTitleEdit = useCallback(() => {
+    setIsEditingTitle(false);
+  }, []);
 
   const handleSelectRoadmap = (id: string) => {
     setCurrentId(id);
@@ -460,20 +490,46 @@ export function RoadmapPage() {
     <div className="flex h-[calc(100vh-2rem)] flex-col p-4 sm:p-6 lg:p-8">
       {/* Top Header Toolbar */}
       <header className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex items-center gap-3">
-          <div className="flex size-10 items-center justify-center rounded-lg border border-border bg-card shadow-card">
-            <Compass className="size-5 text-foreground" />
-          </div>
-          <div>
-            <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1.5">
+          {isEditingTitle ? (
+            <input
+              ref={titleInputRef}
+              value={titleDraft}
+              onChange={(e) => setTitleDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  saveTitleEdit();
+                } else if (e.key === "Escape") {
+                  e.preventDefault();
+                  cancelTitleEdit();
+                }
+              }}
+              onBlur={saveTitleEdit}
+              className="h-9 min-w-[200px] max-w-md rounded-md bg-secondary/75 px-2.5 text-xl font-bold text-foreground outline-none ring-2 ring-primary sm:text-2xl"
+              autoFocus
+            />
+          ) : (
+            <div className="flex items-center gap-1">
+              <h1
+                onDoubleClick={(e) => {
+                  e.preventDefault();
+                  startEditingTitle();
+                }}
+                className="cursor-pointer select-none rounded-md px-1 py-0.5 text-xl font-bold text-foreground transition-colors hover:bg-secondary/60 sm:text-2xl"
+                title="Double-click to rename"
+              >
+                {currentRoadmap.title}
+              </h1>
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button
                     variant="ghost"
-                    className="h-auto p-0 text-xl font-bold hover:bg-transparent hover:text-foreground/80 sm:text-2xl"
+                    size="icon"
+                    className="size-7 rounded-md text-muted-foreground hover:text-foreground"
+                    aria-label="Switch roadmap"
                   >
-                    {currentRoadmap.title}
-                    <ChevronDown className="ml-1 size-5 text-muted-foreground" />
+                    <ChevronDown className="size-4" />
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="start" className="w-64 rounded-lg p-1.5 shadow-workspace">
@@ -489,6 +545,12 @@ export function RoadmapPage() {
                   ))}
                   <DropdownMenuSeparator />
                   <DropdownMenuItem
+                    onClick={startEditingTitle}
+                    className="gap-2 rounded-md"
+                  >
+                    <Pencil className="size-4" /> Rename
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
                     onClick={() => setCreateModalOpen(true)}
                     className="gap-2 rounded-md font-medium text-foreground"
                   >
@@ -497,21 +559,17 @@ export function RoadmapPage() {
                 </DropdownMenuContent>
               </DropdownMenu>
             </div>
-            <p className="text-xs text-muted-foreground">
-              {currentRoadmap.nodes.length} {currentRoadmap.nodes.length === 1 ? "course" : "courses"} •{" "}
-              {currentRoadmap.connections.length} connections
-            </p>
-          </div>
+          )}
         </div>
 
         {/* Action Controls */}
         <div className="flex items-center gap-2">
           <Button
-            variant="outline"
+            variant="secondary"
             size="sm"
             onClick={() => setDrawerOpen(!drawerOpen)}
             className={cn(
-              "rounded-lg border-border bg-card shadow-card",
+              "rounded-lg bg-card shadow-card hover:bg-secondary",
               drawerOpen && "bg-secondary text-foreground"
             )}
           >
@@ -520,10 +578,10 @@ export function RoadmapPage() {
           </Button>
 
           <Button
-            variant="outline"
+            variant="secondary"
             size="sm"
             onClick={() => setCreateModalOpen(true)}
-            className="rounded-lg border-border bg-card shadow-card"
+            className="rounded-lg bg-card shadow-card hover:bg-secondary"
           >
             <Plus className="size-4" />
             <span className="ml-1 hidden sm:inline">New</span>
@@ -544,12 +602,12 @@ export function RoadmapPage() {
       </header>
 
       {/* Main Workspace Frame */}
-      <div className="relative flex flex-1 overflow-hidden rounded-xl border border-border bg-card">
+      <div className="relative flex flex-1 overflow-hidden rounded-xl bg-shell/60 shadow-card">
         {/* Left Side: Course Library Drawer */}
         {drawerOpen && (
-          <aside className="flex w-72 shrink-0 flex-col border-r border-border bg-background/80 backdrop-blur-md sm:w-80">
-            <div className="p-3.5 border-b border-border">
-              <div className="flex items-center gap-2 rounded-lg border border-border bg-card px-2.5 py-1.5 shadow-card">
+          <aside className="z-10 flex w-72 shrink-0 flex-col border-r border-border/50 bg-card/95 shadow-workspace backdrop-blur-md sm:w-80">
+            <div className="border-b border-border/50 p-3.5 pb-3">
+              <div className="flex items-center gap-2 rounded-lg bg-secondary/75 px-2.5 py-1.5 transition-colors focus-within:bg-background focus-within:ring-1 focus-within:ring-ring/40">
                 <Search className="size-3.5 shrink-0 text-muted-foreground" />
                 <input
                   value={courseQuery}
@@ -574,13 +632,13 @@ export function RoadmapPage() {
                     onClick={() => handleAddCourse(course)}
                     disabled={isOnCanvas}
                     className={cn(
-                      "group w-full flex items-center gap-3 rounded-lg border border-border/60 bg-card p-2 text-left transition-colors",
+                      "group w-full flex items-center gap-3 rounded-lg bg-secondary/45 p-2 text-left transition-colors",
                       isOnCanvas
-                        ? "opacity-50 cursor-not-allowed bg-secondary/40"
-                        : "hover:border-foreground/20 hover:bg-secondary/60 cursor-pointer"
+                        ? "opacity-50 cursor-not-allowed bg-secondary/30"
+                        : "hover:bg-secondary/85 cursor-pointer"
                     )}
                   >
-                    <div className="relative aspect-video w-14 shrink-0 overflow-hidden rounded-md border border-border/40">
+                    <div className="relative aspect-video w-14 shrink-0 overflow-hidden rounded-md bg-secondary">
                       <CourseThumbnail course={course} />
                     </div>
                     <div className="min-w-0 flex-1">
@@ -614,7 +672,7 @@ export function RoadmapPage() {
           }}
         >
           {/* Zoom & Viewport Floating Controls */}
-          <div className="absolute right-4 top-4 z-30 flex flex-col items-center gap-1.5 rounded-lg border border-border/80 bg-card/90 p-1 shadow-card backdrop-blur-md">
+          <div className="absolute right-4 top-4 z-30 flex flex-col items-center gap-1.5 rounded-lg bg-card/90 p-1 shadow-workspace backdrop-blur-md">
             <Button
               variant="ghost"
               size="icon"
@@ -649,7 +707,7 @@ export function RoadmapPage() {
 
           {/* Connecting Banner Tooltip */}
           {connectingFrom && (
-            <div className="absolute left-1/2 top-4 z-30 -translate-x-1/2 flex items-center gap-2 rounded-lg border border-primary/40 bg-card/95 px-3.5 py-1.5 text-xs shadow-card backdrop-blur-md">
+            <div className="absolute left-1/2 top-4 z-30 -translate-x-1/2 flex items-center gap-2 rounded-lg bg-card/95 px-3.5 py-1.5 text-xs shadow-workspace ring-1 ring-primary/35 backdrop-blur-md">
               <span className="size-2 rounded-full bg-primary animate-pulse" />
               <span>Click another course node to create connection</span>
               <button
@@ -767,9 +825,9 @@ export function RoadmapPage() {
                     }
                   }}
                   className={cn(
-                    "group/node absolute select-none rounded-xl border bg-card shadow-card transition-shadow cursor-grab active:cursor-grabbing",
-                    isSelected && "ring-2 ring-foreground/25 border-foreground/35",
-                    isConnectingSource && "ring-2 ring-primary border-primary",
+                    "group/node absolute select-none rounded-xl bg-card shadow-card transition-shadow cursor-grab active:cursor-grabbing",
+                    isSelected && "ring-2 ring-foreground/30 shadow-workspace",
+                    isConnectingSource && "ring-2 ring-primary shadow-workspace",
                     connectingFrom && connectingFrom !== node.id && "hover:ring-2 hover:ring-primary/40"
                   )}
                   style={{
@@ -780,7 +838,7 @@ export function RoadmapPage() {
                   }}
                 >
                   {/* Node Thumbnail Banner */}
-                  <div className="relative aspect-video w-full overflow-hidden rounded-t-xl border-b border-border">
+                  <div className="relative aspect-video w-full overflow-hidden rounded-t-xl border-b border-border/50">
                     <CourseThumbnail course={course} />
                     <span className="absolute bottom-2 right-2 rounded bg-black/70 px-1.5 py-0.5 font-mono text-[10px] font-medium text-white backdrop-blur-md">
                       {course.duration}
@@ -803,12 +861,8 @@ export function RoadmapPage() {
                     <h3 className="truncate text-sm font-semibold text-foreground" title={course.title}>
                       {course.title}
                     </h3>
-                    <div className="mt-2 flex items-center gap-2">
-                      <InstructorAvatar name={course.instructor} course={course} size="xs" />
-                      <span className="truncate text-xs text-muted-foreground">{course.instructor}</span>
-                    </div>
 
-                    <div className="mt-3.5 h-1 overflow-hidden rounded-sm bg-secondary">
+                    <div className="mt-3 h-1 overflow-hidden rounded-sm bg-secondary">
                       <div className="h-full bg-foreground/55" style={{ width: `${course.progress}%` }} />
                     </div>
                     <div className="mt-2 flex items-center justify-between text-[11px] text-muted-foreground">
@@ -817,7 +871,7 @@ export function RoadmapPage() {
                     </div>
 
                     {/* Node Actions Bar */}
-                    <div className="mt-3.5 flex items-center gap-2 border-t border-border/60 pt-3">
+                    <div className="mt-3.5 flex items-center gap-2 border-t border-border/50 pt-3">
                       <Button
                         asChild
                         variant="secondary"
@@ -832,7 +886,7 @@ export function RoadmapPage() {
 
                       <Button
                         type="button"
-                        variant={isConnectingSource ? "default" : "outline"}
+                        variant={isConnectingSource ? "default" : "secondary"}
                         size="icon"
                         onClick={(e) => {
                           e.stopPropagation();
@@ -863,7 +917,7 @@ export function RoadmapPage() {
 
       {/* Create New Roadmap Modal */}
       <Dialog open={createModalOpen} onOpenChange={setCreateModalOpen}>
-        <DialogContent className="max-w-md rounded-xl border-border bg-card p-6 shadow-workspace">
+        <DialogContent className="max-w-md rounded-xl border-0 bg-card p-6 shadow-workspace">
           <DialogHeader>
             <DialogTitle className="text-lg font-semibold">New roadmap</DialogTitle>
             <DialogDescription className="text-sm">Name your learning pathway.</DialogDescription>
@@ -877,7 +931,7 @@ export function RoadmapPage() {
                 if (e.key === "Enter") handleCreateRoadmap();
               }}
               placeholder="e.g. Distributed Systems & Reliability"
-              className="w-full rounded-lg border border-border bg-secondary/50 px-3.5 py-2.5 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:border-foreground/30 focus:ring-1 focus:ring-ring"
+              className="w-full rounded-lg bg-secondary/75 px-3.5 py-2.5 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:bg-background focus:ring-2 focus:ring-ring/40"
             />
           </div>
           <DialogFooter className="mt-6 gap-2">

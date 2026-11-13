@@ -3,6 +3,9 @@ import { fileURLToPath } from 'url'
 import fs from 'fs'
 import { getOne } from '../database.js'
 import { getPunctuationModelsDir } from './modelManager.js'
+import { isNonSpeechText } from './aiTranslation.js'
+
+export { isNonSpeechText }
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -29,26 +32,6 @@ export function needsPunctuationRestoration(chunks) {
 
     // If fewer than 1 terminal mark every 25 words, file lacks normal punctuation
     return density < 0.04
-}
-
-const WHISPER_HALLUCINATION_REGEX = /^\s*(?:thank\s+you\s+for\s+watching|thanks\s+for\s+watching|please\s+like\s+and\s+subscribe|please\s+subscribe|like\s+and\s+subscribe|don'?t\s+forget\s+to\s+subscribe|subscribe\s+to\s+my\s+channel|see\s+you\s+in\s+the\s+next\s+video|subtitles?\s+by\b|transcribed\s+by\b)[.!]?\s*$/i
-
-/**
- * Detects whether a subtitle cue represents non-speech, music, noise, or silence hallucinations.
- */
-export function isNonSpeechText(text) {
-    if (!text || typeof text !== 'string') return true
-    const trimmed = text.trim()
-    if (!trimmed) return true
-    if (WHISPER_HALLUCINATION_REGEX.test(trimmed)) return true
-    const stripped = trimmed
-        .replace(/<[^>]+>/g, '')
-        .replace(/\[[^\]]*\]/g, '')
-        .replace(/\([^)]*\)/g, '')
-        .replace(/[♪♫#*]+/g, '')
-        .replace(/[\s.\-_–—…,:;!?]+/g, '')
-        .trim()
-    return stripped.length === 0
 }
 
 /**

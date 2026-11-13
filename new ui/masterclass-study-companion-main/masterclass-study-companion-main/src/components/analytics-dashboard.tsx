@@ -5,7 +5,7 @@ import { courses } from "@/lib/courses";
 import { cn } from "@/lib/utils";
 
 function Card({ className, children }: { className?: string; children: ReactNode }) {
-  return <section className={cn("rounded-xl border border-border/60 bg-card p-6 shadow-card", className)}>{children}</section>;
+  return <section className={cn("rounded-xl bg-card p-6 shadow-card", className)}>{children}</section>;
 }
 
 function Metric({ icon, label, value, children, warm }: { icon: ReactNode; label: string; value: string; children: ReactNode; warm?: boolean }) {
@@ -42,13 +42,22 @@ function Heatmap() {
   }, [range]);
   const weeks: typeof days[] = [];
   for (let i = 0; i < days.length; i += 7) weeks.push(days.slice(i, i + 7));
-  const level = (m: number) => (m === 0 ? "bg-secondary" : m < 30 ? "bg-foreground/20" : m < 60 ? "bg-foreground/40" : m < 100 ? "bg-foreground/60" : "bg-foreground/80");
+  const level = (m: number) =>
+    m === 0
+      ? "bg-secondary"
+      : m < 30
+        ? "bg-emerald-500/25 dark:bg-emerald-400/20"
+        : m < 60
+          ? "bg-emerald-500/50 dark:bg-emerald-400/45"
+          : m < 100
+            ? "bg-emerald-600/80 dark:bg-emerald-400/75"
+            : "bg-emerald-600 dark:bg-emerald-400";
 
   return (
     <Card>
       <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
         <h2 className="text-base font-semibold">Study consistency</h2>
-        <div className="flex rounded-lg border border-border bg-secondary/50 p-1 text-xs font-medium">
+        <div className="flex rounded-lg bg-secondary/75 p-1 text-xs font-medium">
           {([["2026", "2026"], ["3m", "Past 3 Months"]] as const).map(([k, l]) => (
             <button key={k} onClick={() => setRange(k)} className={cn("rounded-sm px-3 py-1.5 text-muted-foreground transition", range === k && "bg-card text-foreground shadow-card")}>{l}</button>
           ))}
@@ -89,7 +98,15 @@ function Velocity() {
             <TooltipTrigger asChild>
               <div className="group flex h-full flex-1 flex-col items-center justify-end gap-2">
                 <span className="text-[11px] font-semibold text-muted-foreground opacity-0 transition group-hover:opacity-100">{h}h</span>
-                 <div className={cn("w-full max-w-10 rounded-t transition-all group-hover:bg-foreground/70", h === max ? "bg-foreground/75" : "bg-foreground/25")} style={{ height: `${(h / max) * 80}%` }} />
+                 <div
+                   className={cn(
+                     "w-full max-w-10 rounded-t transition-all",
+                     h === max
+                       ? "bg-chart-2 shadow-xs group-hover:opacity-90"
+                       : "bg-secondary hover:bg-foreground/30"
+                   )}
+                   style={{ height: `${(h / max) * 80}%` }}
+                 />
                 <span className="text-xs text-muted-foreground">{d}</span>
               </div>
             </TooltipTrigger>
@@ -135,12 +152,12 @@ function LearningFocus() {
       }
     }
 
-    const palette = [
-      "stroke-foreground bg-foreground",
-      "stroke-foreground/75 bg-foreground/75",
-      "stroke-foreground/45 bg-foreground/45",
-      "stroke-foreground/20 bg-foreground/20",
-    ];
+    const categoryPalette: Record<string, string> = {
+      "Design & UI/UX": "stroke-chart-1 bg-chart-1",
+      "Programming": "stroke-chart-2 bg-chart-2",
+      "Motion Graphics": "stroke-chart-3 bg-chart-3",
+      "AI & Machine Learning": "stroke-chart-4 bg-chart-4",
+    };
 
     const totalMin = Object.values(stats).reduce((acc, s) => acc + s.minutes, 0) || 1;
 
@@ -150,6 +167,7 @@ function LearningFocus() {
         const pct = Math.round((entry.minutes / totalMin) * 100);
         const tagPreview = Array.from(entry.tags).slice(0, 3).join(" · ") || t.label;
         return {
+          id: t.id,
           label: t.label,
           shortLabel: t.shortLabel,
           tags: tagPreview,
@@ -164,12 +182,12 @@ function LearningFocus() {
       list[0].pct += 100 - sum;
     }
 
-    return list.map((item, idx) => ({
+    return list.map((item) => ({
       label: item.label,
       shortLabel: item.shortLabel,
       tags: item.tags,
       pct: item.pct,
-      cls: palette[idx] || "stroke-foreground/20 bg-foreground/20",
+      cls: categoryPalette[item.id] || "stroke-foreground/40 bg-foreground/40",
     }));
   }, []);
 
@@ -238,22 +256,26 @@ export function AnalyticsDashboard() {
   );
 
   return (
-    <div className="min-h-full">
-      <div className="mx-auto max-w-7xl space-y-6 p-5 sm:p-8">
+    <div className="mx-auto w-full max-w-[1440px] px-5 pb-12 pt-6 sm:px-8 sm:pt-8 lg:px-10">
+      <header className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <h1 className="text-2xl font-bold tracking-tight text-foreground sm:text-3xl">Analytics</h1>
+      </header>
+
+      <div className="space-y-6">
         <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-4">
-          <Metric icon={<Clock className="size-5" />} label="Watch time" value="46h 20m">
-            <span className="rounded bg-secondary px-2 py-1 font-semibold text-foreground/75">+4.2h this week</span>
+          <Metric icon={<Clock className="size-5 text-chart-2" />} label="Watch time" value="46h 20m">
+            <span className="rounded bg-emerald-500/10 px-2 py-1 font-semibold text-emerald-600 dark:text-emerald-400">+4.2h this week</span>
           </Metric>
           <Metric warm icon={<Flame className="size-5" />} label="Streak" value="12 days">Personal best: 19 days</Metric>
-          <Metric icon={<CheckCircle2 className="size-5" />} label="Completed courses" value={`${completedCourses} / ${courses.length}`}>
+          <Metric icon={<CheckCircle2 className="size-5 text-chart-4" />} label="Completed courses" value={`${completedCourses} / ${courses.length}`}>
             <div className="h-1.5 overflow-hidden rounded-full bg-secondary">
               <div
-                className="h-full rounded-full bg-foreground/55"
+                className="h-full rounded-full bg-chart-4"
                 style={{ width: `${Math.round((completedCourses / courses.length) * 100)}%` }}
               />
             </div>
           </Metric>
-          <Metric icon={<BookOpen className="size-5" />} label="Notes" value="342">Across 8 courses</Metric>
+          <Metric icon={<BookOpen className="size-5 text-chart-1" />} label="Notes" value="342">Across 8 courses</Metric>
         </div>
         <Heatmap />
         <div className="grid gap-6 lg:grid-cols-2">

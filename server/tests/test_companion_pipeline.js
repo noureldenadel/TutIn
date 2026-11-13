@@ -1,13 +1,21 @@
 import assert from 'assert'
 import fs from 'fs'
+import os from 'os'
 import path from 'path'
-import { applyDialectPhoneticNudges, stitchCuesIntoSentences } from '../../server/utils/aiTranslation.js'
-import { saveTtsCompanionFile, loadTtsCompanionSegments, listVideoLanguages } from '../../server/utils/courseAssets.js'
+
+const testDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tutin_test_data_'))
+process.env.TUTIN_DATA_DIR = testDataDir
+
+import { applyDialectPhoneticNudges, stitchCuesIntoSentences, isDubbingLanguageSupported } from '../../server/utils/aiTranslation.js'
+import { saveTtsCompanionFile, loadTtsCompanionSegments, deleteTtsCompanionFile, listVideoLanguages, loadCaptionChunks } from '../../server/utils/courseAssets.js'
 import { extractLangCode } from '../../server/utils/captionParser.js'
 
-console.log('--- 1. Testing extractLangCode with .tts. protection ---')
+console.log('--- 1. Testing extractLangCode with .tts. protection & dialect codes ---')
 assert.strictEqual(extractLangCode('video.ar-eg.tts.json', 'video'), null, 'Should return null for .tts. companion file')
 assert.strictEqual(extractLangCode('video.ar.vtt', 'video'), 'ar', 'Should extract standard language')
+assert.strictEqual(extractLangCode('video-generated.ar-eg.vtt', 'video'), 'ar-eg', 'Should extract hyphenated dialect from -generated filename')
+assert.strictEqual(extractLangCode('video.ar-sa.vtt', 'video'), 'ar-sa', 'Should extract hyphenated ar-sa dialect')
+assert.strictEqual(extractLangCode('01 - Intro-uploaded.es.vtt', '01 - Intro'), 'es', 'Should extract lang after -uploaded suffix')
 
 console.log('--- 2. Testing applyDialectPhoneticNudges ---')
 const testMsa = 'الآن يجب أن نذهب لكي نرى ماذا سيحدث هكذا'
@@ -69,12 +77,30 @@ assert.ok(loadedSegments, 'Loaded segments should not be null')
 assert.strictEqual(loadedSegments.length, 1)
 assert.strictEqual(loadedSegments[0].text, 'مرحبا')
 
-// Clean up test file
-try { fs.unlinkSync(savedPath) } catch {}
+deleteTtsCompanionFile(dummyMeta.id, 'ar-eg', dummyMeta)
+assert.strictEqual(loadTtsCompanionSegments(dummyMeta.id, 'ar-eg', dummyMeta), null, 'Companion file should be deleted by deleteTtsCompanionFile')
 
-console.log('--- 5. Testing listVideoLanguages isolation ---')
+console.log('--- 5. Testing listVideoLanguages isolation & loadCaptionChunks language strictness ---')
 const langs = listVideoLanguages(dummyMeta.id, [])
 assert.strictEqual(langs.translatedLangs.includes('tts'), false, 'Internal tts companion must NEVER be listed as a language')
+
+// Create a mock English source VTT in temp dir and ensure requesting Arabic ('ar') does NOT fall back to English
+const mockEnVttPath = path.join(testDataDir, 'video.en.vtt')
+fs.writeFileSync(mockEnVttPath, 'WEBVTT\n\n00:00:00.000 --> 00:00:02.000\nHello world in English.\n', 'utf8')
+const mockSubtitleSources = [{ lang: 'en', filePath: mockEnVttPath, origin: 'existing', format: 'vtt' }]
+
+const wrongLangFallback = loadCaptionChunks('test_vid_123', 'ar', mockSubtitleSources, null, '', 'video')
+assert.strictEqual(wrongLangFallback.length, 0, 'Requesting target lang "ar" must NEVER fall back to English subtitleSources[0]')
+
+const sourceFallback = loadCaptionChunks('test_vid_123', 'source', mockSubtitleSources, null, '', 'video')
+assert.strictEqual(sourceFallback.length, 1, 'Requesting "source" should fall back to subtitleSources[0]')
+assert.strictEqual(sourceFallback[0].text, 'Hello world in English.')
+
+console.log('--- 5b. Testing XTTS language support validation ---')
+assert.strictEqual(isDubbingLanguageSupported('ar-eg'), true)
+assert.strictEqual(isDubbingLanguageSupported('es'), true)
+assert.strictEqual(isDubbingLanguageSupported('vi'), false)
+assert.strictEqual(isDubbingLanguageSupported('he'), false)
 
 console.log('--- 6. Testing sliceTranslatedSentenceToCues underflow edge case ---')
 const { sliceTranslatedSentenceToCues } = await import('../../server/utils/aiTranslation.js')
@@ -119,5 +145,7 @@ const mixedRemapped = remapPunctuatedTextToCues(mixedCues, 'Welcome everyone.')
 assert.strictEqual(mixedRemapped[0].text, '')
 assert.strictEqual(mixedRemapped[1].text, 'Welcome')
 assert.strictEqual(mixedRemapped[2].text, 'everyone.')
+
+try { fs.rmSync(testDataDir, { recursive: true, force: true }) } catch {}
 
 console.log('ALL COMPANION PIPELINE AND EDGE-CASE TESTS PASSED SUCCESSFULLY!')

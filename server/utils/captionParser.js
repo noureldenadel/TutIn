@@ -25,31 +25,40 @@ export function detectFormat(filename) {
     return null
 }
 
+const KNOWN_HYPHENATED_LANGS = new Set(['ar-eg', 'ar-sa', 'zh-cn', 'zh-tw', 'pt-br'])
+
 /**
- * Extract ISO 639-1 language code from subtitle filename.
- * Supports: video.ar.srt | video.Arabic.srt | video - Arabic.srt
+ * Extract ISO 639-1 / BCP-47 language code from subtitle or dub filename.
+ * Supports: video.ar.srt | video.ar-eg.vtt | video-generated.ar-eg.vtt | video.Arabic.srt
  */
 export function extractLangCode(filename, baseName = '') {
     if (!filename || filename.toLowerCase().includes('.tts.')) return null
-    const nameWithoutExt = filename.replace(/\.[a-z0-9]+$/i, '').toLowerCase()
+    const nameWithoutExt = filename.replace(/\.(?:srt|vtt|ass|ssa|lrc|mp3|wav|json)$/i, '').toLowerCase()
 
     // 1. Try strict matching if the file starts with the video base name
-    if (baseName && filename.toLowerCase().startsWith(baseName.toLowerCase())) {
-        const withoutBase = nameWithoutExt.slice(baseName.length)
-        const strictMatch = withoutBase.match(/^[\.\s-]*([a-z]{2,})$/)
+    if (baseName && nameWithoutExt.startsWith(baseName.toLowerCase())) {
+        const withoutBase = nameWithoutExt
+            .slice(baseName.length)
+            .replace(/^-(?:generated|uploaded)/i, '')
+        const strictMatch = withoutBase.match(/^[\.\s_-]*([a-z]{2,3}(?:-[a-z]{2,4})?|[a-z]{4,})$/)
         if (strictMatch) {
             const code = strictMatch[1]
+            if (KNOWN_HYPHENATED_LANGS.has(code)) return code
             if (LANG_NAME_MAP[code]) return LANG_NAME_MAP[code]
             if (Object.values(LANG_NAME_MAP).includes(code)) return code
-            if (code.length <= 3) return code
+            if (code.length <= 3 && code !== 'source') return code
         }
     }
 
-    // 2. Try scanning the whole filename for known language names or codes
+    // 2. Check for known hyphenated dialect codes at the end of nameWithoutExt (e.g. ".ar-eg", "-ar-sa")
+    const hyphenMatch = nameWithoutExt.match(/(?:^|[.\s_-])(ar-eg|ar-sa|zh-cn|zh-tw|pt-br)$/)
+    if (hyphenMatch) return hyphenMatch[1]
+
+    // 3. Try scanning the whole filename for known language names or codes
     const words = nameWithoutExt.split(/[^a-z]+/)
     // Reverse to prefer suffixes (e.g. "my-video-english.srt" -> "english")
     for (const word of words.reverse()) { 
-        if (!word) continue
+        if (!word || word === 'generated' || word === 'uploaded' || word === 'source') continue
         if (LANG_NAME_MAP[word]) return LANG_NAME_MAP[word]
         if (Object.values(LANG_NAME_MAP).includes(word)) return word
     }

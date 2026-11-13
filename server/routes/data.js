@@ -12,6 +12,7 @@ import express from 'express'
 import fs from 'fs'
 import { getAll, run, transaction, saveDatabase, getDb } from '../database.js'
 import { parseMp4Duration } from '../utils/mp4Parser.js'
+import { recalculateCourseProgress } from './courses.js'
 
 const router = express.Router()
 
@@ -260,13 +261,9 @@ router.post('/detect-durations', async (req, res) => {
             }
         }
 
-        // Recalculate total_duration for affected courses
+        // Recalculate totals and progress for affected courses
         for (const courseId of coursesToRecalc) {
-            const courseVideos = getAll(
-                'SELECT duration FROM videos WHERE course_id = ?', [courseId]
-            )
-            const totalDuration = courseVideos.reduce((sum, v) => sum + (v.duration || 0), 0)
-            run('UPDATE courses SET total_duration = ? WHERE id = ?', [totalDuration, courseId])
+            recalculateCourseProgress(courseId)
         }
 
         if (fixed > 0) saveDatabase()

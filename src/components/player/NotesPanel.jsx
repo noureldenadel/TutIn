@@ -1407,37 +1407,7 @@ function NotesPanel({
                             <span className="truncate">Add Note at {formatDuration(currentTime)}</span>
                         </button>
 
-                        {/* 2. Screenshot Note Icon Button */}
-                        <button
-                            type="button"
-                            onClick={async () => {
-                                if (!onCaptureFrame) {
-                                    showNotification('Video player not ready for screenshot', 'warning')
-                                    return
-                                }
-
-                                try {
-                                    const res = await onCaptureFrame()
-                                    const dataUrl = res?.dataUrl || res
-                                    if (dataUrl) {
-                                        setEditingNote(null);
-                                        setNoteContent(`<p><img src="${dataUrl}" alt="Video screenshot at ${formatDuration(currentTime)}" /></p><p><br></p>`);
-                                        setNoteTimestamp(currentTime);
-                                        setEditorKey(k => k + 1);
-                                        setShowAddNote(true);
-                                    }
-                                } catch (err) {
-                                    console.error('Screenshot capture notice:', err)
-                                    showNotification(err.message || 'Failed to capture screenshot', 'warning')
-                                }
-                            }}
-                            className="h-9 w-9 flex items-center justify-center border border-light-border dark:border-dark-border rounded-lg bg-light-surface dark:bg-dark-bg hover:bg-gray-100 dark:hover:bg-dark-surface/80 text-light-text dark:text-dark-text transition-colors cursor-pointer shrink-0 shadow-sm active:scale-[0.98]"
-                            title="Capture video screenshot to new note"
-                        >
-                            <Camera className="w-4 h-4 text-primary-fg" />
-                        </button>
-
-                        {/* 3. Transcript Autocomplete Toggle Button */}
+                        {/* 2. Transcript Autocomplete Toggle Button */}
                         <button
                             type="button"
                             onClick={() => {

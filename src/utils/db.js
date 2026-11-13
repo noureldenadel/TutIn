@@ -97,10 +97,12 @@ export async function getVideosByModule(moduleId) {
 }
 
 export async function updateVideoProgress(videoId, currentTime, duration) {
-    const watchProgress = duration > 0 ? currentTime / duration : 0
+    const safePosition = Math.max(0, Number(currentTime) || 0)
+    const safeDuration = Number(duration) || 0
+    const watchProgress = safeDuration > 0 ? Math.min(1, Math.max(0, safePosition / safeDuration)) : 0
     return api.put(`/api/videos/${videoId}/progress`, {
         watchProgress,
-        lastWatchedPosition: currentTime
+        lastWatchedPosition: safePosition
     })
 }
 
@@ -307,6 +309,29 @@ export async function importData(data) {
 
 export async function recalculateAllCoursesProgress(mode) {
     return api.post('/api/courses/recalculate-progress', { mode })
+}
+
+export async function recalculateCourseProgress(courseId, mode = null) {
+    let res
+    try {
+        res = await api.post(`/api/courses/${courseId}/recalculate-progress`, mode ? { mode } : {})
+    } catch (err) {
+        // Fallback if the companion server process has not been restarted with the single-course route
+        if (err?.message === 'API error: 404') {
+            console.warn('[TutIn] Single-course recalculate endpoint unavailable (restart companion server); falling back to bulk recalculate.')
+            await recalculateAllCoursesProgress(mode)
+            const updatedCourse = await getCourse(courseId)
+            res = { success: true, course: updatedCourse, fallbackUsed: true }
+        } else {
+            throw err
+        }
+    }
+    if (typeof window !== 'undefined' && res?.course) {
+        window.dispatchEvent(new CustomEvent('tutin:course-updated', {
+            detail: { courseId, updates: res.course }
+        }))
+    }
+    return res
 }
 
 export async function detectAllDurations() {

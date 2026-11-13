@@ -46,6 +46,17 @@ function SyncPreviewModal({ preview, isOpen, onConfirm, onCancel, isApplying }) 
 
     const hasChanges = hasVideoChanges || hasAssetChanges
 
+    const progressRecalc = preview.progressRecalc
+    const beforePct = Math.round(progressRecalc?.before?.completionPercentage || 0)
+    const afterPct = Math.round(progressRecalc?.after?.completionPercentage || 0)
+    const countsChanged = Boolean(
+        progressRecalc && (
+            progressRecalc.before?.completedVideos !== progressRecalc.after?.completedVideos ||
+            progressRecalc.before?.totalVideos !== progressRecalc.after?.totalVideos
+        )
+    )
+    const progressDisplayChanged = Boolean(progressRecalc && (beforePct !== afterPct || countsChanged))
+
     const tabs = [
         { id: 'summary', label: 'Summary' },
         (preview.assetUpdates?.length || 0) > 0 && { id: 'assets', label: `New Assets (${preview.assetUpdates.length})` },
@@ -72,7 +83,7 @@ function SyncPreviewModal({ preview, isOpen, onConfirm, onCancel, isApplying }) 
                                 Course &amp; Vault Sync
                             </h2>
                             <p className="text-xs text-light-text-secondary dark:text-dark-text-secondary truncate">
-                                {preview.course.title}
+                                {preview.course.title} • {Math.round(preview.course.completionPercentage || 0)}% ({preview.course.completedVideos || 0}/{preview.course.totalVideos || 0})
                             </p>
                         </div>
                     </div>
@@ -136,6 +147,55 @@ function SyncPreviewModal({ preview, isOpen, onConfirm, onCancel, isApplying }) 
                 <div className="flex-1 overflow-y-auto p-6 space-y-4">
                     {activeTab === 'summary' && (
                         <div className="space-y-5">
+                            {/* Recalculated Progress */}
+                            {progressRecalc && (
+                                <div className="p-3.5 rounded-xl bg-light-surface dark:bg-dark-bg/60 border border-light-border dark:border-dark-border flex items-center justify-between gap-4">
+                                    <div className="min-w-0">
+                                        <div className="flex items-center gap-2">
+                                            <CheckCircle2 className={`w-4 h-4 flex-shrink-0 ${
+                                                progressDisplayChanged ? 'text-amber-500' : 'text-emerald-500'
+                                            }`} />
+                                            <span className="text-xs font-bold uppercase tracking-wider text-gray-900 dark:text-white">
+                                                Progress
+                                            </span>
+                                            <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-md ${
+                                                progressDisplayChanged
+                                                    ? 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20'
+                                                    : 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20'
+                                            }`}>
+                                                {progressDisplayChanged ? 'Updated' : 'Recalculated'}
+                                            </span>
+                                        </div>
+                                        <p className="text-xs text-light-text-secondary dark:text-dark-text-secondary mt-1">
+                                            {progressRecalc.after.completedVideos}/{progressRecalc.after.totalVideos} completed
+                                            {progressRecalc.mode === 'duration' ? ' • By duration' : ''}
+                                        </p>
+                                    </div>
+                                    <div className="text-right flex-shrink-0">
+                                        {progressDisplayChanged ? (
+                                            <div className="flex items-center justify-end gap-1.5 text-sm font-bold">
+                                                <span className="text-light-text-secondary dark:text-dark-text-secondary line-through font-medium">
+                                                    {beforePct}%
+                                                </span>
+                                                <ArrowRight className="w-3.5 h-3.5 text-amber-500" />
+                                                <span className="text-primary dark:text-primary-fg">
+                                                    {afterPct}%
+                                                </span>
+                                            </div>
+                                        ) : (
+                                            <div className="text-lg font-bold text-primary dark:text-white">
+                                                {afterPct}%
+                                            </div>
+                                        )}
+                                        {countsChanged && (
+                                            <div className="text-[11px] text-light-text-secondary dark:text-dark-text-secondary">
+                                                {progressRecalc.before.completedVideos}/{progressRecalc.before.totalVideos} → {progressRecalc.after.completedVideos}/{progressRecalc.after.totalVideos}
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+                            )}
+
                             {/* 5 Asset Indicator Cards */}
                             <div className="space-y-2">
                                 <h3 className="text-xs font-bold uppercase tracking-wider text-light-text-secondary dark:text-dark-text-secondary">
@@ -283,9 +343,9 @@ function SyncPreviewModal({ preview, isOpen, onConfirm, onCancel, isApplying }) 
                                 {!hasChanges ? (
                                     <div className="text-center py-6 p-4 rounded-xl bg-emerald-500/5 border border-emerald-500/20">
                                         <CheckCircle2 className="w-8 h-8 mx-auto mb-2 text-emerald-500" />
-                                        <p className="font-semibold text-sm text-gray-900 dark:text-white">All in sync!</p>
+                                        <p className="font-semibold text-sm text-gray-900 dark:text-white">All in sync</p>
                                         <p className="text-xs text-light-text-secondary dark:text-dark-text-secondary mt-0.5">
-                                            Database, video files, dubs, transcripts, canvas, and summaries are up to date.
+                                            Progress, video files, and vault assets match.
                                         </p>
                                     </div>
                                 ) : (

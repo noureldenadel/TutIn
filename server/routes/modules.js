@@ -1,5 +1,6 @@
 import express from 'express'
 import { getAll, getOne, run, transaction } from '../database.js'
+import { recalculateCourseProgress } from './courses.js'
 
 const router = express.Router()
 
@@ -102,7 +103,11 @@ router.put('/:id', (req, res) => {
 // DELETE /api/modules/:id
 router.delete('/:id', (req, res) => {
     try {
+        const mod = getOne('SELECT course_id FROM modules WHERE id = ?', [req.params.id])
         run('DELETE FROM modules WHERE id = ?', [req.params.id])
+        if (mod?.course_id) {
+            recalculateCourseProgress(mod.course_id)
+        }
         res.json({ success: true })
     } catch (err) {
         res.status(500).json({ error: err.message })

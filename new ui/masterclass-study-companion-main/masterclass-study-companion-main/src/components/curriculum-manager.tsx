@@ -2,28 +2,27 @@ import { useMemo, useRef, useState } from "react";
 import { Link } from "@tanstack/react-router";
 import {
   ArrowDown, ArrowLeft, ArrowRightLeft, ArrowUp, Check, ChevronDown, ChevronRight, Clock3, FileText, FolderPlus,
-  GripVertical, Layers, MoreHorizontal, MoreVertical, Mic, Pencil, PlayCircle, Plus, Save, Sparkles, Subtitles,
+  GripVertical, Layers, MoreHorizontal, MoreVertical, Mic, Pencil, PlayCircle, Plus, RefreshCw, Save, Sparkles, Subtitles,
   Trash2, UserRound, Volume2,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuSub,
   DropdownMenuSubContent, DropdownMenuSubTrigger, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
 import type { Course } from "@/lib/courses";
+import { SyncPreviewModal } from "@/components/sync-preview-modal";
+import { EditCourseModal } from "@/components/edit-course-modal";
 
 type Lesson = { id: string; title: string; seconds: number; watched: boolean; transcript: boolean; subs: string[]; dub?: string | undefined };
 type Module = { id: string; title: string; open: boolean; lessons: Lesson[] };
 
 const seed: [string, [string, number][]][] = [
   ["Foundations & Architecture", [["Welcome & how this course works", 252], ["Seeing like a designer", 570], ["Principles of visual hierarchy", 765], ["Typography that breathes", 605]]],
-  ["Color, Space & Rhythm", [["Color with intention", 860], ["Layout and rhythm", 708], ["The 8-point grid", 540]]],
-  ["Designing for People", [["Research without the jargon", 690], ["Designing for real people", 782], ["Your first case study", 990]]],
+  ["Color, Space & Rhythm", [["Color with intention", 860], ["Layout and rhythm", 708], ["The 8-point grid", 540], ["Micro-interactions & motion", 675]]],
+  ["Designing for People", [["Research without the jargon", 690], ["Designing for real people", 782], ["Your first case study", 990], ["Design critiques & handoff", 640]]],
 ];
 
 const initialModules = (): Module[] => seed.map(([title, lessons], m) => ({
@@ -47,6 +46,7 @@ export function CurriculumManager({ course }: { course: Course }) {
   const [saved, setSaved] = useState(false);
   const [info, setInfo] = useState({ title: course.title, instructor: course.instructor, language: "English" });
   const [editOpen, setEditOpen] = useState(false);
+  const [syncOpen, setSyncOpen] = useState(false);
   const [renaming, setRenaming] = useState<string | null>(null);
   const [transcribing, setTranscribing] = useState(false);
   const drag = useRef<Drag>(null);
@@ -90,10 +90,10 @@ export function CurriculumManager({ course }: { course: Course }) {
           <Link to="/learn/$courseId" params={{ courseId: String(course.id) }} className="truncate hover:text-foreground">{info.title}</Link><ChevronRight className="size-3 shrink-0" />
           <span className="shrink-0 font-medium text-foreground">Curriculum</span>
         </nav>
-         <Button asChild variant="outline" size="sm" className="rounded-md"><Link to="/learn/$courseId" params={{ courseId: String(course.id) }}><ArrowLeft /> Player</Link></Button>
+         <Button asChild variant="secondary" size="sm" className="rounded-md"><Link to="/learn/$courseId" params={{ courseId: String(course.id) }}><ArrowLeft /> Player</Link></Button>
       </div>
 
-       <section className="mt-6 flex flex-col gap-6 rounded-xl border border-border bg-card p-6 shadow-card lg:flex-row lg:items-center lg:justify-between">
+       <section className="mt-6 flex flex-col gap-6 rounded-xl bg-card p-6 shadow-card lg:flex-row lg:items-center lg:justify-between">
         <div className="min-w-0">
           <h1 className="text-2xl font-semibold">{info.title}</h1>
           <div className="mt-3 flex flex-wrap gap-2 text-xs">
@@ -108,7 +108,8 @@ export function CurriculumManager({ course }: { course: Course }) {
             <Stat icon={<Clock3 />} label={`${fmtLong(totals.seconds)} Total`} />
           </div>
           <div className="flex flex-wrap gap-2">
-             <Button variant="outline" className="rounded-md" onClick={() => setEditOpen(true)}><Pencil /> Edit info</Button>
+             <Button variant="secondary" className="rounded-md" onClick={() => setSyncOpen(true)}><RefreshCw /> Rescan folder</Button>
+             <Button variant="secondary" className="rounded-md" onClick={() => setEditOpen(true)}><Pencil /> Edit info</Button>
              <Button className="rounded-md bg-sky text-sky-foreground hover:bg-sky/90" onClick={() => importRef.current?.click()}><FolderPlus /> Import videos</Button>
             <input ref={importRef} type="file" multiple accept="video/*" className="sr-only" onChange={(e) => {
               const files = Array.from(e.target.files ?? []); if (!files.length) return;
@@ -127,7 +128,7 @@ export function CurriculumManager({ course }: { course: Course }) {
               onDragOver={(e) => { e.preventDefault(); setOver(mod.id); }}
               onDragLeave={() => setOver((o) => o === mod.id ? null : o)}
               onDrop={(e) => { e.preventDefault(); onDrop({ kind: drag.current?.kind === "module" ? "module" : "lesson", m, l: Infinity } as Drag); }}
-               className={cn("rounded-xl border border-border bg-card shadow-card transition-all", over === mod.id && "border-sky/50 ring-2 ring-sky/15")}>
+               className={cn("rounded-xl bg-card shadow-card transition-all", over === mod.id && "ring-2 ring-primary/35")}>
               <div className="flex items-center gap-3 p-4">
                 <span draggable onDragStart={() => { drag.current = { kind: "module", m }; }} className="cursor-grab text-muted-foreground active:cursor-grabbing" aria-label="Drag module"><GripVertical className="size-4" /></span>
                 <button type="button" aria-label={mod.open ? "Collapse module" : "Expand module"} onClick={() => update((ms) => ms.map((x, i) => i === m ? { ...x, open: !x.open } : x))} className="text-muted-foreground hover:text-foreground">
@@ -137,7 +138,7 @@ export function CurriculumManager({ course }: { course: Course }) {
                 {renaming === mod.id ? (
                   <input autoFocus defaultValue={mod.title} onBlur={(e) => { const v = e.target.value.trim(); if (v) update((ms) => ms.map((x, i) => i === m ? { ...x, title: v } : x)); setRenaming(null); }}
                     onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); if (e.key === "Escape") setRenaming(null); }}
-                    className="min-w-0 flex-1 rounded-lg border border-border bg-background px-2 py-1 text-sm font-semibold outline-none focus:ring-2 focus:ring-ring" />
+                    className="min-w-0 flex-1 rounded-lg bg-secondary/75 px-2.5 py-1 text-sm font-semibold outline-none focus:bg-background focus:ring-2 focus:ring-ring" />
                 ) : (
                   <button type="button" onDoubleClick={() => setRenaming(mod.id)} onClick={() => update((ms) => ms.map((x, i) => i === m ? { ...x, open: !x.open } : x))} className="min-w-0 flex-1 truncate text-left text-sm font-semibold" title="Double-click to rename">
                     {pad(m + 1)} - {mod.title}
@@ -157,14 +158,14 @@ export function CurriculumManager({ course }: { course: Course }) {
               </div>
 
               {mod.open && (
-                <ol className="space-y-2 border-t border-border p-3">
-                   {mod.lessons.length === 0 && <li className="rounded-lg border border-dashed border-border px-4 py-6 text-center text-sm text-muted-foreground">No lessons yet. Import videos to begin.</li>}
+                <ol className="space-y-1.5 border-t border-border/50 px-3 pb-3 pt-3">
+                   {mod.lessons.length === 0 && <li className="rounded-lg bg-secondary/40 px-4 py-6 text-center text-sm text-muted-foreground">No lessons yet. Import videos to begin.</li>}
                   {mod.lessons.map((ls, l) => (
                     <li key={ls.id} draggable
                       onDragStart={(e) => { e.stopPropagation(); drag.current = { kind: "lesson", m, l }; }}
                       onDragOver={(e) => { e.preventDefault(); }}
                       onDrop={(e) => { e.preventDefault(); e.stopPropagation(); if (drag.current?.kind === "lesson") onDrop({ kind: "lesson", m, l }); }}
-                       className="group flex flex-wrap items-center gap-3 rounded-lg border border-transparent bg-background px-3 py-2.5 transition-colors duration-200 hover:border-border hover:bg-secondary/40 md:flex-nowrap">
+                       className="group flex flex-wrap items-center gap-3 rounded-lg bg-background/60 px-3 py-2.5 transition-colors duration-200 hover:bg-secondary/60 md:flex-nowrap">
                       <GripVertical className="size-4 shrink-0 cursor-grab text-muted-foreground/60 group-hover:text-muted-foreground" />
                       <button type="button" aria-label={ls.watched ? "Mark unwatched" : "Mark watched"} onClick={() => patchLesson(m, l, { watched: !ls.watched })}
                         className={cn("flex size-5 shrink-0 items-center justify-center rounded-full border-2 border-border", ls.watched && "border-primary bg-primary text-primary-foreground")}>
@@ -175,9 +176,9 @@ export function CurriculumManager({ course }: { course: Course }) {
 
                       <div className="flex flex-wrap items-center gap-1.5">
                         {ls.transcript
-                           ? <span className="inline-flex items-center gap-1 rounded bg-primary-soft px-2 py-0.5 text-[11px] font-semibold text-primary"><FileText className="size-3" /> Transcribed</span>
+                           ? <span className="inline-flex items-center gap-1 rounded bg-emerald-500/10 px-2 py-0.5 text-[11px] font-semibold text-emerald-600 dark:text-emerald-400"><FileText className="size-3" /> Transcribed</span>
                            : <span className="inline-flex items-center gap-1 rounded bg-secondary px-2 py-0.5 text-[11px] text-muted-foreground"><FileText className="size-3" /> No transcript</span>}
-                         {ls.subs.map((s) => <span key={s} className="rounded border border-border px-1.5 py-0.5 text-[10px] font-semibold text-muted-foreground">{s}</span>)}
+                         {ls.subs.map((s) => <span key={s} className="rounded bg-secondary px-1.5 py-0.5 font-mono text-[10px] font-medium text-muted-foreground">{s}</span>)}
                          {ls.dub && <span className="inline-flex items-center gap-1 rounded bg-sky/10 px-2 py-0.5 text-[11px] font-semibold text-sky"><Volume2 className="size-3" /> Dub: {ls.dub}</span>}
                       </div>
 
@@ -209,7 +210,7 @@ export function CurriculumManager({ course }: { course: Course }) {
         })}
       </section>
 
-       <div className="fixed bottom-6 left-1/2 z-40 flex -translate-x-1/2 items-center gap-2 rounded-lg border border-border bg-card/80 px-3 py-2.5 shadow-workspace backdrop-blur-md sm:gap-3 sm:px-5 sm:py-3">
+       <div className="fixed bottom-6 left-1/2 z-40 flex -translate-x-1/2 items-center gap-2 rounded-lg bg-card/85 px-3 py-2.5 shadow-workspace backdrop-blur-md sm:gap-3 sm:px-5 sm:py-3">
          <Button variant="ghost" size="sm" className="rounded-md" onClick={() => update((ms) => [...ms, { id: `m${Date.now()}`, title: "New module", open: true, lessons: [] }], true)}><Plus /> <span className="hidden sm:inline">Add module</span></Button>
          <Button variant="ghost" size="sm" className="rounded-md" disabled={!totals.missing || transcribing} onClick={() => { setTranscribing(true); setTimeout(() => { update((ms) => ms.map((x) => ({ ...x, lessons: x.lessons.map((ls) => ({ ...ls, transcript: true, subs: ls.subs.length ? ls.subs : ["EN"] })) }))); setTranscribing(false); }, 1500); }}>
           <Sparkles className={cn(transcribing && "animate-spin")} /> <span className="hidden sm:inline">{transcribing ? "Transcribing…" : `Transcribe missing${totals.missing ? ` (${totals.missing})` : ""}`}</span>
@@ -219,23 +220,29 @@ export function CurriculumManager({ course }: { course: Course }) {
         </Button>
       </div>
 
-      <Dialog open={editOpen} onOpenChange={setEditOpen}>
-         <DialogContent className="max-w-md rounded-xl sm:rounded-xl">
-          <form onSubmit={(e) => { e.preventDefault(); const f = new FormData(e.currentTarget); setInfo({ title: String(f.get("title") || info.title), instructor: String(f.get("instructor") || info.instructor), language: String(f.get("language") || info.language) }); setEditOpen(false); }}>
-            <DialogHeader><DialogTitle>Edit course info</DialogTitle><DialogDescription>Updates local course details.</DialogDescription></DialogHeader>
-            <div className="mt-5 space-y-4">
-               <div className="space-y-1.5"><Label htmlFor="title">Course title</Label><Input id="title" name="title" defaultValue={info.title} className="rounded-lg" /></div>
-               <div className="space-y-1.5"><Label htmlFor="instructor">Instructor</Label><Input id="instructor" name="instructor" defaultValue={info.instructor} className="rounded-lg" /></div>
-               <div className="space-y-1.5"><Label htmlFor="language">Primary language</Label><Input id="language" name="language" defaultValue={info.language} className="rounded-lg" /></div>
-            </div>
-             <DialogFooter className="mt-6"><Button type="button" variant="ghost" className="rounded-md" onClick={() => setEditOpen(false)}>Cancel</Button><Button type="submit" className="rounded-md">Save</Button></DialogFooter>
-          </form>
-        </DialogContent>
-      </Dialog>
+      <EditCourseModal
+        open={editOpen}
+        onOpenChange={setEditOpen}
+        course={{
+          ...course,
+          title: info.title,
+          instructor: info.instructor,
+          language: info.language,
+        }}
+        onSave={(updated) => {
+          setInfo({
+            title: updated.title,
+            instructor: updated.instructor,
+            language: updated.language,
+          });
+        }}
+      />
+
+      <SyncPreviewModal open={syncOpen} onOpenChange={setSyncOpen} course={course} />
     </div>
   );
 }
 
 function Stat({ icon, label }: { icon: React.ReactNode; label: string }) {
-  return <span className="inline-flex items-center gap-1.5 rounded border border-border bg-background px-3 py-1.5 text-xs font-semibold [&_svg]:size-3.5 [&_svg]:text-primary">{icon}{label}</span>;
+  return <span className="inline-flex items-center gap-1.5 rounded bg-secondary/70 px-3 py-1.5 text-xs font-semibold [&_svg]:size-3.5 [&_svg]:text-primary">{icon}{label}</span>;
 }

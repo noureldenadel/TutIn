@@ -18,7 +18,7 @@ import { initDatabase, closeDatabase, getDb, getDataDir, getAll, getOne, run, tr
 import { streamVideo, setAllowedRoots, addAllowedRoot } from './services/videoStreamer.js'
 import { repairPaths } from './services/pathRepair.js'
 import { parseMp4Duration } from './utils/mp4Parser.js'
-import coursesRouter from './routes/courses.js'
+import coursesRouter, { recalculateCourseProgress } from './routes/courses.js'
 import modulesRouter from './routes/modules.js'
 import videosRouter from './routes/videos.js'
 import notesRouter from './routes/notes.js'
@@ -180,9 +180,7 @@ async function start() {
             }
 
             for (const courseId of coursesToRecalc) {
-                const courseVideos = getAll('SELECT duration FROM videos WHERE course_id = ?', [courseId])
-                const totalDuration = courseVideos.reduce((sum, v) => sum + (v.duration || 0), 0)
-                run('UPDATE courses SET total_duration = ? WHERE id = ?', [totalDuration, courseId])
+                recalculateCourseProgress(courseId)
             }
 
             if (updated > 0) {

@@ -12,7 +12,7 @@ const __dirname = path.dirname(__filename)
  *   - NLLB-200 (local, offline) for all other languages including standard Arabic (ar)
  */
 
-const NLLB_LANG_MAP = {
+export const NLLB_LANG_MAP = {
     'en': 'eng_Latn', 'ar': 'arb_Arab', 'es': 'spa_Latn', 'fr': 'fra_Latn',
     'de': 'deu_Latn', 'zh': 'zho_Hans', 'ja': 'jpn_Jpan', 'ko': 'kor_Hang',
     'ru': 'rus_Cyrl', 'pt': 'por_Latn', 'it': 'ita_Latn', 'hi': 'hin_Deva',
@@ -22,6 +22,17 @@ const NLLB_LANG_MAP = {
     'fi': 'fin_Latn', 'el': 'ell_Grek', 'he': 'heb_Hebr',
     'ar-eg': 'arb_Arab', 'ar-sa': 'arb_Arab', 'zh-cn': 'zho_Hans', 'zh-tw': 'zho_Hant',
     'pt-br': 'por_Latn'
+}
+
+export const XTTS_SUPPORTED_LANGS = new Set([
+    'en', 'es', 'fr', 'de', 'ar', 'ar-eg', 'ar-sa',
+    'it', 'pt', 'pt-br', 'ru', 'zh', 'zh-cn', 'zh-tw',
+    'ja', 'ko', 'hi', 'tr', 'nl', 'pl', 'cs', 'hu'
+])
+
+export function isDubbingLanguageSupported(lang) {
+    if (!lang || typeof lang !== 'string') return false
+    return XTTS_SUPPORTED_LANGS.has(lang.trim().toLowerCase())
 }
 
 const DIALECT_PROMPTS = {
@@ -160,78 +171,110 @@ function getOpenRouterKey() {
     } catch { return null }
 }
 
+const ARABIC_DIACRITICS_REGEX = /[\u0617-\u061A\u064B-\u065F\u0670]/g
+
+function normalizeDualDialectResult(rawCaption, rawTts, dialect) {
+    const cleanCaption = String(rawCaption || '').replace(ARABIC_DIACRITICS_REGEX, '').trim()
+    const baseTts = String(rawTts || cleanCaption).trim()
+    const nudgedTts = applyDialectPhoneticNudges(baseTts, dialect)
+    return {
+        caption: cleanCaption,
+        tts: nudgedTts || cleanCaption
+    }
+}
+
 async function translateOneWithOpenRouter(text, dialect, apiKey) {
     if (isNonSpeechText(text)) {
         return { caption: '', tts: '' }
     }
-    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-            'Authorization': `Bearer ${apiKey}`,
-            'Content-Type': 'application/json',
-            'HTTP-Referer': 'https://tutin.app',
-            'X-Title': 'TutIn'
-        },
-        body: JSON.stringify({
-            model: 'openai/gpt-4o-mini',
-            messages: [
-                { role: 'system', content: DIALECT_PROMPTS[dialect] },
-                { role: 'user', content: `Translate the following text into the requested dual JSON format:\n\n${text}` }
-            ],
-            temperature: 0.25,
-            response_format: { type: 'json_object' },
-            max_tokens: 650
-        })
-    })
-    if (!response.ok) {
-        const err = await response.text()
-        throw new Error(`OpenRouter API error ${response.status}: ${err}`)
+
+    const maxAttempts = 3
+    let lastError = null
+    let content = ''
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        try {
+            const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${apiKey}`,
+                    'Content-Type': 'application/json',
+                    'HTTP-Referer': 'https://tutin.app',
+                    'X-Title': 'TutIn'
+                },
+                body: JSON.stringify({
+                    model: 'openai/gpt-4o-mini',
+                    messages: [
+                        { role: 'system', content: DIALECT_PROMPTS[dialect] },
+                        { role: 'user', content: `Translate the following text into the requested dual JSON format:\n\n${text}` }
+                    ],
+                    temperature: 0.25,
+                    response_format: { type: 'json_object' },
+                    max_tokens: 650
+                })
+            })
+
+            if (!response.ok) {
+                const errText = await response.text()
+                const isRetryable = response.status === 429 || response.status >= 500
+                lastError = new Error(`OpenRouter API error ${response.status}: ${errText}`)
+                if (isRetryable && attempt < maxAttempts) {
+                    await new Promise(r => setTimeout(r, 600 * Math.pow(2, attempt - 1)))
+                    continue
+                }
+                throw lastError
+            }
+
+            const data = await response.json()
+            content = data.choices?.[0]?.message?.content?.trim() || ''
+            break
+        } catch (err) {
+            lastError = err
+            if (attempt < maxAttempts) {
+                await new Promise(r => setTimeout(r, 600 * Math.pow(2, attempt - 1)))
+                continue
+            }
+            throw lastError
+        }
     }
-    const data = await response.json()
-    const content = data.choices?.[0]?.message?.content?.trim() || ''
+
+    if (!content) {
+        return { caption: '', tts: '' }
+    }
 
     // Parse JSON dual output
     try {
         const parsed = JSON.parse(content)
-        if (parsed.caption && parsed.tts) {
-            return {
-                caption: String(parsed.caption).trim(),
-                tts: String(parsed.tts).trim()
-            }
-        }
-        if (parsed.caption) {
-            const cap = String(parsed.caption).trim()
-            const tts = parsed.tts ? String(parsed.tts).trim() : applyDialectPhoneticNudges(cap, dialect)
-            return {
-                caption: cap,
-                tts: tts || cap
-            }
+        if (parsed && typeof parsed === 'object' && (parsed.caption !== undefined || parsed.tts !== undefined)) {
+            return normalizeDualDialectResult(parsed.caption ?? parsed.tts, parsed.tts ?? parsed.caption, dialect)
         }
     } catch {
-        // Fallback: search for json object in case of markdown wrapping
+        // Fallback 1: search for JSON object in case of markdown wrapping
         const match = content.match(/\{[\s\S]*\}/)
         if (match) {
             try {
                 const parsed = JSON.parse(match[0])
-                if (parsed.caption) {
-                    const cap = String(parsed.caption).trim()
-                    const tts = parsed.tts ? String(parsed.tts).trim() : applyDialectPhoneticNudges(cap, dialect)
-                    return {
-                        caption: cap,
-                        tts: tts || cap
-                    }
+                if (parsed && typeof parsed === 'object' && (parsed.caption !== undefined || parsed.tts !== undefined)) {
+                    return normalizeDualDialectResult(parsed.caption ?? parsed.tts, parsed.tts ?? parsed.caption, dialect)
                 }
             } catch {}
         }
+        // Fallback 2: extract "caption" / "tts" fields from truncated/malformed JSON via regex
+        const capField = content.match(/"caption"\s*:\s*"((?:[^"\\]|\\.)*)"/)
+        const ttsField = content.match(/"tts"\s*:\s*"((?:[^"\\]|\\.)*)"/)
+        if (capField || ttsField) {
+            const capRaw = (capField?.[1] || ttsField?.[1] || '').replace(/\\"/g, '"').replace(/\\n/g, ' ')
+            const ttsRaw = (ttsField?.[1] || capRaw).replace(/\\"/g, '"').replace(/\\n/g, ' ')
+            return normalizeDualDialectResult(capRaw, ttsRaw, dialect)
+        }
     }
 
-    // Fallback if plain text returned: strip diacritics for caption, apply dialect nudges for tts
-    const cleanCaption = content.replace(/[\u0617-\u061A\u064B-\u0652]/g, '').trim()
-    const ttsText = applyDialectPhoneticNudges(content || text, dialect)
-    return {
-        caption: cleanCaption || text,
-        tts: ttsText || text
-    }
+    // Fallback 3: strip any accidental JSON braces/keys before normalizing
+    const strippedPlain = content
+        .replace(/^\s*\{\s*"(?:caption|tts)"\s*:\s*"?/i, '')
+        .replace(/"?\s*\}\s*$/, '')
+        .trim()
+    return normalizeDualDialectResult(strippedPlain, strippedPlain, dialect)
 }
 
 /**

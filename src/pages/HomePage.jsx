@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import { Grid, List, SortAsc, ChevronDown, FolderOpen, Search } from 'lucide-react'
-import { getAllCourses, addCourse, addModule, addVideo, setInstructorAvatar, recalculateAllCoursesProgress } from '../utils/db'
+import { getAllCourses, addCourse, addModule, addVideo, setInstructorAvatar, recalculateCourseProgress } from '../utils/db'
 import { useSettings } from '../contexts/SettingsContext'
 import { useSearch } from '../contexts/SearchContext'
 import { useNotification } from '../contexts/NotificationContext'
@@ -220,6 +220,51 @@ function HomePage() {
     // Course sync handlers
     async function handleSyncCourse(course) {
         try {
+            const uiBefore = {
+                completedVideos: course.completedVideos ?? 0,
+                totalVideos: course.totalVideos ?? 0,
+                totalDuration: course.totalDuration ?? 0,
+                completionPercentage: course.completionPercentage ?? 0
+            }
+
+            // Always recheck and recalculate DB progress immediately on Sync
+            let progressRecalc = null
+            try {
+                const recalcRes = await recalculateCourseProgress(course.id, settings.progressCalculationMode)
+                if (recalcRes?.fallbackUsed) {
+                    showNotification('Restart companion server to use updated progress sync.', 'warning', 7000)
+                }
+
+                const serverBefore = recalcRes?.previous ?? uiBefore
+                const afterCourse = recalcRes?.course
+                const after = {
+                    completedVideos: afterCourse?.completedVideos ?? recalcRes?.completedVideos ?? uiBefore.completedVideos,
+                    totalVideos: afterCourse?.totalVideos ?? recalcRes?.totalVideos ?? uiBefore.totalVideos,
+                    totalDuration: afterCourse?.totalDuration ?? recalcRes?.totalDuration ?? uiBefore.totalDuration,
+                    completionPercentage: afterCourse?.completionPercentage ?? recalcRes?.completionPercentage ?? uiBefore.completionPercentage
+                }
+
+                const serverChanged =
+                    serverBefore.completedVideos !== after.completedVideos ||
+                    serverBefore.totalVideos !== after.totalVideos ||
+                    Math.abs((serverBefore.completionPercentage || 0) - (after.completionPercentage || 0)) >= 0.05
+                const uiChanged =
+                    uiBefore.completedVideos !== after.completedVideos ||
+                    uiBefore.totalVideos !== after.totalVideos ||
+                    Math.abs((uiBefore.completionPercentage || 0) - (after.completionPercentage || 0)) >= 0.05
+
+                progressRecalc = {
+                    before: serverChanged ? serverBefore : (uiChanged ? uiBefore : serverBefore),
+                    after,
+                    changed: serverChanged || uiChanged,
+                    mode: settings.progressCalculationMode || 'videos'
+                }
+
+                await loadCourses()
+            } catch (recalcErr) {
+                console.warn('Progress recalculation notice:', recalcErr)
+            }
+
             const folderPath = course.folderPath || course.folder_path
             let scannedData = null
 
@@ -245,11 +290,20 @@ function HomePage() {
                 }
             }
 
-            if (!scannedData) return
+            if (!scannedData) {
+                if (progressRecalc?.changed) {
+                    const { completedVideos, totalVideos, completionPercentage } = progressRecalc.after
+                    showNotification(
+                        `Progress recalculated: ${completedVideos}/${totalVideos} (${Math.round(completionPercentage || 0)}%)`,
+                        'success'
+                    )
+                }
+                return
+            }
 
             // 2. Generate and show preview
             const preview = await syncCoursePreview(course.id, scannedData)
-            setSyncPreview(preview)
+            setSyncPreview({ ...preview, progressRecalc })
         } catch (err) {
             console.error('Sync failed:', err)
             showNotification('Sync failed: ' + err.message, 'error')
@@ -261,10 +315,21 @@ function HomePage() {
 
         try {
             setIsApplyingSync(true)
-            const result = await applySyncChanges(syncPreview.course.id, syncPreview)
+            const result = await applySyncChanges(
+                syncPreview.course.id,
+                syncPreview,
+                settings.progressCalculationMode
+            )
             console.log('Sync applied:', result)
 
-            await recalculateAllCoursesProgress(settings.progressCalculationMode)
+            const finalCourse = result?.progress?.course
+            if (finalCourse) {
+                showNotification(
+                    `Synced: ${finalCourse.completedVideos || 0}/${finalCourse.totalVideos || 0} (${Math.round(finalCourse.completionPercentage || 0)}%)`,
+                    'success'
+                )
+            }
+
             setSyncPreview(null)
             loadCourses() // Refresh the UI
         } catch (err) {

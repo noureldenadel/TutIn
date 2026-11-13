@@ -21,7 +21,7 @@ export const SAMPLE_COVER_DETAILS = [
 ] as const;
 
 export function getCourseCoverUrl(
-  course: Pick<Course, "id"> & { thumbnailUrl?: string },
+  course: Pick<Course, "id"> & { thumbnailUrl?: string | undefined },
   coverMode: ThumbnailCoverMode = "generated"
 ): string | undefined {
   if (coverMode === "generated") {
@@ -350,7 +350,11 @@ const GENS = [
   (seed: number, s: ThumbnailSettings, p: PaletteResult) => rowsGen(2, seed, s, p),
 ];
 
-export function getCourseSeed(course: { id: number | string; title?: string; thumbnailSeed?: number }): number {
+export function getCourseSeed(course: {
+  id: number | string;
+  title?: string | undefined;
+  thumbnailSeed?: number | undefined;
+}): number {
   if (course.thumbnailSeed !== undefined) return course.thumbnailSeed;
   if (typeof course.id === "number") {
     return (Math.abs(Math.imul(course.id, 48213) ^ 0x5a17) % 90000) + 10000;

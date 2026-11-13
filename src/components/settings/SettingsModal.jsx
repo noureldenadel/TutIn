@@ -255,7 +255,7 @@ function SettingsModal({ isOpen, onClose }) {
                                             <div className="space-y-2">
                                                 {[
                                                     { value: 'videos', label: 'By Videos Completed', description: 'Count of completed videos ÷ total videos' },
-                                                    { value: 'duration', label: 'By Time Watched', description: 'Total time watched ÷ total course duration' }
+                                                    { value: 'duration', label: 'By Completed Duration', description: 'Duration of completed videos ÷ total course duration' }
                                                 ].map(option => (
                                                     <button
                                                         key={option.value}

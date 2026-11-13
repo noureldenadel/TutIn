@@ -4,7 +4,7 @@ import path from 'path'
 import multer from 'multer'
 import { getOne, run, getAll, getDataDir } from '../database.js'
 import { parseSubtitleFile, chunksToSRT, chunksToVTT, extractLangCode, detectFormat } from '../utils/captionParser.js'
-import { saveCaptionFile, loadCaptionChunks, listVideoLanguages, getTtsCompanionFilePath } from '../utils/courseAssets.js'
+import { saveCaptionFile, loadCaptionChunks, listVideoLanguages, getTtsCompanionFilePath, deleteTtsCompanionFile } from '../utils/courseAssets.js'
 import { translateChunks, isNonSpeechText } from '../utils/aiTranslation.js'
 import { needsPunctuationRestoration, restorePunctuation } from '../utils/punctuationService.js'
 
@@ -209,6 +209,7 @@ router.post('/:videoId/upload', upload.any(), async (req, res) => {
 
         // Save to .tutin/captions/ without -uploaded (e.g. 01 - Intro.es.vtt)
         const filePath = saveCaptionFile(videoMeta, reqLang, chunks, 'uploaded')
+        deleteTtsCompanionFile(req.params.videoId, reqLang, videoMeta)
 
         // Update DB
         const currentSources = videoMeta.subtitleSources.filter(s => !(s.lang === reqLang && s.origin === 'uploaded'))
@@ -537,6 +538,7 @@ router.put('/:videoId', (req, res) => {
         // AI generation is always saved with origin 'generated' and explicit language code
         // e.g. 01 - Intro-generated.en.vtt
         const filePath = saveCaptionFile(videoMeta, genLang, chunksToSave, 'generated')
+        deleteTtsCompanionFile(req.params.videoId, genLang, videoMeta)
 
         const currentSources = videoMeta.subtitleSources.filter(s => !(s.lang === genLang && s.origin === 'generated'))
         const hasMaster = currentSources.some(s => s.lang === genLang && s.is_master)

@@ -321,10 +321,15 @@ async function scanDirectoryRecursive(dirPath, onProgress, progressState, course
             try {
                 return fs.readdirSync(dir)
                     .filter(f => f.startsWith(videoBase) && f.endsWith('.mp3'))
-                    .map(f => ({
-                        filePath: path.join(dir, f),
-                        lang: extractLangCode(f.replace('.mp3', ''), videoBase) || 'unknown'
-                    }))
+                    .map(f => {
+                        const lang = extractLangCode(f.replace('.mp3', ''), videoBase) || 'unknown'
+                        return {
+                            filePath: path.join(dir, f),
+                            lang,
+                            language: lang,
+                            status: 'ready'
+                        }
+                    })
             } catch { return [] }
         }
         const availableDubs = [...scanDubsFrom(vaultDubsDir), ...scanDubsFrom(legacyDubsDir)]
@@ -485,7 +490,7 @@ export async function scanCourseFolder(folderPath, onProgress, autoDetectThumbna
         let moduleOrder = 0
         for (const folder of subfolders) {
             const folderFullPath = path.join(folderPath, folder.name)
-            const moduleData = await scanDirectoryRecursive(folderFullPath, onProgress, progressState)
+            const moduleData = await scanDirectoryRecursive(folderFullPath, onProgress, progressState, folderPath, folder.name)
             if (moduleData.videos.length > 0 || moduleData.subModules.length > 0) {
                 moduleData.order = moduleOrder++
                 modules.push(moduleData)

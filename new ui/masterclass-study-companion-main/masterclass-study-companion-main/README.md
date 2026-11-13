@@ -48,6 +48,17 @@ Continue developing this project in the [Lovable editor](https://lovable.dev/pro
 - **Stay in sync**: every change made in Lovable is committed straight to this repository.
 - **Full ownership**: this code is yours. Push to `main` on GitHub and your changes sync back into Lovable, ready for your next prompt.
 
+## Workspace Routes & Features
+
+- `/` — Course Library grid with Add/Edit Course modals, Folder & Vault Sync preview, and quick resume cards
+- `/learn/$courseId` — Course Player with multi-module playlist, live AI transcript, and rich timestamped Notes tab (IndexedDB `media://` image storage, inline cropper, smart pause, and autocomplete)
+- `/canvas/$courseId` — Dedicated Course Notes Whiteboard Canvas with lesson Video Artboards, chronological arrows, two-way synced note editing, Canvas-only notes/images, deep-links back to lesson timestamps, and `perfect-freehand` drawing
+- `/roadmap` — Multi-course learning pathway graph
+- `/instructors` — Instructor directory and course views with inline avatar customization
+- `/history` & `/analytics` — Chronological watch log and study consistency telemetry
+- `/manage/$courseId` — Course curriculum manager & vault rescan trigger
+- `/admin` — Generative artwork and instructor avatar theme studio
+
 ## Development
 
 Prefer working locally? You need Node.js and npm — [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating).

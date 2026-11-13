@@ -17,7 +17,7 @@ const defaultSettings = {
     captionBackground: true,
     captionLanguage: 'source',
     autoMarkCompleteAt: 95, // percentage
-    progressCalculationMode: 'videos', // 'videos' = count completed videos, 'duration' = total time watched
+    progressCalculationMode: 'videos', // 'videos' = count completed videos, 'duration' = duration of completed videos
     keyboardShortcuts: true,
 
     // Goals
@@ -116,6 +116,8 @@ export function SettingsProvider({ children }) {
 
     // Track whether the initial server load has completed
     const isInitializedRef = useRef(false)
+    const settingsRef = useRef(settings)
+    settingsRef.current = settings
 
     // Save settings to localStorage and server
     useEffect(() => {
@@ -139,6 +141,11 @@ export function SettingsProvider({ children }) {
         api.get('/api/settings').then(serverSettings => {
             if (serverSettings && Object.keys(serverSettings).length > 0) {
                 setSettings(prev => ({ ...prev, ...serverSettings }))
+            } else {
+                // Seed an empty server DB with current client preferences (e.g. progressCalculationMode)
+                api.put('/api/settings', settingsRef.current).catch(err => {
+                    console.warn('Initial settings push to server delayed:', err.message)
+                })
             }
         }).catch(err => {
             console.warn('Initial settings load from server failed:', err.message)

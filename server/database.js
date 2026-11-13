@@ -20,6 +20,10 @@ let saveTimer = null
  * Get the application data directory
  */
 export function getDataDir() {
+    if (process.env.TUTIN_DATA_DIR) {
+        return path.resolve(process.env.TUTIN_DATA_DIR)
+    }
+
     const platform = os.platform()
     let baseDir
 
@@ -68,6 +72,8 @@ function ensureDirectories() {
 async function writeToDiskAsync() {
     if (!db || !dbPath) return
     const data = db.export()
+    // sql.js resets connection PRAGMAs on db.export(); re-enable cascade deletes
+    db.run('PRAGMA foreign_keys = ON')
     const buffer = Buffer.from(data)
     await fs.promises.writeFile(dbPath, buffer)
 }
@@ -78,6 +84,8 @@ async function writeToDiskAsync() {
 function writeToDiskSync() {
     if (!db || !dbPath) return
     const data = db.export()
+    // sql.js resets connection PRAGMAs on db.export(); re-enable cascade deletes
+    db.run('PRAGMA foreign_keys = ON')
     const buffer = Buffer.from(data)
     fs.writeFileSync(dbPath, buffer)
 }

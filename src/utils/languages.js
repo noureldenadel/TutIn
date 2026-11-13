@@ -4,36 +4,44 @@
  */
 
 export const SUPPORTED_LANGUAGES = [
-    { code: 'en', name: 'English', nativeName: 'English' },
-    { code: 'es', name: 'Spanish', nativeName: 'Español' },
-    { code: 'fr', name: 'French', nativeName: 'Français' },
-    { code: 'de', name: 'German', nativeName: 'Deutsch' },
-    { code: 'ar', name: 'Arabic (MSA)', nativeName: 'العربية' },
-    { code: 'ar-eg', name: 'Arabic — Egyptian', nativeName: 'عامية مصرية', requiresOpenRouter: true },
-    { code: 'ar-sa', name: 'Arabic — Gulf / Saudi', nativeName: 'عربي خليجي', requiresOpenRouter: true },
-    { code: 'it', name: 'Italian', nativeName: 'Italiano' },
-    { code: 'pt', name: 'Portuguese', nativeName: 'Português' },
-    { code: 'ru', name: 'Russian', nativeName: 'Русский' },
-    { code: 'zh', name: 'Chinese', nativeName: '中文' },
-    { code: 'ja', name: 'Japanese', nativeName: '日本語' },
-    { code: 'ko', name: 'Korean', nativeName: '한국어' },
-    { code: 'hi', name: 'Hindi', nativeName: 'हिन्दी' },
-    { code: 'tr', name: 'Turkish', nativeName: 'Türkçe' },
-    { code: 'nl', name: 'Dutch', nativeName: 'Nederlands' },
-    { code: 'pl', name: 'Polish', nativeName: 'Polski' },
-    { code: 'vi', name: 'Vietnamese', nativeName: 'Tiếng Việt' },
-    { code: 'th', name: 'Thai', nativeName: 'ไทย' },
-    { code: 'cs', name: 'Czech', nativeName: 'Čeština' },
-    { code: 'hu', name: 'Hungarian', nativeName: 'Magyar' },
-    { code: 'uk', name: 'Ukrainian', nativeName: 'Українська' },
-    { code: 'id', name: 'Indonesian', nativeName: 'Bahasa Indonesia' },
-    { code: 'sv', name: 'Swedish', nativeName: 'Svenska' },
-    { code: 'da', name: 'Danish', nativeName: 'Dansk' },
-    { code: 'no', name: 'Norwegian', nativeName: 'Norsk' },
-    { code: 'fi', name: 'Finnish', nativeName: 'Suomi' },
-    { code: 'el', name: 'Greek', nativeName: 'Ελληνικά' },
-    { code: 'he', name: 'Hebrew', nativeName: 'עברית' }
+    { code: 'en', name: 'English', nativeName: 'English', dubbingSupported: true },
+    { code: 'es', name: 'Spanish', nativeName: 'Español', dubbingSupported: true },
+    { code: 'fr', name: 'French', nativeName: 'Français', dubbingSupported: true },
+    { code: 'de', name: 'German', nativeName: 'Deutsch', dubbingSupported: true },
+    { code: 'ar', name: 'Arabic (MSA)', nativeName: 'العربية', dubbingSupported: true },
+    { code: 'ar-eg', name: 'Arabic — Egyptian', nativeName: 'عامية مصرية', requiresOpenRouter: true, dubbingSupported: true },
+    { code: 'ar-sa', name: 'Arabic — Gulf / Saudi', nativeName: 'عربي خليجي', requiresOpenRouter: true, dubbingSupported: true },
+    { code: 'it', name: 'Italian', nativeName: 'Italiano', dubbingSupported: true },
+    { code: 'pt', name: 'Portuguese', nativeName: 'Português', dubbingSupported: true },
+    { code: 'ru', name: 'Russian', nativeName: 'Русский', dubbingSupported: true },
+    { code: 'zh', name: 'Chinese', nativeName: '中文', dubbingSupported: true },
+    { code: 'ja', name: 'Japanese', nativeName: '日本語', dubbingSupported: true },
+    { code: 'ko', name: 'Korean', nativeName: '한국어', dubbingSupported: true },
+    { code: 'hi', name: 'Hindi', nativeName: 'हिन्दी', dubbingSupported: true },
+    { code: 'tr', name: 'Turkish', nativeName: 'Türkçe', dubbingSupported: true },
+    { code: 'nl', name: 'Dutch', nativeName: 'Nederlands', dubbingSupported: true },
+    { code: 'pl', name: 'Polish', nativeName: 'Polski', dubbingSupported: true },
+    { code: 'cs', name: 'Czech', nativeName: 'Čeština', dubbingSupported: true },
+    { code: 'hu', name: 'Hungarian', nativeName: 'Magyar', dubbingSupported: true },
+    { code: 'vi', name: 'Vietnamese', nativeName: 'Tiếng Việt', dubbingSupported: false },
+    { code: 'th', name: 'Thai', nativeName: 'ไทย', dubbingSupported: false },
+    { code: 'uk', name: 'Ukrainian', nativeName: 'Українська', dubbingSupported: false },
+    { code: 'id', name: 'Indonesian', nativeName: 'Bahasa Indonesia', dubbingSupported: false },
+    { code: 'sv', name: 'Swedish', nativeName: 'Svenska', dubbingSupported: false },
+    { code: 'da', name: 'Danish', nativeName: 'Dansk', dubbingSupported: false },
+    { code: 'no', name: 'Norwegian', nativeName: 'Norsk', dubbingSupported: false },
+    { code: 'fi', name: 'Finnish', nativeName: 'Suomi', dubbingSupported: false },
+    { code: 'el', name: 'Greek', nativeName: 'Ελληνικά', dubbingSupported: false },
+    { code: 'he', name: 'Hebrew', nativeName: 'עברית', dubbingSupported: false }
 ]
+
+export const DUBBING_SUPPORTED_LANGUAGES = SUPPORTED_LANGUAGES.filter(l => l.dubbingSupported)
+
+export function isDubbingSupported(code) {
+    if (!code) return false
+    const clean = code.toLowerCase().trim()
+    return DUBBING_SUPPORTED_LANGUAGES.some(l => l.code === clean)
+}
 
 export const LANGUAGE_LABEL_MAP = Object.fromEntries(
     SUPPORTED_LANGUAGES.map(l => [l.code, l.nativeName])

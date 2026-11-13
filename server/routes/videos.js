@@ -166,6 +166,7 @@ router.post('/', (req, res) => {
             JSON.stringify(data.subtitleSources || []), JSON.stringify(data.dubbedTracks || []),
             data.hasTranscript ? 1 : 0, data.hasSummary ? 1 : 0
         ])
+        recalculateCourseProgress(data.courseId)
         res.status(201).json({ success: true, id: data.id })
     } catch (err) {
         res.status(500).json({ error: err.message })
@@ -258,6 +259,10 @@ router.put('/:id', (req, res) => {
         params.push(id)
         run(`UPDATE videos SET ${updateFields.join(', ')} WHERE id = ?`, params)
 
+        if (data.duration !== undefined || data.isCompleted !== undefined) {
+            recalculateCourseProgress(video.course_id)
+        }
+
         res.json({ success: true })
     } catch (err) {
         res.status(500).json({ error: err.message })
@@ -268,12 +273,14 @@ router.put('/:id', (req, res) => {
 // Optimized: Update video progress without triggering full course recalculation/DB flush on every 5s tick
 router.put('/:id/progress', (req, res) => {
     const { watchProgress, lastWatchedPosition } = req.body
+    const safeProgress = Math.min(1, Math.max(0, Number(watchProgress) || 0))
+    const safePosition = Math.max(0, Number(lastWatchedPosition) || 0)
     try {
         run(`
             UPDATE videos 
             SET watch_progress = ?, last_watched_position = ?, last_watched_at = ?
             WHERE id = ?
-        `, [watchProgress || 0, lastWatchedPosition || 0, new Date().toISOString(), req.params.id])
+        `, [safeProgress, safePosition, new Date().toISOString(), req.params.id])
         
         res.json({ success: true })
     } catch (err) {
@@ -283,7 +290,7 @@ router.put('/:id/progress', (req, res) => {
 
 // POST /api/videos/:id/complete
 router.post('/:id/complete', (req, res) => {
-    const { isCompleted } = req.body
+    const { isCompleted, mode } = req.body
     try {
         const video = getOne('SELECT course_id FROM videos WHERE id = ?', [req.params.id])
         if (!video) return res.status(404).json({ error: 'Video not found' })
@@ -296,9 +303,9 @@ router.post('/:id/complete', (req, res) => {
         `, [isCompleted ? 1 : 0, completedAt, req.params.id])
 
         // Recalculate course progress using the unified function
-        const { completedVideos, totalVideos, completionPercentage } = recalculateCourseProgress(video.course_id)
+        const { completedVideos, totalVideos, totalDuration, completionPercentage } = recalculateCourseProgress(video.course_id, mode || null)
 
-        res.json({ success: true, completedVideos, totalVideos, completionPercentage })
+        res.json({ success: true, completedVideos, totalVideos, totalDuration, completionPercentage })
     } catch (err) {
         res.status(500).json({ error: err.message })
     }
@@ -318,7 +325,11 @@ router.post('/:id/favorite', (req, res) => {
 // DELETE /api/videos/:id
 router.delete('/:id', (req, res) => {
     try {
+        const video = getOne('SELECT course_id FROM videos WHERE id = ?', [req.params.id])
         run('DELETE FROM videos WHERE id = ?', [req.params.id])
+        if (video?.course_id) {
+            recalculateCourseProgress(video.course_id)
+        }
         res.json({ success: true })
     } catch (err) {
         res.status(500).json({ error: err.message })

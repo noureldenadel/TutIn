@@ -102,6 +102,9 @@ export function JobsProvider({ children }) {
             if (job?.abortController) {
                 job.abortController.abort();
             }
+            if (job?.type === 'dub') {
+                fetch(`${SERVER_URL}/api/dub/video/${videoId}/cancel`, { method: 'POST' }).catch(() => {});
+            }
             const next = { ...prev };
             delete next[videoId];
             return next;
@@ -145,7 +148,7 @@ export function JobsProvider({ children }) {
                         if (langRes.ok) {
                             const data = await langRes.json();
                             const sources = data.subtitleSources || [];
-                            hasTargetCaptions = data.existingLangs?.includes(targetLang) || sources.some(s => s.lang === targetLang);
+                            hasTargetCaptions = data.existingLangs?.includes(targetLang) || data.translatedLangs?.includes(targetLang) || sources.some(s => s.lang === targetLang);
                             hasSourceCaptions = data.sourceExists || data.existingLangs?.includes(sourceLang) || sources.some(s => s.lang === 'source' || s.lang === sourceLang);
                         }
                     } catch (e) {
@@ -208,14 +211,20 @@ export function JobsProvider({ children }) {
                                     if (line.startsWith('data: ')) {
                                         try {
                                             const d = JSON.parse(line.substring(6));
-                                            if (d.progress) {
-                                                const pct = Math.round(42 + d.progress * 0.15);
+                                            if (d.error) throw new Error(d.error);
+                                            const rawPct = d.percent ?? d.progress;
+                                            if (rawPct !== undefined) {
+                                                const pct = Math.round(42 + rawPct * 0.15);
                                                 setActiveJobs(prev => ({
                                                     ...prev,
                                                     [video.id]: { ...prev[video.id], progress: Math.min(pct, 55), message: d.message || 'Translating subtitles...' }
                                                 }));
                                             }
-                                        } catch {}
+                                        } catch (transStreamErr) {
+                                            if (transStreamErr?.message && !transStreamErr.message.includes('JSON')) {
+                                                throw transStreamErr;
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -255,7 +264,11 @@ export function JobsProvider({ children }) {
                     const res = await fetch(`${SERVER_URL}/api/dub/video/${video.id}`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ targetLanguage: targetLang }),
+                        body: JSON.stringify({
+                            targetLanguage: targetLang,
+                            sourceLanguage: sourceLang,
+                            device: settings?.dubbingDevice || settings?.aiDevice || 'auto'
+                        }),
                         signal: controller.signal
                     });
 
@@ -429,16 +442,17 @@ export function JobsProvider({ children }) {
                                             setTimeout(() => {
                                                 removeJob(video.id);
                                             }, 3000);
-                                        } else if (data.progress) {
+                                        } else if (data.percent !== undefined || data.progress !== undefined) {
+                                            const rawPct = data.percent ?? data.progress;
                                             const basePct = needInitialTranscribe ? 55 : 10;
                                             const scale = needInitialTranscribe ? 0.42 : 0.85;
-                                            const pct = Math.round(basePct + data.progress * scale);
+                                            const pct = Math.round(basePct + rawPct * scale);
                                             setActiveJobs(prev => ({
                                                 ...prev,
                                                 [video.id]: {
                                                     ...prev[video.id],
                                                     progress: Math.min(pct, 98),
-                                                    message: `Translating: chunk ${data.chunkIndex + 1 || 1}/${data.totalChunks || 1}`
+                                                    message: data.message || `Translating: chunk ${(data.chunkIndex ?? 0) + 1}/${data.totalChunks || 1}`
                                                 }
                                             }));
                                         }

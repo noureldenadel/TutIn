@@ -4,7 +4,7 @@ import { useSettings } from '../../contexts/SettingsContext'
 import { SERVER_URL } from '../../utils/api'
 import { transcribeVideoCaptions, isAIAvailable, formatFriendlyDuration } from '../../utils/aiSummarization'
 import { verifyPermission } from '../../utils/fileSystem'
-import { SUPPORTED_LANGUAGES, getLanguageInfo } from '../../utils/languages'
+import { DUBBING_SUPPORTED_LANGUAGES, getLanguageInfo } from '../../utils/languages'
 
 export default function DubModal({ isOpen, onClose, video, course, sourceLanguage: propSourceLang, onSuccess }) {
     const { settings } = useSettings()
@@ -21,8 +21,8 @@ export default function DubModal({ isOpen, onClose, video, course, sourceLanguag
     const sourceLang = effectiveTranscriptLang
     const sourceInfo = getLanguageInfo(sourceLang)
 
-    // Filter available target languages (exclude transcript language, NOT spoken audio)
-    const availableTargets = SUPPORTED_LANGUAGES.filter(l => l.code !== effectiveTranscriptLang)
+    // Filter available target languages (only XTTS-supported languages, excluding transcript language)
+    const availableTargets = DUBBING_SUPPORTED_LANGUAGES.filter(l => l.code !== effectiveTranscriptLang)
     const defaultTarget = effectiveTranscriptLang === 'ar' ? (spokenAudioLang !== 'es' ? 'es' : 'en') : 'ar'
 
     const [targetLang, setTargetLang] = useState(defaultTarget)
@@ -370,7 +370,7 @@ export default function DubModal({ isOpen, onClose, video, course, sourceLanguag
 
     if (!isOpen) return null
 
-    const langName = SUPPORTED_LANGUAGES.find(l => l.code === targetLang)?.name || targetLang
+    const langName = getLanguageInfo(targetLang)?.name || targetLang
     const isTargetAlreadyDubbed = dubbedLangs.includes(targetLang)
     const hasTargetCaptions = (targetLang === 'source' && (existingLangs.sourceExists || existingLangs.existingLangs.length > 0)) ||
         existingLangs.translatedLangs.includes(targetLang) ||

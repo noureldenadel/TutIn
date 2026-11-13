@@ -1,23 +1,21 @@
-import { useEffect, useMemo, useState } from "react";
-import { ArrowLeft, Search } from "lucide-react";
+import { useMemo, useState } from "react";
+import { ArrowLeft, Camera, Search, X } from "lucide-react";
+import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { InstructorAvatar } from "@/components/instructor-avatar";
 import { CourseCard } from "@/components/app-shell";
 import { courses } from "@/lib/courses";
-import { cn } from "@/lib/utils";
 
 export type Instructor = {
   id: string;
   name: string;
-  category: string;
+  category?: string;
   courses: number;
   lessons: number;
   hours: string;
   topics: string[];
 };
-
-export const categories = ["All", "AI & Machine Learning", "Web Development", "System Design", "Cloud"] as const;
 
 export const instructors: Instructor[] = [
   {
@@ -134,7 +132,79 @@ export function InstructorsPage({
   };
 
   const [query, setQuery] = useState("");
-  const [category, setCategory] = useState<(typeof categories)[number]>("All");
+
+  const [avatarMap, setAvatarMap] = useState<Record<string, string>>(() => {
+    if (typeof window === "undefined") return {};
+    try {
+      const raw = localStorage.getItem("tutin_instructor_avatars");
+      return raw ? JSON.parse(raw) : {};
+    } catch {
+      return {};
+    }
+  });
+
+  const normalizeKey = (id: string, name: string) => {
+    return id || name.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+  };
+
+  const saveAvatar = (id: string, name: string, dataUrl: string) => {
+    const key = normalizeKey(id, name);
+    const updated = { ...avatarMap, [key]: dataUrl, [name]: dataUrl };
+    setAvatarMap(updated);
+    try {
+      localStorage.setItem("tutin_instructor_avatars", JSON.stringify(updated));
+      window.dispatchEvent(
+        new CustomEvent("tutin:instructor_avatar_changed", { detail: { id: key, dataUrl } })
+      );
+    } catch {
+      // ignore
+    }
+  };
+
+  const removeAvatar = (id: string, name: string) => {
+    const key = normalizeKey(id, name);
+    const updated = { ...avatarMap };
+    delete updated[key];
+    delete updated[name];
+    setAvatarMap(updated);
+    try {
+      localStorage.setItem("tutin_instructor_avatars", JSON.stringify(updated));
+      window.dispatchEvent(
+        new CustomEvent("tutin:instructor_avatar_changed", { detail: { id: key, dataUrl: null } })
+      );
+    } catch {
+      // ignore
+    }
+    toast.success("Avatar removed");
+  };
+
+  const hasCustomAvatar = (id: string, name: string) => {
+    const key = normalizeKey(id, name);
+    return Boolean(avatarMap[key] || avatarMap[name]);
+  };
+
+  const handleFileUpload = (id: string, name: string, e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith("image/")) {
+      toast.error("Please select an image file.");
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      toast.error("Image must be smaller than 5MB.");
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const dataUrl = event.target?.result as string;
+      if (dataUrl) {
+        saveAvatar(id, name, dataUrl);
+        toast.success("Avatar updated");
+      }
+    };
+    reader.readAsDataURL(file);
+    e.target.value = "";
+  };
 
   const selectedInstructor = useMemo(() => {
     if (!activeId) return null;
@@ -152,13 +222,12 @@ export function InstructorsPage({
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
+    if (!q) return instructors;
     return instructors.filter((instructor) => {
-      if (category !== "All" && instructor.category !== category) return false;
-      if (!q) return true;
-      const haystack = [instructor.name, instructor.category, ...instructor.topics].join(" ").toLowerCase();
+      const haystack = [instructor.name, ...instructor.topics].join(" ").toLowerCase();
       return haystack.includes(q);
     });
-  }, [query, category]);
+  }, [query]);
 
   // Selected Instructor View
   if (selectedInstructor) {
@@ -176,17 +245,46 @@ export function InstructorsPage({
         </nav>
 
         {/* Instructor Profile Header */}
-        <header className="flex flex-col gap-5 border-b border-border pb-6 sm:flex-row sm:items-center sm:gap-6 sm:pb-8">
-          <InstructorAvatar name={selectedInstructor.name} size="xl" />
-          <div className="min-w-0 flex-1">
-            <div className="flex flex-wrap items-center gap-3">
-              <h1 className="text-2xl font-bold tracking-tight text-foreground sm:text-3xl">
-                {selectedInstructor.name}
-              </h1>
-              <span className="rounded-full bg-secondary px-3 py-1 text-xs font-medium text-secondary-foreground">
-                {selectedInstructor.category}
-              </span>
+        <header className="flex flex-col gap-5 border-b border-border/50 pb-6 sm:flex-row sm:items-center sm:gap-6">
+          <div className="group/avatar relative inline-flex shrink-0 items-center justify-center">
+            <div className="relative size-16 shrink-0 rounded-full">
+              <InstructorAvatar
+                name={selectedInstructor.name}
+                size="xl"
+                className="size-full transition-[filter] duration-150 group-hover/avatar:brightness-[0.4]"
+              />
+              <label
+                className="absolute inset-0 flex cursor-pointer items-center justify-center rounded-full text-white opacity-0 transition-opacity duration-150 group-hover/avatar:opacity-100"
+                title="Change photo"
+              >
+                <Camera className="size-5 drop-shadow-sm" />
+                <input
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={(e) => handleFileUpload(selectedInstructor.id, selectedInstructor.name, e)}
+                />
+              </label>
             </div>
+            {hasCustomAvatar(selectedInstructor.id, selectedInstructor.name) && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  removeAvatar(selectedInstructor.id, selectedInstructor.name);
+                }}
+                className="absolute -right-1 -top-1 z-10 flex size-5 items-center justify-center rounded-full bg-card text-muted-foreground shadow-card transition-colors hover:text-destructive"
+                title="Remove photo"
+              >
+                <X className="size-3" />
+              </button>
+            )}
+          </div>
+
+          <div className="min-w-0 flex-1">
+            <h1 className="text-2xl font-bold tracking-tight text-foreground sm:text-3xl">
+              {selectedInstructor.name}
+            </h1>
             <p className="mt-2 text-sm text-muted-foreground">
               {instructorCourses.length} {instructorCourses.length === 1 ? "course" : "courses"} • {totalLessons} lessons • {selectedInstructor.hours}
             </p>
@@ -194,7 +292,7 @@ export function InstructorsPage({
         </header>
 
         {/* Courses Section */}
-        <section className="mt-8" aria-label={`Courses by ${selectedInstructor.name}`}>
+        <section className="mt-6" aria-label={`Courses by ${selectedInstructor.name}`}>
           <div className="flex items-center justify-between pb-4">
             <h2 className="text-lg font-semibold tracking-tight text-foreground">
               Courses
@@ -205,7 +303,7 @@ export function InstructorsPage({
           </div>
 
           {instructorCourses.length === 0 ? (
-            <div className="mt-12 flex flex-col items-center rounded-xl border border-dashed border-border bg-card/60 px-6 py-14 text-center">
+            <div className="mt-12 flex flex-col items-center rounded-xl bg-secondary/40 px-6 py-14 text-center">
               <p className="text-base font-semibold text-foreground">No courses found</p>
               <p className="mt-1.5 max-w-sm text-sm text-muted-foreground">
                 This instructor doesn't have any courses enrolled yet.
@@ -228,7 +326,7 @@ export function InstructorsPage({
     <div className="mx-auto w-full max-w-[1440px] px-5 pb-12 pt-6 sm:px-8 sm:pt-8 lg:px-10">
       <header className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <h1 className="text-2xl font-bold tracking-tight text-foreground sm:text-3xl">Instructors</h1>
-        <label className="flex h-11 min-w-0 items-center gap-2 rounded-lg border border-border bg-card px-3 shadow-card sm:w-80 lg:w-96">
+        <label className="flex h-11 min-w-0 items-center gap-2 rounded-lg bg-secondary/75 px-3 transition-colors focus-within:bg-card focus-within:ring-2 focus-within:ring-ring/30 sm:w-80 lg:w-96">
           <Search className="size-4 shrink-0 text-muted-foreground" />
           <input
             value={query}
@@ -239,41 +337,18 @@ export function InstructorsPage({
         </label>
       </header>
 
-      <div className="mt-8 flex flex-col gap-4 border-b border-border pb-5 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex w-fit max-w-full flex-wrap items-center gap-1 rounded-lg border border-border bg-secondary/50 p-1">
-          {categories.map((item) => (
-            <Button
-              key={item}
-              type="button"
-              size="sm"
-              variant="ghost"
-              onClick={() => setCategory(item)}
-              className={cn(
-                "rounded-sm px-4 text-muted-foreground shadow-none",
-                category === item && "bg-card font-medium text-foreground shadow-card hover:bg-card"
-              )}
-            >
-              {item}
-            </Button>
-          ))}
-        </div>
-        <span className="text-xs font-mono text-muted-foreground">
-          {filtered.length} {filtered.length === 1 ? "instructor" : "instructors"}
-        </span>
-      </div>
-
       {filtered.length === 0 ? (
-        <div className="mt-16 flex flex-col items-center rounded-xl border border-dashed border-border bg-card/60 px-6 py-16 text-center">
+        <div className="mt-16 flex flex-col items-center rounded-xl bg-secondary/40 px-6 py-16 text-center">
           <p className="text-base font-semibold text-foreground">No instructors found</p>
           <p className="mt-1.5 max-w-sm text-sm text-muted-foreground">
-            No instructors match this view.
+            No instructors match your search.
           </p>
-          <Button variant="outline" size="sm" className="mt-4 rounded-md" onClick={() => { setQuery(""); setCategory("All"); }}>
-            Clear filters
+          <Button variant="secondary" size="sm" className="mt-4 rounded-md" onClick={() => setQuery("")}>
+            Clear search
           </Button>
         </div>
       ) : (
-        <div className="mt-4 flex flex-col gap-1">
+        <div className="mt-6 flex flex-col gap-1">
           {filtered.map((instructor) => (
             <button
               key={instructor.id}
@@ -281,7 +356,29 @@ export function InstructorsPage({
               onClick={() => selectInstructor(instructor.id)}
               className="group flex w-full items-center gap-4 rounded-xl px-4 py-3 text-left transition-colors hover:bg-secondary/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:px-5 sm:py-3.5"
             >
-              <InstructorAvatar name={instructor.name} size="lg" />
+              <div
+                className="group/avatar relative size-12 shrink-0 rounded-full"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <InstructorAvatar
+                  name={instructor.name}
+                  size="lg"
+                  className="size-full transition-[filter] duration-150 group-hover/avatar:brightness-[0.4]"
+                />
+                <label
+                  className="absolute inset-0 flex cursor-pointer items-center justify-center rounded-full text-white opacity-0 transition-opacity duration-150 group-hover/avatar:opacity-100"
+                  title="Change photo"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <Camera className="size-4 drop-shadow-sm" />
+                  <input
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={(e) => handleFileUpload(instructor.id, instructor.name, e)}
+                  />
+                </label>
+              </div>
               <span className="min-w-0 flex-1 truncate text-base font-medium text-foreground transition-colors group-hover:text-foreground">
                 {instructor.name}
               </span>

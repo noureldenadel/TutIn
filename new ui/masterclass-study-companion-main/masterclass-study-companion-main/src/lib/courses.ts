@@ -6,14 +6,14 @@ export interface Course {
   language: string;
   duration: string;
   progress: number;
-  tags?: string[];
-  category?: string;
-  art?: string;
-  thumbnailUrl?: string;
-  thumbnailSeed?: number;
-  thumbnailHue?: number;
-  sourceType?: "local" | "youtube" | "drive" | "link";
-  courseUrl?: string;
+  tags?: string[] | undefined;
+  category?: string | undefined;
+  art?: string | undefined;
+  thumbnailUrl?: string | undefined;
+  thumbnailSeed?: number | undefined;
+  thumbnailHue?: number | undefined;
+  sourceType?: "local" | "youtube" | "drive" | "link" | undefined;
+  courseUrl?: string | undefined;
 }
 
 export const courses: Course[] = [
@@ -62,3 +62,29 @@ export const courses: Course[] = [
   { id: 24, title: "Diffusion Models & Generative AI Art", instructor: "Hana Kim", lessons: 13, language: "English", duration: "5h 50m", progress: 60, art: "course-art-gold", category: "AI & Machine Learning", tags: ["Diffusion Models", "Generative AI", "PyTorch"] },
   { id: 25, title: "Neural Rendering & Real-Time Computer Vision", instructor: "Hana Kim", lessons: 12, language: "English", duration: "5h 10m", progress: 0, art: "course-art-gold", category: "AI & Machine Learning", tags: ["Computer Vision", "NeRF", "Neural Rendering"] },
 ];
+
+export function getSavedCourses(): Course[] {
+  if (typeof window === "undefined") return courses;
+  try {
+    const deletedIds: number[] = JSON.parse(window.localStorage.getItem("tutin_deleted_courses") || "[]");
+    const overrides: Record<number, Course> = JSON.parse(window.localStorage.getItem("tutin_courses_override") || "{}");
+    const custom: Course[] = JSON.parse(window.localStorage.getItem("tutin_custom_courses") || "[]");
+
+    const baseMerged = courses
+      .filter((c) => !deletedIds.includes(c.id))
+      .map((c) => overrides[c.id] || c);
+
+    const customMerged = custom
+      .filter((c) => !deletedIds.includes(c.id))
+      .map((c) => overrides[c.id] || c);
+
+    return [...customMerged, ...baseMerged];
+  } catch {
+    return courses;
+  }
+}
+
+export function findSavedCourseById(courseId: string): Course | undefined {
+  return getSavedCourses().find((c) => String(c.id) === String(courseId));
+}
+

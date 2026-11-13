@@ -214,6 +214,24 @@ export function loadTtsCompanionSegments(videoId, lang, videoMeta = {}) {
     return null
 }
 
+/**
+ * Delete stale TTS companion segments when captions for a language are replaced or re-uploaded.
+ */
+export function deleteTtsCompanionFile(videoId, lang, videoMeta = {}) {
+    if (!lang) return
+    const { courseFolder, relModulePath = '', videoBaseName } = videoMeta
+    if (courseFolder && videoBaseName && fs.existsSync(courseFolder)) {
+        const ttsPath = getTtsCompanionFilePath(courseFolder, relModulePath, videoBaseName, lang)
+        if (ttsPath && fs.existsSync(ttsPath)) {
+            try { fs.unlinkSync(ttsPath) } catch {}
+        }
+    }
+    const cachePath = path.join(getTranscriptsDir(), 'tts_companion', `${videoId}.${lang}.tts.json`)
+    if (fs.existsSync(cachePath)) {
+        try { fs.unlinkSync(cachePath) } catch {}
+    }
+}
+
 // ── AppData Cache Helpers (used ONLY for Web / Cloud Stream Courses) ─────────────
 
 export function getTranscriptsDir() {
@@ -400,10 +418,15 @@ export function loadCaptionChunks(videoId, lang, subtitleSources = [], courseFol
     }
 
     // Try any matching subtitle_sources fallback
+    let targetFallbackLang = lang
+    if (lang && lang.includes(':')) {
+        targetFallbackLang = lang.split(':')[0]
+    }
+    const isSourceLookup = !targetFallbackLang || targetFallbackLang === 'source'
     let sourceEntry = subtitleSources.find(s =>
-        ((lang === 'source' && (!s.lang || s.lang === 'source')) || s.lang === lang)
+        (isSourceLookup && (!s.lang || s.lang === 'source')) || s.lang === targetFallbackLang
     )
-    if (!sourceEntry && subtitleSources.length > 0) {
+    if (!sourceEntry && isSourceLookup && subtitleSources.length > 0) {
         sourceEntry = subtitleSources[0]
     }
     if (sourceEntry?.filePath && fs.existsSync(sourceEntry.filePath)) {
@@ -503,7 +526,7 @@ export function listVideoLanguages(videoId, subtitleSources = [], courseFolder =
                 if (f.includes('.tts.')) continue
                 if (!f.startsWith(videoId)) continue
                 const withoutId = f.slice(videoId.length)
-                const match = withoutId.match(/^\.([a-z]{2,3})\.json$/)
+                const match = withoutId.match(/^\.([a-z]{2,3}(?:-[a-z]{2,4})?)\.json$/)
                 if (match) translatedLangs.add(match[1])
             }
         } catch { }
@@ -576,7 +599,7 @@ export function listDubLanguages(videoId, courseFolder = null, relModulePath = '
                 fs.readdirSync(dubsDir)
                     .filter(f => f.startsWith(videoId) && f.endsWith('.mp3'))
                     .forEach(f => {
-                        const match = f.match(new RegExp(`^${videoId}\\.([a-z]{2,3})\\.mp3$`))
+                        const match = f.match(new RegExp(`^${videoId}\\.([a-z]{2,3}(?:-[a-z]{2,4})?)\\.mp3$`))
                         if (match) langs.add(match[1])
                     })
             } catch { }

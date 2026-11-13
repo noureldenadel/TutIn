@@ -150,7 +150,7 @@ export function AdminDashboard() {
   return (
     <div className="mx-auto max-w-[1440px] px-5 pb-16 pt-6 sm:px-8 sm:pt-8 lg:px-10">
       {/* Top Header */}
-      <div className="flex flex-col gap-4 border-b border-border pb-6 sm:flex-row sm:items-center sm:justify-between">
+      <div className="flex flex-col gap-4 border-b border-border/50 pb-6 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <div className="flex items-center gap-2.5">
             <Palette className="size-6 text-foreground" />
@@ -169,7 +169,7 @@ export function AdminDashboard() {
         {/* Global Action Bar */}
         <div className="flex items-center gap-2">
           <Button
-            variant="outline"
+            variant="secondary"
             size="sm"
             onClick={handleCopyCode}
             className="gap-1.5"
@@ -180,7 +180,7 @@ export function AdminDashboard() {
           </Button>
 
           <Button
-            variant="outline"
+            variant="secondary"
             size="sm"
             onClick={handleResetToDefaults}
             className="gap-1.5"
@@ -204,8 +204,8 @@ export function AdminDashboard() {
       <div className="mt-8 grid gap-8 lg:grid-cols-12 items-start">
         {/* Left Column: Interactive Playground & Seed Card */}
         <div className="lg:col-span-5 flex flex-col gap-6">
-          <div className="rounded-xl border border-border bg-card p-5 shadow-card">
-            <div className="flex items-center justify-between pb-4 border-b border-border">
+          <div className="rounded-xl bg-card p-5 shadow-card">
+            <div className="flex items-center justify-between border-b border-border/50 pb-3.5">
               <div className="flex items-center gap-2">
                 <Eye className="size-4 text-primary" />
                 <h2 className="text-base font-semibold text-foreground">Interactive Card Preview</h2>
@@ -292,7 +292,7 @@ export function AdminDashboard() {
                   />
                 ))}
                 <div
-                  className="w-5 rounded-sm shadow-inner transition-colors border border-white/20"
+                  className="w-5 rounded-sm shadow-inner transition-colors"
                   style={{ backgroundColor: activePalette.spark }}
                   title={`Spark: ${activePalette.spark}`}
                 />
@@ -334,8 +334,8 @@ export function AdminDashboard() {
         {/* Right Column: Settings Sliders & App-Wide Controls */}
         <div className="lg:col-span-7 flex flex-col gap-6">
           {/* Cover Artwork Source Selector */}
-          <div className="rounded-xl border border-border bg-card p-6 shadow-card">
-            <div className="flex items-center justify-between pb-4 border-b border-border">
+          <div className="rounded-xl bg-card p-6 shadow-card">
+            <div className="flex items-center justify-between border-b border-border/50 pb-3.5">
               <div className="flex items-center gap-2">
                 <ImageIcon className="size-4 text-primary" />
                 <h2 className="text-base font-semibold text-foreground">Thumbnail Cover Source</h2>
@@ -351,7 +351,7 @@ export function AdminDashboard() {
               </p>
 
               {/* 3-way Segmented Control */}
-              <div className="grid grid-cols-3 gap-1 rounded-lg border border-border bg-secondary/50 p-1">
+              <div className="grid grid-cols-3 gap-1 rounded-lg bg-secondary/75 p-1">
                 {([
                   ["generated", "Generated", "Vector SVG only"],
                   ["images", "Sample images", "All 4 images"],
@@ -382,7 +382,7 @@ export function AdminDashboard() {
 
               {/* Sample Images Gallery */}
               {((draft.coverMode ?? "generated") !== "generated") && (
-                <div className="mt-4 pt-3 border-t border-border/60">
+                <div className="mt-4 border-t border-border/50 pt-3">
                   <div className="flex items-center justify-between mb-2">
                     <span className="text-xs font-medium text-foreground">Sample Cover Images</span>
                     {draft.coverMode === "images" && (
@@ -401,10 +401,10 @@ export function AdminDashboard() {
                             setIsSaved(false);
                           }}
                           className={cn(
-                            "group relative aspect-video overflow-hidden rounded-lg border text-left transition-all",
+                            "group relative aspect-video overflow-hidden rounded-lg text-left transition-all",
                             isSelected
-                              ? "border-primary ring-2 ring-primary/40 shadow-sm"
-                              : "border-border hover:border-foreground/30"
+                              ? "ring-2 ring-primary shadow-sm"
+                              : "opacity-85 hover:opacity-100"
                           )}
                         >
                           <img
@@ -434,8 +434,8 @@ export function AdminDashboard() {
           </div>
 
           {/* Settings Control Panel */}
-          <div className="rounded-xl border border-border bg-card p-6 shadow-card">
-            <div className="flex items-center justify-between pb-4 border-b border-border">
+          <div className="rounded-xl bg-card p-6 shadow-card">
+            <div className="flex items-center justify-between border-b border-border/50 pb-3.5">
               <div className="flex items-center gap-2">
                 <Sliders className="size-4 text-primary" />
                 <h2 className="text-base font-semibold text-foreground">Algorithmic Parameters</h2>
@@ -457,7 +457,7 @@ export function AdminDashboard() {
                       setIsSaved(false);
                     }}
                   >
-                    <SelectTrigger className="h-9 rounded-lg">
+                    <SelectTrigger className="h-9 rounded-lg border-0 bg-secondary/75">
                       <SelectValue placeholder="Select pattern" />
                     </SelectTrigger>
                     <SelectContent>
@@ -483,7 +483,7 @@ export function AdminDashboard() {
                       <span className="text-xs font-medium text-foreground">{def.label}</span>
                       {def.key === "hue" && (
                         <span
-                          className="inline-block size-3.5 rounded-full border border-border shadow-inner"
+                          className="inline-block size-3.5 rounded-full shadow-inner"
                           style={{ backgroundColor: `hsl(${val}, 70%, 50%)` }}
                         />
                       )}
@@ -508,7 +508,7 @@ export function AdminDashboard() {
               })}
 
               {/* Preview Progress Slider */}
-              <div className="grid grid-cols-1 sm:grid-cols-12 gap-3 items-center pt-2 border-t border-border/60">
+              <div className="grid grid-cols-1 sm:grid-cols-12 gap-3 items-center border-t border-border/50 pt-3">
                 <div className="sm:col-span-4">
                   <span className="text-xs font-medium text-foreground">Sample Progress</span>
                 </div>
@@ -531,7 +531,7 @@ export function AdminDashboard() {
           </div>
 
           {/* Quick Notice Card */}
-          <div className="flex gap-3.5 rounded-xl border border-border bg-secondary/30 p-4">
+          <div className="flex gap-3.5 rounded-xl bg-secondary/65 p-4">
             <Info className="size-5 shrink-0 text-primary mt-0.5" />
             <div className="text-xs leading-relaxed text-muted-foreground">
               <strong className="text-foreground font-semibold">Deterministic & Private: </strong>
@@ -542,8 +542,8 @@ export function AdminDashboard() {
       </div>
 
       {/* Avatar Studio & Contrast Lab */}
-      <section className="mt-12 rounded-xl border border-border bg-card p-6 shadow-card">
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between pb-5 border-b border-border">
+      <section className="mt-12 rounded-xl bg-card p-6 shadow-card">
+        <div className="flex flex-col gap-2 border-b border-border/50 pb-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <div className="flex items-center gap-2">
               <UserCheck className="size-5 text-primary" />
@@ -570,10 +570,10 @@ export function AdminDashboard() {
                   value={testName}
                   onChange={(e) => setTestName(e.target.value)}
                   placeholder="Enter name (e.g. Maya Chen)"
-                  className="bg-card h-9"
+                  className="border-0 bg-secondary/75 h-9 focus-visible:bg-background focus-visible:ring-2"
                 />
                 <Button
-                  variant="outline"
+                  variant="secondary"
                   size="sm"
                   type="button"
                   onClick={() => {
@@ -682,7 +682,7 @@ export function AdminDashboard() {
               <div className="flex items-center gap-3">
                 <div className="flex items-center gap-2">
                   <span
-                    className="size-6 rounded-md shadow-inner border border-white/20"
+                    className="size-6 rounded-md shadow-inner"
                     style={{ backgroundColor: avatarColors.bg }}
                     title={`Background: ${avatarColors.bg}`}
                   />
@@ -694,7 +694,7 @@ export function AdminDashboard() {
                 <span className="text-muted-foreground font-bold">/</span>
                 <div className="flex items-center gap-2">
                   <span
-                    className="size-6 rounded-md shadow-inner border border-white/20"
+                    className="size-6 rounded-md shadow-inner"
                     style={{ backgroundColor: avatarColors.fg }}
                     title={`Text: ${avatarColors.fg}`}
                   />
@@ -758,7 +758,7 @@ export function AdminDashboard() {
 
               {/* Manual Swatch Selector (Shown only when in Manual mode) */}
               {draft.avatarContrastMode === "manual" && (
-                <div className="mt-4 pt-4 border-t border-border/60 grid gap-3">
+                <div className="mt-4 grid gap-3 border-t border-border/50 pt-4">
                   <div>
                     <span className="text-[11px] font-semibold text-foreground block mb-1.5">
                       Background Tone (Tone 1 to 5)
@@ -773,10 +773,10 @@ export function AdminDashboard() {
                             setIsSaved(false);
                           }}
                           className={cn(
-                            "flex-1 h-8 rounded-md border-2 transition-transform",
+                            "flex-1 h-8 rounded-md transition-transform",
                             (draft.avatarBgTone ?? 2) === idx
-                              ? "border-primary scale-105 shadow-sm"
-                              : "border-transparent opacity-80 hover:opacity-100"
+                              ? "ring-2 ring-primary ring-offset-2 ring-offset-card scale-105 shadow-sm"
+                              : "opacity-80 hover:opacity-100"
                           )}
                           style={{ backgroundColor: t }}
                           title={`Tone ${idx + 1}`}
@@ -799,10 +799,10 @@ export function AdminDashboard() {
                             setIsSaved(false);
                           }}
                           className={cn(
-                            "flex-1 h-8 rounded-md border-2 transition-transform",
+                            "flex-1 h-8 rounded-md transition-transform",
                             (draft.avatarFgTone ?? 4) === idx
-                              ? "border-primary scale-105 shadow-sm"
-                              : "border-transparent opacity-80 hover:opacity-100"
+                              ? "ring-2 ring-primary ring-offset-2 ring-offset-card scale-105 shadow-sm"
+                              : "opacity-80 hover:opacity-100"
                           )}
                           style={{ backgroundColor: t }}
                           title={`Tone ${idx + 1}`}
@@ -815,7 +815,7 @@ export function AdminDashboard() {
             </div>
 
             {/* Typography Controls */}
-            <div className="space-y-4 pt-4 border-t border-border/60">
+            <div className="space-y-4 border-t border-border/50 pt-4">
               {/* Font Weight */}
               <div>
                 <label className="text-xs font-semibold text-foreground block mb-2">
@@ -831,7 +831,7 @@ export function AdminDashboard() {
                     <Button
                       key={w.id}
                       type="button"
-                      variant={(draft.avatarFontWeight ?? "600") === w.id ? "default" : "outline"}
+                      variant={(draft.avatarFontWeight ?? "600") === w.id ? "default" : "secondary"}
                       size="sm"
                       className="text-xs h-8"
                       onClick={() => {
@@ -903,7 +903,7 @@ export function AdminDashboard() {
       </section>
 
       {/* App-Wide Course Library Live Preview Section */}
-      <section className="mt-12 border-t border-border pt-10">
+      <section className="mt-12 border-t border-border/50 pt-10">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between mb-6">
           <div>
             <div className="flex items-center gap-2">
@@ -928,7 +928,7 @@ export function AdminDashboard() {
             return (
               <div
                 key={course.id}
-                className="group relative overflow-hidden rounded-xl border border-border bg-card shadow-card transition-colors duration-200 hover:border-foreground/20"
+                className="group relative overflow-hidden rounded-xl bg-card shadow-card transition-transform duration-200 hover:-translate-y-0.5"
               >
                 <div className="relative aspect-video overflow-hidden">
                   <CourseThumbnail course={activeCourseData} settings={draft} />
@@ -945,7 +945,7 @@ export function AdminDashboard() {
                   </div>
                   <p className="mt-1 text-xs text-muted-foreground truncate">{course.instructor}</p>
 
-                  <div className="mt-3 flex items-center justify-between pt-2 border-t border-border/60 text-xs">
+                  <div className="mt-3 flex items-center justify-between border-t border-border/50 pt-2.5 text-xs">
                     {(() => {
                       const coverUrl = getCourseCoverUrl(activeCourseData, draft.coverMode ?? "generated");
                       if (coverUrl) {

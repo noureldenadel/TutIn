@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { X, Headphones, Globe, Lock, AlertTriangle } from 'lucide-react'
-import { SUPPORTED_LANGUAGES, getLanguageInfo } from '../../utils/languages'
+import { SUPPORTED_LANGUAGES, DUBBING_SUPPORTED_LANGUAGES, getLanguageInfo } from '../../utils/languages'
 import { SERVER_URL } from '../../utils/api'
 
 // Languages that require OpenRouter API key
@@ -34,7 +34,8 @@ export function JobSetupModal({ isOpen, onClose, videos, course, type, onStart }
 
     const sourceInfo = getLanguageInfo(sourceLang)
 
-    const availableTargets = SUPPORTED_LANGUAGES.filter(l => l.code !== sourceLang)
+    const baseLanguagePool = type === 'dub' ? DUBBING_SUPPORTED_LANGUAGES : SUPPORTED_LANGUAGES
+    const availableTargets = baseLanguagePool.filter(l => l.code !== sourceLang)
 
     // If the currently selected lang requires OpenRouter but key is missing, reset
     const selectedLangInfo = SUPPORTED_LANGUAGES.find(l => l.code === targetLang)
