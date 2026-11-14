@@ -1,14 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Link } from "@tanstack/react-router";
-import {
-  Check,
-  Clock,
-  CornerDownLeft,
-  Maximize2,
-  Pencil,
-  Trash2,
-  X,
-} from "lucide-react";
+import { Check, Clock, CornerDownLeft, Maximize2, Pencil, Trash2, X } from "lucide-react";
 
 import { RichNoteHtmlContent, RichNoteSurface } from "@/components/notes/rich-note-surface";
 import { getArtboardAccentVar } from "@/components/canvas/canvas-tokens";
@@ -402,7 +394,8 @@ export function CanvasCardView({
                     onClick={() => onUpdateAccent(idx)}
                     className={cn(
                       "size-3.5 rounded-full border border-border transition-transform hover:scale-110",
-                      card.accentIndex === idx && "ring-2 ring-primary ring-offset-1 ring-offset-card",
+                      card.accentIndex === idx &&
+                        "ring-2 ring-primary ring-offset-1 ring-offset-card",
                     )}
                     style={{
                       backgroundColor:
@@ -434,12 +427,7 @@ export function CanvasCardView({
           </div>
         </div>
       ) : (
-        <div
-          className={cn(
-            "px-3 py-2.5",
-            isTextOnly && "px-3.5 py-2",
-          )}
-        >
+        <div className={cn("px-3 py-2.5", isTextOnly && "px-3.5 py-2")}>
           {isTextOnly && (
             <div
               onPointerDown={(e) => e.stopPropagation()}
@@ -516,4 +504,3 @@ export function CanvasCardView({
     </div>
   );
 }
-

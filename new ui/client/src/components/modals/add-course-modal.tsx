@@ -20,12 +20,7 @@ import { toast } from "sonner";
 
 import { CourseThumbnail } from "@/components/layout/course-thumbnail";
 import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogTitle,
-} from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { parseDurationToSeconds } from "@/lib/course-lessons";
@@ -240,7 +235,9 @@ export function AddCourseModal({
       setDuration(
         preview.totalDuration > 0 ? formatDurationLabel(preview.totalDuration) : "Drive Stream",
       );
-      toast.success(`Found ${preview.totalVideos} videos across ${preview.modules.length} folder(s)`);
+      toast.success(
+        `Found ${preview.totalVideos} videos across ${preview.modules.length} folder(s)`,
+      );
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to scan Google Drive folder");
     } finally {
@@ -399,12 +396,13 @@ export function AddCourseModal({
     const modKey = `${keyPrefix}:${mod.title}`;
     const isExpanded = expandedModules[modKey] ?? depth > 0;
     return (
-      <div key={modKey} className={cn("rounded-lg bg-secondary/35", depth > 0 && "ml-3 bg-secondary/25")}>
+      <div
+        key={modKey}
+        className={cn("rounded-lg bg-secondary/35", depth > 0 && "ml-3 bg-secondary/25")}
+      >
         <button
           type="button"
-          onClick={() =>
-            setExpandedModules((prev) => ({ ...prev, [modKey]: !isExpanded }))
-          }
+          onClick={() => setExpandedModules((prev) => ({ ...prev, [modKey]: !isExpanded }))}
           className="flex w-full items-center justify-between px-3 py-2 text-left text-xs font-medium text-foreground hover:bg-secondary/55 rounded-lg transition-colors"
         >
           <span className="flex min-w-0 items-center gap-1.5">
@@ -524,7 +522,10 @@ export function AddCourseModal({
                 </div>
 
                 <div className="space-y-1.5">
-                  <Label htmlFor="manual-folder-path" className="text-xs font-medium text-muted-foreground">
+                  <Label
+                    htmlFor="manual-folder-path"
+                    className="text-xs font-medium text-muted-foreground"
+                  >
                     Or paste folder path
                   </Label>
                   <div className="flex gap-2">
@@ -553,7 +554,10 @@ export function AddCourseModal({
                 <div className="flex items-center justify-between rounded-xl bg-secondary/45 px-4 py-2.5 text-xs">
                   <div className="flex min-w-0 items-center gap-2">
                     <FolderOpen className="size-4 shrink-0 text-foreground" />
-                    <span className="truncate font-mono text-foreground" title={scannedLocal.folderPath}>
+                    <span
+                      className="truncate font-mono text-foreground"
+                      title={scannedLocal.folderPath}
+                    >
                       {scannedLocal.folderPath}
                     </span>
                   </div>
@@ -584,7 +588,7 @@ export function AddCourseModal({
                       {scannedLocal.vaultData.summary && (
                         <span className="text-muted-foreground">
                           ({scannedLocal.vaultData.summary.notes?.count ?? 0} notes,{" "}
-                          {scannedLocal.vaultData.summary.transcripts?.diskCount ?? 0} captions)
+                          {scannedLocal.vaultData.summary.transcripts?.diskCount ?? 0} subtitles)
                         </span>
                       )}
                     </div>
@@ -706,9 +710,7 @@ export function AddCourseModal({
                     </span>
                   </div>
                   <div className="max-h-48 space-y-1.5 overflow-y-auto pr-1 custom-scrollbar">
-                    {scannedLocal.modules.map((m, idx) =>
-                      renderModuleTree(m, String(idx)),
-                    )}
+                    {scannedLocal.modules.map((m, idx) => renderModuleTree(m, String(idx)))}
                   </div>
                 </div>
               </div>
@@ -764,7 +766,8 @@ export function AddCourseModal({
               {source === "youtube" && (
                 <div className="space-y-1.5">
                   <Label htmlFor="yt-api-key" className="text-xs font-medium text-muted-foreground">
-                    YouTube Data API v3 Key (optional for single videos, required for full playlists)
+                    YouTube Data API v3 Key (optional for single videos, required for full
+                    playlists)
                   </Label>
                   <Input
                     id="yt-api-key"
@@ -779,7 +782,10 @@ export function AddCourseModal({
 
               {source === "drive" && (
                 <div className="space-y-1.5">
-                  <Label htmlFor="drive-api-key" className="text-xs font-medium text-muted-foreground">
+                  <Label
+                    htmlFor="drive-api-key"
+                    className="text-xs font-medium text-muted-foreground"
+                  >
                     Google Drive API Key
                   </Label>
                   <Input
@@ -878,7 +884,10 @@ export function AddCourseModal({
                   </div>
                   <div className="max-h-28 space-y-1 overflow-y-auto custom-scrollbar">
                     {youtubePreview.videos.slice(0, 12).map((v) => (
-                      <div key={v.youtubeId} className="flex items-center justify-between text-muted-foreground">
+                      <div
+                        key={v.youtubeId}
+                        className="flex items-center justify-between text-muted-foreground"
+                      >
                         <span className="truncate">{v.title}</span>
                         {v.duration > 0 && (
                           <span className="ml-2 shrink-0 font-mono text-[11px]">
@@ -894,7 +903,9 @@ export function AddCourseModal({
               {drivePreview && source === "drive" && (
                 <div className="rounded-xl bg-secondary/40 p-3 text-xs space-y-1.5">
                   <div className="flex items-center justify-between font-medium">
-                    <span>{drivePreview.modules.length} module(s) · {drivePreview.totalVideos} videos</span>
+                    <span>
+                      {drivePreview.modules.length} module(s) · {drivePreview.totalVideos} videos
+                    </span>
                     <span className="font-mono text-muted-foreground">{duration}</span>
                   </div>
                 </div>

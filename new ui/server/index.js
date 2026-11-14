@@ -27,6 +27,7 @@ import instructorsRouter from './routes/instructors.js'
 import roadmapsRouter from './routes/roadmaps.js'
 import settingsRouter from './routes/settings.js'
 import transcriptsRouter from './routes/transcripts.js'
+import dubbingRouter from './routes/dubbing.js'
 import summariesRouter from './routes/summaries.js'
 import searchRouter from './routes/search.js'
 import dataRouter from './routes/data.js'
@@ -94,6 +95,7 @@ app.use('/api/instructors', instructorsRouter)
 app.use('/api/roadmaps', roadmapsRouter)
 app.use('/api/settings', settingsRouter)
 app.use('/api/transcripts', transcriptsRouter)
+app.use('/api/dub', dubbingRouter)
 app.use('/api/summaries', summariesRouter)
 app.use('/api/search', searchRouter)
 app.use('/api/data', dataRouter)

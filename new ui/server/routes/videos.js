@@ -5,6 +5,7 @@ import { spawn } from 'child_process'
 import { getAll, getOne, run, transaction } from '../database.js'
 import { recalculateCourseProgress } from './courses.js'
 import { getFfmpegPath } from '../utils/ffmpeg.js'
+import { normalizeSubtitleSources } from '../utils/courseAssets.js'
 
 const router = express.Router()
 
@@ -12,6 +13,8 @@ const router = express.Router()
  * Map a raw SQLite video row (snake_case) to a camelCase API response object.
  */
 function mapVideoRow(video) {
+    const rawSubs = JSON.parse(video.subtitle_sources || '[]').filter(s => !s.filePath || fs.existsSync(s.filePath))
+    const normalizedSubs = normalizeSubtitleSources(rawSubs, 'en')
     return {
         id: video.id,
         courseId: video.course_id,
@@ -37,10 +40,10 @@ function mapVideoRow(video) {
         bookmarks: JSON.parse(video.bookmarks || '[]'),
         youtubeId: video.youtube_id,
         url: video.url,
-        hasTranscript: video.has_transcript === 1,
+        hasTranscript: video.has_transcript === 1 || normalizedSubs.length > 0,
         hasSummary: video.has_summary === 1,
         primaryTranscript: video.primary_transcript,
-        subtitleSources: JSON.parse(video.subtitle_sources || '[]').filter(s => !s.filePath || fs.existsSync(s.filePath)),
+        subtitleSources: normalizedSubs,
         dubbedTracks: JSON.parse(video.dubbed_tracks || '[]').filter(t => t.filePath && fs.existsSync(t.filePath))
     }
 }
@@ -76,10 +79,6 @@ router.get('/:id/audio-16k', (req, res) => {
         }
 
         const ffmpegPath = getFfmpegPath()
-        res.setHeader('Content-Type', 'audio/wav')
-        res.setHeader('Cache-Control', 'no-cache')
-        res.setHeader('Access-Control-Allow-Origin', '*')
-
         const ffmpegArgs = [
             '-loglevel', 'error',
             '-i', filePath,
@@ -92,16 +91,45 @@ router.get('/:id/audio-16k', (req, res) => {
         ]
 
         const proc = spawn(ffmpegPath, ffmpegArgs, { stdio: ['ignore', 'pipe', 'pipe'] })
+        let startedStream = false
+        let stderrText = ''
 
-        proc.stdout.pipe(res)
+        proc.stdout.on('data', (chunk) => {
+            if (!startedStream) {
+                startedStream = true
+                res.setHeader('Content-Type', 'audio/wav')
+                res.setHeader('Cache-Control', 'no-cache')
+                res.setHeader('Access-Control-Allow-Origin', '*')
+            }
+            res.write(chunk)
+        })
+
+        proc.stdout.on('end', () => {
+            if (startedStream && !res.writableEnded) {
+                res.end()
+            }
+        })
 
         proc.stderr.on('data', (data) => {
-            console.error(`[AudioStream 16k] FFmpeg error: ${data.toString()}`)
+            const msg = data.toString()
+            stderrText += msg
+            console.error(`[AudioStream 16k] FFmpeg error: ${msg}`)
         })
 
         proc.on('error', (err) => {
-            console.error(`[AudioStream 16k] Failed to spawn FFmpeg: ${err.message}`)
-            if (!res.headersSent) res.status(500).json({ error: 'Audio extraction failed' })
+            console.error(`[AudioStream 16k] Failed to spawn FFmpeg (${ffmpegPath}): ${err.message}`)
+            if (!res.headersSent) res.status(500).json({ error: `Audio extraction failed: ${err.message}` })
+            else if (!res.writableEnded) res.end()
+        })
+
+        proc.on('close', (code) => {
+            if (!startedStream && !res.headersSent) {
+                res.status(500).json({
+                    error: stderrText.trim() || `FFmpeg exited with code ${code} before producing audio`
+                })
+            } else if (!res.writableEnded) {
+                res.end()
+            }
         })
 
         res.on('close', () => {

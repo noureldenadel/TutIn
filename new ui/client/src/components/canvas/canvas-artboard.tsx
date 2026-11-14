@@ -99,7 +99,11 @@ export function CanvasArtboard({
           aria-label={group.collapsed ? "Expand artboard" : "Collapse artboard"}
           className="flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
         >
-          {group.collapsed ? <ChevronRight className="size-3.5" /> : <ChevronDown className="size-3.5" />}
+          {group.collapsed ? (
+            <ChevronRight className="size-3.5" />
+          ) : (
+            <ChevronDown className="size-3.5" />
+          )}
         </button>
 
         {isVideo ? (
@@ -197,4 +201,3 @@ export function CanvasArtboard({
     </div>
   );
 }
-

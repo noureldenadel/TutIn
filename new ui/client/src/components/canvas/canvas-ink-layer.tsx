@@ -79,12 +79,7 @@ export function CanvasInkLayer({
       aria-hidden="true"
     >
       {renderedPaths.map((item) => (
-        <path
-          key={item.id}
-          d={item.d}
-          fill={item.color}
-          fillOpacity={item.opacity}
-        />
+        <path key={item.id} d={item.d} fill={item.color} fillOpacity={item.opacity} />
       ))}
       {activeStroke && activePath && (
         <path

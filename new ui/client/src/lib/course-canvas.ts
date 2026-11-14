@@ -8,13 +8,7 @@ export type CanvasCardType = "video-note" | "canvas-note" | "image" | "text";
 export type CanvasMembershipState = "auto" | "detached" | "reassigned" | "canvas-only";
 export type CanvasEdgeKind = "auto-chrono" | "manual";
 export type CanvasStrokeColorToken =
-  | "ink"
-  | "primary"
-  | "violet"
-  | "sky"
-  | "amber"
-  | "emerald"
-  | "rose";
+  "ink" | "primary" | "violet" | "sky" | "amber" | "emerald" | "rose";
 
 export interface CanvasGroup {
   id: string;
@@ -141,10 +135,7 @@ export function getVideoNoteCardId(noteId: string): string {
   return `vcard-${noteId}`;
 }
 
-export function formatCanvasLessonCode(
-  lessons: CourseLessonItem[],
-  lessonIdx: number,
-): string {
+export function formatCanvasLessonCode(lessons: CourseLessonItem[], lessonIdx: number): string {
   const lesson = lessons[lessonIdx];
   if (lesson) {
     return `M${lesson.modIdx + 1}L${lesson.lessonInModule + 1}`;
@@ -152,19 +143,13 @@ export function formatCanvasLessonCode(
   return `L${lessonIdx + 1}`;
 }
 
-export function formatCanvasArtboardTitle(
-  lessons: CourseLessonItem[],
-  lessonIdx: number,
-): string {
+export function formatCanvasArtboardTitle(lessons: CourseLessonItem[], lessonIdx: number): string {
   const lesson = lessons[lessonIdx];
   if (!lesson) return `Lesson ${lessonIdx + 1}`;
   return `${formatCanvasLessonCode(lessons, lessonIdx)} · ${lesson.title}`;
 }
 
-export function fitArtboardsToChildren(
-  groups: CanvasGroup[],
-  cards: CanvasCard[],
-): void {
+export function fitArtboardsToChildren(groups: CanvasGroup[], cards: CanvasCard[]): void {
   for (const g of groups) {
     const children = cards.filter((c) => c.groupId === g.id);
     if (children.length === 0) continue;
@@ -270,7 +255,8 @@ export function normalizeLegacyCanvasPayload(
     const type = String(node["type"] || "note");
     const x = Number(node["x"]) || 0;
     const y = Number(node["y"]) || 0;
-    const width = Number(node["width"]) || (type === "group" ? CANVAS_GROUP_WIDTH : CANVAS_CARD_WIDTH);
+    const width =
+      Number(node["width"]) || (type === "group" ? CANVAS_GROUP_WIDTH : CANVAS_CARD_WIDTH);
     const height = Number(node["height"]) || (type === "group" ? 280 : 168);
 
     if (type === "group") {
@@ -282,8 +268,7 @@ export function normalizeLegacyCanvasPayload(
         type: lessonMatch >= 0 ? "video-artboard" : "custom-artboard",
         lessonIdx: lessonMatch >= 0 ? lessonMatch : undefined,
         videoId: typeof node["videoId"] === "string" ? node["videoId"] : undefined,
-        title:
-          typeof node["title"] === "string" && node["title"] ? node["title"] : "Artboard",
+        title: typeof node["title"] === "string" && node["title"] ? node["title"] : "Artboard",
         x,
         y,
         width,
@@ -363,10 +348,7 @@ function normalizeViewport(raw: unknown): CanvasViewport {
   }
   const obj = raw as Record<string, unknown>;
   const rawPan = obj["pan"];
-  const pan =
-    rawPan && typeof rawPan === "object"
-      ? (rawPan as Record<string, unknown>)
-      : null;
+  const pan = rawPan && typeof rawPan === "object" ? (rawPan as Record<string, unknown>) : null;
   const x = Number(pan?.["x"] ?? obj["x"]) || 40;
   const y = Number(pan?.["y"] ?? obj["y"]) || 30;
   const zoom = Math.max(0.25, Math.min(2, Number(obj["zoom"]) || 1));
@@ -454,7 +436,9 @@ export function flushPendingCanvasSave(courseId: string): void {
   }
 }
 
-export function summarizeCanvasState(parsed: Partial<CourseCanvasState> | null | undefined): CanvasSummaryMetrics {
+export function summarizeCanvasState(
+  parsed: Partial<CourseCanvasState> | null | undefined,
+): CanvasSummaryMetrics {
   if (!parsed) {
     return { exists: false, cardCount: 0, artboardCount: 0, edgeCount: 0, strokeCount: 0 };
   }
@@ -667,8 +651,7 @@ export function rebuildAllAutoChronoEdges(
 ): CanvasEdge[] {
   const validCardIds = new Set(cards.map((c) => c.id));
   const manualEdges = existingEdges.filter(
-    (e) =>
-      e.edgeKind === "manual" && validCardIds.has(e.fromId) && validCardIds.has(e.toId),
+    (e) => e.edgeKind === "manual" && validCardIds.has(e.fromId) && validCardIds.has(e.toId),
   );
   const autoEdges = groups.flatMap((group) => buildAutoChronoEdgesForGroup(group, cards));
   return [...manualEdges, ...autoEdges];
@@ -688,10 +671,7 @@ export function findFreeSlotInGroup(
     return {
       x,
       y,
-      requiredGroupHeight: Math.max(
-        group.height,
-        y - group.y + cardHeight + CANVAS_PADDING_BOTTOM,
-      ),
+      requiredGroupHeight: Math.max(group.height, y - group.y + cardHeight + CANVAS_PADDING_BOTTOM),
     };
   }
 
@@ -759,10 +739,7 @@ function shiftGroupsBelowColumn(
   }
 }
 
-function reflowAutoVideoGroup(
-  group: CanvasGroup,
-  cards: CanvasCard[],
-): void {
+function reflowAutoVideoGroup(group: CanvasGroup, cards: CanvasCard[]): void {
   const inGroup = cards.filter((c) => c.groupId === group.id);
   const autoVideoCards = inGroup
     .filter(
@@ -952,8 +929,8 @@ export function reconcileCanvasWithNotes(
           existingCard.membershipState = !existingCard.groupId
             ? "detached"
             : existingCard.groupId === expectedGroupId
-            ? "auto"
-            : "reassigned";
+              ? "auto"
+              : "reassigned";
         }
       }
 
@@ -1183,7 +1160,12 @@ export function applyCardDropMembership(
 
     // Moved into a different group
     if (c.isCanvasOnly) {
-      return { ...c, y: clampedY, groupId: targetGroup.id, membershipState: "canvas-only" as const };
+      return {
+        ...c,
+        y: clampedY,
+        groupId: targetGroup.id,
+        membershipState: "canvas-only" as const,
+      };
     }
 
     const isOriginGroup =
@@ -1256,10 +1238,7 @@ export function applyCardHeightUpdate(
   };
 }
 
-export function tidyVideoArtboard(
-  state: CourseCanvasState,
-  groupId: string,
-): CourseCanvasState {
+export function tidyVideoArtboard(state: CourseCanvasState, groupId: string): CourseCanvasState {
   const nextGroups = state.groups.map((g) => ({ ...g }));
   const nextCards = state.cards.map((c) => ({ ...c }));
   const target = nextGroups.find((g) => g.id === groupId);
@@ -1598,9 +1577,7 @@ export function tidyAllCanvasArtboards(state: CourseCanvasState): CourseCanvasSt
     if (!bounds) continue;
 
     // If stroke was drawn over a loose card that just moved, keep it attached to that card
-    const attachedCardMove = movedCardDeltas.find((m) =>
-      rectsOverlap(bounds, m.oldBounds, 24),
-    );
+    const attachedCardMove = movedCardDeltas.find((m) => rectsOverlap(bounds, m.oldBounds, 24));
     if (attachedCardMove) {
       stroke.points = stroke.points.map(([px, py, pressure]) => [
         px + attachedCardMove.dx,
@@ -1614,11 +1591,7 @@ export function tidyAllCanvasArtboards(state: CourseCanvasState): CourseCanvasSt
     if (nextGroups.some((g) => rectsOverlap(bounds, g, 12))) {
       const dx = Math.round(freeformX - bounds.x);
       const dy = Math.round(freeformY - bounds.y);
-      stroke.points = stroke.points.map(([px, py, pressure]) => [
-        px + dx,
-        py + dy,
-        pressure,
-      ]);
+      stroke.points = stroke.points.map(([px, py, pressure]) => [px + dx, py + dy, pressure]);
       freeformY += Math.ceil(bounds.height) + CANVAS_CARD_GAP;
     }
   }

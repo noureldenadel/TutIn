@@ -1,21 +1,22 @@
 import { apiJson, apiRequest } from "@/lib/api";
-import {
-  COURSES_CHANGED_EVENT,
-  fetchCourses,
-  touchCourseLastAccessed,
-} from "@/lib/courses";
+import { COURSES_CHANGED_EVENT, fetchCourses, touchCourseLastAccessed } from "@/lib/courses";
 import { formatTimestamp, parseTimestampToSeconds } from "@/lib/format";
 
 export { formatTimestamp, parseTimestampToSeconds as parseDurationToSeconds };
 
 export interface SubtitleSource {
+  id?: string | undefined;
   language?: string | undefined;
   lang?: string | undefined;
+  origin?: "uploaded" | "generated" | string | undefined;
+  version?: number | undefined;
   label?: string | undefined;
   filePath?: string | undefined;
   fileName?: string | undefined;
   format?: string | undefined;
   isDefault?: boolean | undefined;
+  is_master?: boolean | undefined;
+  is_ai_source?: boolean | undefined;
 }
 
 export interface VideoBookmark {
@@ -133,9 +134,7 @@ const inFlightCurriculum = new Map<string, Promise<CourseCurriculumData>>();
 function emitCurriculumChanged(courseId: string, data: CourseCurriculumData): void {
   curriculumCache.set(courseId, data);
   if (typeof window !== "undefined") {
-    window.dispatchEvent(
-      new CustomEvent(CURRICULUM_CHANGED_EVENT, { detail: { courseId, data } }),
-    );
+    window.dispatchEvent(new CustomEvent(CURRICULUM_CHANGED_EVENT, { detail: { courseId, data } }));
   }
 }
 
@@ -337,7 +336,9 @@ export function getCourseLessons(courseId?: string): CourseLessonItem[] {
   return curriculumCache.get(courseId)?.lessons ?? [];
 }
 
-export function getLessonDurationSeconds(lesson: Pick<CourseLessonItem, "durationSec" | "duration">): number {
+export function getLessonDurationSeconds(
+  lesson: Pick<CourseLessonItem, "durationSec" | "duration">,
+): number {
   if (lesson.durationSec > 0) return lesson.durationSec;
   return parseTimestampToSeconds(lesson.duration);
 }
@@ -376,14 +377,11 @@ export async function updateCourseModule(
   courseId: string,
   updates: Partial<DbModule>,
 ): Promise<{ success: boolean }> {
-  const res = await apiJson<{ success: boolean }>(
-    `/api/modules/${encodeURIComponent(moduleId)}`,
-    {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(updates),
-    },
-  );
+  const res = await apiJson<{ success: boolean }>(`/api/modules/${encodeURIComponent(moduleId)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(updates),
+  });
   await fetchCourseCurriculum(courseId, true);
   return res;
 }
@@ -392,10 +390,9 @@ export async function deleteCourseModule(
   moduleId: string,
   courseId: string,
 ): Promise<{ success: boolean }> {
-  const res = await apiJson<{ success: boolean }>(
-    `/api/modules/${encodeURIComponent(moduleId)}`,
-    { method: "DELETE" },
-  );
+  const res = await apiJson<{ success: boolean }>(`/api/modules/${encodeURIComponent(moduleId)}`, {
+    method: "DELETE",
+  });
   await Promise.all([fetchCourseCurriculum(courseId, true), fetchCourses(true)]);
   return res;
 }
@@ -422,14 +419,11 @@ export async function updateCourseVideo(
   courseId: string,
   updates: Partial<DbVideo>,
 ): Promise<{ success: boolean }> {
-  const res = await apiJson<{ success: boolean }>(
-    `/api/videos/${encodeURIComponent(videoId)}`,
-    {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(updates),
-    },
-  );
+  const res = await apiJson<{ success: boolean }>(`/api/videos/${encodeURIComponent(videoId)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(updates),
+  });
   await fetchCourseCurriculum(courseId, true);
   if (updates.duration !== undefined || updates.isCompleted !== undefined) {
     await fetchCourses(true);
@@ -528,10 +522,9 @@ export async function deleteCourseVideo(
   videoId: string,
   courseId: string,
 ): Promise<{ success: boolean }> {
-  const res = await apiJson<{ success: boolean }>(
-    `/api/videos/${encodeURIComponent(videoId)}`,
-    { method: "DELETE" },
-  );
+  const res = await apiJson<{ success: boolean }>(`/api/videos/${encodeURIComponent(videoId)}`, {
+    method: "DELETE",
+  });
   await Promise.all([fetchCourseCurriculum(courseId, true), fetchCourses(true)]);
   return res;
 }

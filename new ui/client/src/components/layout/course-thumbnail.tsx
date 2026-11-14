@@ -13,33 +13,25 @@ interface CourseThumbnailProps {
   className?: string;
 }
 
-export function CourseThumbnail({
-  course,
-  className,
-}: CourseThumbnailProps) {
+export function CourseThumbnail({ course, className }: CourseThumbnailProps) {
   const coverUrl = useMemo(() => {
     return getCourseCoverUrl(course);
   }, [course]);
 
   const seed = useMemo(() => getCourseSeed(course), [course]);
 
-  const hue = useMemo(
-    () => getCourseHue(seed, course.thumbnailHue),
-    [seed, course.thumbnailHue],
-  );
+  const hue = useMemo(() => getCourseHue(seed, course.thumbnailHue), [seed, course.thumbnailHue]);
 
-  const { svg } = useMemo(
-    () => generateThumbnailSvg(seed, hue),
-    [seed, hue],
-  );
+  const { svg } = useMemo(() => generateThumbnailSvg(seed, hue), [seed, hue]);
 
   if (coverUrl) {
     return (
-      <div className={cn("relative size-full overflow-hidden bg-muted", className)}>
+      <div className={cn("relative size-full select-none overflow-hidden bg-muted", className)}>
         <img
           src={coverUrl}
           alt={course.title}
-          className="size-full object-cover"
+          draggable={false}
+          className="size-full select-none object-cover"
           loading="lazy"
         />
       </div>
@@ -47,12 +39,7 @@ export function CourseThumbnail({
   }
 
   return (
-    <div
-      className={cn(
-        "relative size-full overflow-hidden bg-card select-none",
-        className
-      )}
-    >
+    <div className={cn("relative size-full overflow-hidden bg-card select-none", className)}>
       <div
         className="size-full [&>svg]:size-full [&>svg]:block"
         dangerouslySetInnerHTML={{ __html: svg }}

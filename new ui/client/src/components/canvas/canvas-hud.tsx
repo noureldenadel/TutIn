@@ -21,10 +21,7 @@ import {
   Undo2,
 } from "lucide-react";
 
-import {
-  STROKE_COLOR_OPTIONS,
-  type CanvasToolMode,
-} from "@/components/canvas/canvas-tokens";
+import { STROKE_COLOR_OPTIONS, type CanvasToolMode } from "@/components/canvas/canvas-tokens";
 import type { CanvasStrokeColorToken } from "@/lib/course-canvas";
 import { cn } from "@/lib/utils";
 
@@ -56,7 +53,8 @@ function HudBtn({
       title={shortcut ? `${label} (${shortcut})` : label}
       className={cn(
         "flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground disabled:pointer-events-none disabled:opacity-35 [&_svg]:size-4",
-        active && "bg-primary text-primary-foreground hover:bg-primary hover:text-primary-foreground",
+        active &&
+          "bg-primary text-primary-foreground hover:bg-primary hover:text-primary-foreground",
       )}
     >
       {children}
@@ -155,7 +153,11 @@ export function CanvasHud({
             drawerOpen && "bg-secondary text-foreground",
           )}
         >
-          {drawerOpen ? <PanelRightClose className="size-3.5" /> : <PanelRightOpen className="size-3.5" />}
+          {drawerOpen ? (
+            <PanelRightClose className="size-3.5" />
+          ) : (
+            <PanelRightOpen className="size-3.5" />
+          )}
           <span>Notes</span>
           {unplacedCount > 0 && (
             <span className="rounded-sm bg-primary/15 px-1.5 py-0.5 font-mono text-[10px] font-semibold tabular-nums text-primary">
@@ -233,7 +235,8 @@ export function CanvasHud({
                   onClick={() => onChangeStrokeColor(opt.token)}
                   className={cn(
                     "size-4 rounded-full border border-border/80 transition-transform hover:scale-110",
-                    strokeColor === opt.token && "ring-2 ring-primary ring-offset-2 ring-offset-card",
+                    strokeColor === opt.token &&
+                      "ring-2 ring-primary ring-offset-2 ring-offset-card",
                   )}
                   style={{ backgroundColor: opt.cssColor }}
                 />
@@ -265,34 +268,74 @@ export function CanvasHud({
         )}
 
         <div className="flex items-center gap-0.5 rounded-xl border border-border/70 bg-card/95 p-1 shadow-workspace backdrop-blur-sm">
-          <HudBtn label="Select" shortcut="V" active={tool === "select"} onClick={() => onSelectTool("select")}>
+          <HudBtn
+            label="Select"
+            shortcut="V"
+            active={tool === "select"}
+            onClick={() => onSelectTool("select")}
+          >
             <MousePointer2 />
           </HudBtn>
-          <HudBtn label="Pan" shortcut="H" active={tool === "pan"} onClick={() => onSelectTool("pan")}>
+          <HudBtn
+            label="Pan"
+            shortcut="H"
+            active={tool === "pan"}
+            onClick={() => onSelectTool("pan")}
+          >
             <Hand />
           </HudBtn>
 
           <div className="mx-1 h-4 w-px bg-border" />
 
-          <HudBtn label="Add note" shortcut="N" active={tool === "note"} onClick={() => onSelectTool("note")}>
+          <HudBtn
+            label="Add note"
+            shortcut="N"
+            active={tool === "note"}
+            onClick={() => onSelectTool("note")}
+          >
             <StickyNote />
           </HudBtn>
-          <HudBtn label="Add text" shortcut="T" active={tool === "text"} onClick={() => onSelectTool("text")}>
+          <HudBtn
+            label="Add text"
+            shortcut="T"
+            active={tool === "text"}
+            onClick={() => onSelectTool("text")}
+          >
             <Type />
           </HudBtn>
-          <HudBtn label="Connect" shortcut="A" active={tool === "connect"} onClick={() => onSelectTool("connect")}>
+          <HudBtn
+            label="Connect"
+            shortcut="A"
+            active={tool === "connect"}
+            onClick={() => onSelectTool("connect")}
+          >
             <ArrowUpRight />
           </HudBtn>
 
           <div className="mx-1 h-4 w-px bg-border" />
 
-          <HudBtn label="Pen" shortcut="P" active={tool === "pen"} onClick={() => onSelectTool("pen")}>
+          <HudBtn
+            label="Pen"
+            shortcut="P"
+            active={tool === "pen"}
+            onClick={() => onSelectTool("pen")}
+          >
             <Pen />
           </HudBtn>
-          <HudBtn label="Highlighter" shortcut="M" active={tool === "highlighter"} onClick={() => onSelectTool("highlighter")}>
+          <HudBtn
+            label="Highlighter"
+            shortcut="M"
+            active={tool === "highlighter"}
+            onClick={() => onSelectTool("highlighter")}
+          >
             <Highlighter />
           </HudBtn>
-          <HudBtn label="Eraser" shortcut="E" active={tool === "eraser"} onClick={() => onSelectTool("eraser")}>
+          <HudBtn
+            label="Eraser"
+            shortcut="E"
+            active={tool === "eraser"}
+            onClick={() => onSelectTool("eraser")}
+          >
             <Eraser />
           </HudBtn>
 

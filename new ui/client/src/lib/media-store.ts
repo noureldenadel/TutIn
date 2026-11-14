@@ -92,11 +92,7 @@ export function compressImageFileToBlob(
         return;
       }
       ctx.drawImage(img, 0, 0, width, height);
-      canvas.toBlob(
-        (blob) => resolve(blob ?? file),
-        "image/webp",
-        quality,
-      );
+      canvas.toBlob((blob) => resolve(blob ?? file), "image/webp", quality);
     };
     img.onerror = () => {
       URL.revokeObjectURL(url);

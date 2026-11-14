@@ -222,6 +222,36 @@
     min-width: 320px;
     text-rendering: optimizeLegibility;
   }
+
+  img,
+  svg,
+  a,
+  video {
+    -webkit-user-drag: none;
+    user-drag: none;
+  }
+
+  button,
+  [role="button"],
+  [role="tab"],
+  [role="tablist"],
+  [role="menuitem"],
+  [role="menuitemradio"],
+  [role="option"],
+  label,
+  summary {
+    -webkit-user-select: none;
+    user-select: none;
+  }
+}
+
+html.theme-transitioning,
+html.theme-transitioning *,
+html.theme-transitioning *::before,
+html.theme-transitioning *::after {
+  transition-property: background-color, border-color, color, fill, stroke, box-shadow !important;
+  transition-duration: 280ms !important;
+  transition-timing-function: cubic-bezier(0.22, 1, 0.36, 1) !important;
 }
 
 @utility custom-scrollbar {
@@ -560,7 +590,89 @@
   text-box: trim-both cap alphabetic;
 }
 
+/* Smooth dimension & layout transitions (Transitions.dev card resize curve) */
+:root {
+  --resize-dur: 300ms;
+  --resize-ease: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.t-resize {
+  transition:
+    width var(--resize-dur) var(--resize-ease),
+    height var(--resize-dur) var(--resize-ease),
+    max-width var(--resize-dur) var(--resize-ease),
+    max-height var(--resize-dur) var(--resize-ease),
+    padding var(--resize-dur) var(--resize-ease),
+    opacity var(--resize-dur) var(--resize-ease),
+    transform var(--resize-dur) var(--resize-ease);
+  will-change: width, height;
+}
+
+/* Sweeping colorful text shimmer ("Agent listening..." style) */
+@keyframes tutin-ai-text-shimmer {
+  0% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: -100% 50%;
+  }
+}
+
+.ai-shimmer-text {
+  background-image: linear-gradient(
+    105deg,
+    color-mix(in oklab, var(--foreground) 48%, transparent) 0%,
+    color-mix(in oklab, var(--foreground) 55%, transparent) 32%,
+    var(--foreground) 44%,
+    var(--primary) 50%,
+    var(--chart-2) 56%,
+    var(--chart-1) 61%,
+    color-mix(in oklab, var(--foreground) 55%, transparent) 69%,
+    color-mix(in oklab, var(--foreground) 48%, transparent) 100%
+  );
+  background-size: 240% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: tutin-ai-text-shimmer 2.4s linear infinite;
+}
+
+@keyframes tutin-ai-row-sheen {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+.ai-shimmer-row {
+  background-image: linear-gradient(
+    110deg,
+    color-mix(in oklab, var(--secondary) 85%, transparent) 0%,
+    color-mix(in oklab, var(--secondary) 85%, transparent) 30%,
+    color-mix(in oklab, var(--primary) 22%, var(--secondary)) 45%,
+    color-mix(in oklab, var(--chart-2) 24%, var(--secondary)) 52%,
+    color-mix(in oklab, var(--chart-1) 20%, var(--secondary)) 59%,
+    color-mix(in oklab, var(--secondary) 85%, transparent) 74%,
+    color-mix(in oklab, var(--secondary) 85%, transparent) 100%
+  );
+  background-size: 240% 100%;
+  animation: tutin-ai-row-sheen 2.2s linear infinite;
+}
+
 @media (prefers-reduced-motion: reduce) {
+  .t-resize {
+    transition: none !important;
+  }
+  .ai-shimmer-text {
+    animation: none !important;
+    background: none !important;
+    color: var(--foreground) !important;
+  }
+  .ai-shimmer-row {
+    animation: none !important;
+  }
   *, *::before, *::after {
     scroll-behavior: auto !important;
     transition-duration: 0.01ms !important;

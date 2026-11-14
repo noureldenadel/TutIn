@@ -79,11 +79,7 @@ function formatHistoryDateGroup(iso: string | null): string {
 
   const now = new Date();
   const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-  const entryStart = new Date(
-    parsed.getFullYear(),
-    parsed.getMonth(),
-    parsed.getDate(),
-  ).getTime();
+  const entryStart = new Date(parsed.getFullYear(), parsed.getMonth(), parsed.getDate()).getTime();
 
   const dayDiff = Math.round((todayStart - entryStart) / MS_PER_DAY);
   if (dayDiff === 0) return "Today";
@@ -180,10 +176,7 @@ export function HistoryPage() {
 
     return entries.filter((entry) => {
       const matchesQuery =
-        !q ||
-        `${entry.lesson} ${entry.courseTitle} ${entry.module}`
-          .toLowerCase()
-          .includes(q);
+        !q || `${entry.lesson} ${entry.courseTitle} ${entry.module}`.toLowerCase().includes(q);
       const matchesDate =
         dateFilter === "All Time" ||
         (dateFilter === "This Week"
@@ -230,9 +223,7 @@ export function HistoryPage() {
   return (
     <div className="mx-auto w-full max-w-[1440px] px-5 pb-12 pt-6 sm:px-8 sm:pt-8 lg:px-10">
       <header className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <h1 className="text-2xl font-bold tracking-tight text-foreground sm:text-3xl">
-          History
-        </h1>
+        <h1 className="text-2xl font-bold tracking-tight text-foreground sm:text-3xl">History</h1>
         <label className="flex h-11 min-w-0 items-center gap-2 rounded-lg bg-secondary/75 px-3 transition-colors focus-within:bg-card focus-within:ring-2 focus-within:ring-ring/30 sm:w-80 lg:w-96">
           <Search className="size-4 shrink-0 text-muted-foreground" />
           <input
@@ -393,9 +384,7 @@ function HistoryRow({
           {entry.courseTitle}
         </p>
         <div className="mt-2 flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
-          {instructor && (
-            <span className="font-medium text-foreground/80">{instructor}</span>
-          )}
+          {instructor && <span className="font-medium text-foreground/80">{instructor}</span>}
           <span className="flex items-center gap-1">
             <Clock className="size-3.5 shrink-0 text-muted-foreground" />
             {isExternalLink ? "Opened link" : `${entry.percent}% watched`}

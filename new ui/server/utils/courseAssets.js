@@ -37,7 +37,7 @@ export function getVaultDir(courseFolder) {
 }
 
 /**
- * Returns (and creates) the captions directory inside .tutin (or fallback to legacy Captions/).
+ * Returns (and creates) the captions directory inside .tutin/captions.
  */
 export function getCaptionsDir(courseFolder, relModulePath = '') {
     if (!courseFolder) return null
@@ -106,17 +106,154 @@ export function getSummariesVaultDir(courseFolder, relModulePath = '') {
 
 /**
  * Full path for a managed caption file.
- * e.g. /Course/.tutin/captions/Module 1/01 - Intro.ar.vtt
+ * e.g.
+ *   uploaded v1: /Course/.tutin/captions/Module 1/01 - Intro.ar.vtt
+ *   uploaded v2: /Course/.tutin/captions/Module 1/01 - Intro-u2.ar.vtt
+ *   generated:   /Course/.tutin/captions/Module 1/01 - Intro-generated.ar.vtt
  */
-export function getCaptionFilePath(courseFolder, relModulePath, videoBaseName, lang, origin = null) {
+export function getCaptionFilePath(courseFolder, relModulePath, videoBaseName, lang, origin = 'uploaded', version = 1) {
     const dir = getCaptionsDir(courseFolder, relModulePath)
     if (!dir) return null
 
     const isGenerated = origin === 'generated'
-    const originSuffix = isGenerated ? '-generated' : ''
+    const ver = Number(version) > 1 ? Number(version) : 1
+    const originSuffix = isGenerated ? '-generated' : (ver > 1 ? `-u${ver}` : '')
     const safeLang = (lang && lang !== 'source') ? lang : 'en'
 
     return path.join(dir, `${videoBaseName}${originSuffix}.${safeLang}.vtt`)
+}
+
+/**
+ * Build a deterministic track ID from (lang, origin, version).
+ * e.g. 'en:uploaded', 'en:uploaded:2', 'en:generated'
+ */
+export function buildTrackId(lang, origin = 'uploaded', version = 1) {
+    const safeLang = (lang && lang !== 'source') ? lang.toLowerCase().trim() : 'en'
+    const safeOrigin = origin === 'generated' ? 'generated' : 'uploaded'
+    const ver = safeOrigin === 'uploaded' && Number(version) > 1 ? Number(version) : 1
+    return ver > 1 ? `${safeLang}:${safeOrigin}:${ver}` : `${safeLang}:${safeOrigin}`
+}
+
+/**
+ * Build display label for origin + version.
+ * e.g. 'AI', 'Uploaded', 'Uploaded #2'
+ */
+export function buildTrackOriginLabel(origin = 'uploaded', version = 1) {
+    if (origin === 'generated') return 'AI'
+    const ver = Number(version) > 1 ? Number(version) : 1
+    return ver > 1 ? `Uploaded #${ver}` : 'Uploaded'
+}
+
+/**
+ * Normalize an array of subtitle_sources so that:
+ * 1. Every entry has `id`, `lang`, `origin` ('uploaded' | 'generated'), `version`, `label`.
+ * 2. Every language present has at least one `is_master: true` and at most one `is_master: true`.
+ */
+export function normalizeSubtitleSources(rawSources = [], courseLanguage = 'en') {
+    if (!Array.isArray(rawSources)) return []
+    const fallbackLang = (courseLanguage || 'en').toLowerCase().trim()
+
+    // Track assigned versions per lang for uploaded tracks
+    const usedUploadedVersions = new Map()
+    const normalized = []
+
+    for (const raw of rawSources) {
+        if (!raw || typeof raw !== 'object') continue
+        const rawLang = (raw.lang || raw.language || fallbackLang).toLowerCase().trim()
+        const lang = rawLang === 'source' ? fallbackLang : rawLang
+        const origin = raw.origin === 'generated' ? 'generated' : 'uploaded'
+
+        let version = 1
+        if (origin === 'uploaded') {
+            // Check if filename or raw.id or raw.version specifies a version > 1
+            let explicitVer = Number(raw.version) || 0
+            if (!explicitVer && typeof raw.id === 'string') {
+                const m = raw.id.match(/:uploaded:(\d+)$/)
+                if (m) explicitVer = Number(m[1])
+            }
+            if (!explicitVer && typeof raw.filePath === 'string') {
+                const base = path.basename(raw.filePath)
+                const m = base.match(/-u(\d+)\.[a-z0-9\-]+\.vtt$/i)
+                if (m) explicitVer = Number(m[1])
+            }
+
+            const usedSet = usedUploadedVersions.get(lang) || new Set()
+            if (explicitVer >= 1 && !usedSet.has(explicitVer)) {
+                version = explicitVer
+            } else {
+                let candidate = 1
+                while (usedSet.has(candidate)) candidate++
+                version = candidate
+            }
+            usedSet.add(version)
+            usedUploadedVersions.set(lang, usedSet)
+        }
+
+        const id = buildTrackId(lang, origin, version)
+        // Skip exact duplicate IDs (keep latest if AI generated)
+        const existingIdx = normalized.findIndex(item => item.id === id)
+        const entry = {
+            id,
+            lang,
+            origin,
+            version,
+            label: buildTrackOriginLabel(origin, version),
+            fileName: raw.fileName || (raw.filePath ? path.basename(raw.filePath) : undefined),
+            filePath: raw.filePath,
+            format: raw.format || 'vtt',
+            is_master: Boolean(raw.is_master),
+            is_ai_source: Boolean(raw.is_ai_source)
+        }
+
+        if (existingIdx >= 0) {
+            normalized[existingIdx] = {
+                ...normalized[existingIdx],
+                ...entry,
+                is_master: normalized[existingIdx].is_master || entry.is_master,
+                is_ai_source: normalized[existingIdx].is_ai_source || entry.is_ai_source
+            }
+        } else {
+            normalized.push(entry)
+        }
+    }
+
+    // Ensure each language has exactly one master track
+    const byLang = new Map()
+    for (const item of normalized) {
+        const list = byLang.get(item.lang) || []
+        list.push(item)
+        byLang.set(item.lang, list)
+    }
+
+    for (const [, list] of byLang.entries()) {
+        const masters = list.filter(x => x.is_master)
+        if (masters.length === 0) {
+            // Prefer latest uploaded track, otherwise AI generated
+            const uploadedTracks = list.filter(x => x.origin === 'uploaded')
+            const winner = uploadedTracks.length > 0
+                ? uploadedTracks[uploadedTracks.length - 1]
+                : list[0]
+            if (winner) winner.is_master = true
+        } else if (masters.length > 1) {
+            // Keep only the last marked master
+            masters.slice(0, -1).forEach(m => { m.is_master = false })
+        }
+    }
+
+    // Ensure exactly one is_ai_source across the video when tracks exist
+    const aiSources = normalized.filter(x => x.is_ai_source)
+    if (aiSources.length > 1) {
+        aiSources.slice(0, -1).forEach(s => { s.is_ai_source = false })
+    } else if (aiSources.length === 0 && normalized.length > 0) {
+        const defaultSource =
+            normalized.find(x => x.lang === fallbackLang && x.is_master) ||
+            normalized.find(x => x.lang === fallbackLang) ||
+            normalized.find(x => x.is_master) ||
+            normalized[0]
+        if (defaultSource) defaultSource.is_ai_source = true
+    }
+
+    return normalized
 }
 
 /**
@@ -240,9 +377,12 @@ export function getTranscriptsDir() {
     return dir
 }
 
-export function getCacheFilePath(videoId, lang) {
-    const suffix = lang && lang !== 'source' ? `.${lang}` : ''
-    return path.join(getTranscriptsDir(), `${videoId}${suffix}.json`)
+export function getCacheFilePath(videoId, lang, origin = 'uploaded', version = 1) {
+    const isGenerated = origin === 'generated'
+    const ver = Number(version) > 1 ? Number(version) : 1
+    const originSuffix = isGenerated ? '-generated' : (ver > 1 ? `-u${ver}` : '')
+    const safeLang = (lang && lang !== 'source') ? `.${lang}` : '.en'
+    return path.join(getTranscriptsDir(), `${videoId}${originSuffix}${safeLang}.json`)
 }
 
 // ── Caption Save & Load ─────────────────────────────────────────
@@ -252,11 +392,11 @@ export function getCacheFilePath(videoId, lang) {
  * For local courses: writes exclusively to `<courseFolder>/.tutin/captions/` and removes any stale AppData cache.
  * For cloud courses: writes to AppData cache.
  */
-export function saveCaptionFile(videoMeta, lang, chunks, origin = null) {
+export function saveCaptionFile(videoMeta, lang, chunks, origin = 'uploaded', version = 1) {
     const { id, courseFolder, relModulePath = '', videoBaseName } = videoMeta
 
     if (courseFolder && fs.existsSync(courseFolder)) {
-        const vttPath = getCaptionFilePath(courseFolder, relModulePath, videoBaseName, lang, origin)
+        const vttPath = getCaptionFilePath(courseFolder, relModulePath, videoBaseName, lang, origin, version)
         if (vttPath) {
             try {
                 fs.writeFileSync(vttPath, chunksToVTT(chunks), 'utf8')
@@ -267,7 +407,7 @@ export function saveCaptionFile(videoMeta, lang, chunks, origin = null) {
 
         // Clean up any stale AppData cache file so the local course folder is the sole source of truth
         try {
-            const staleCache = getCacheFilePath(id, lang)
+            const staleCache = getCacheFilePath(id, lang, origin, version)
             if (fs.existsSync(staleCache)) fs.unlinkSync(staleCache)
         } catch { }
 
@@ -275,7 +415,7 @@ export function saveCaptionFile(videoMeta, lang, chunks, origin = null) {
     }
 
     // Cloud course fallback: save to AppData
-    const cachePath = getCacheFilePath(id, lang)
+    const cachePath = getCacheFilePath(id, lang, origin, version)
     try {
         fs.writeFileSync(cachePath, JSON.stringify(chunks, null, 2), 'utf8')
     } catch { }
@@ -283,17 +423,6 @@ export function saveCaptionFile(videoMeta, lang, chunks, origin = null) {
     return cachePath
 }
 
-/**
- * Load caption chunks for a video + language.
- * Local course:
- *   1. Course .tutin/captions/ VTT file
- *   2. Legacy Captions/ VTT file
- *   3. Subtitle sources (sibling files next to video)
- *   (Never loads from AppData cache for local courses)
- * Cloud course:
- *   1. AppData cache
- *   2. Subtitle sources
- */
 function normalizeChunks(rawChunks) {
     if (!Array.isArray(rawChunks)) return []
     return rawChunks.map(c => {
@@ -308,133 +437,125 @@ function normalizeChunks(rawChunks) {
     })
 }
 
-export function loadCaptionChunks(videoId, lang, subtitleSources = [], courseFolder = null, relModulePath = '', videoBaseName = '') {
+/**
+ * Resolve the matching subtitle_sources entry for a requested track identifier:
+ * - Exact track id: e.g. 'en:uploaded:2', 'ar:generated', 'en:uploaded'
+ * - Language + origin: e.g. 'en:uploaded'
+ * - Plain language: e.g. 'ar' -> returns the `is_master: true` entry for 'ar'
+ * - 'source' -> returns `is_ai_source: true`, else `is_master` of courseLanguage, else first master
+ */
+export function resolveSubtitleSourceEntry(langOrTrackId, subtitleSources = [], courseLanguage = 'en') {
+    const normalized = normalizeSubtitleSources(subtitleSources, courseLanguage)
+    if (normalized.length === 0) return null
+
+    const reqStr = (langOrTrackId || 'source').toLowerCase().trim()
+
+    if (reqStr === 'source') {
+        const aiSrc = normalized.find(s => s.is_ai_source)
+        if (aiSrc) return aiSrc
+        const cLang = (courseLanguage || 'en').toLowerCase().trim()
+        const courseMaster = normalized.find(s => s.lang === cLang && s.is_master) || normalized.find(s => s.lang === cLang)
+        if (courseMaster) return courseMaster
+        return normalized.find(s => s.is_master) || normalized[0]
+    }
+
+    // 1. Exact ID match ('en:uploaded:2', 'en:generated', 'en:uploaded')
+    const exactId = normalized.find(s => s.id === reqStr)
+    if (exactId) return exactId
+
+    // 2. lang:origin[:version] match
+    if (reqStr.includes(':')) {
+        const parts = reqStr.split(':')
+        const tLang = parts[0]
+        const tOrigin = parts[1] === 'generated' ? 'generated' : 'uploaded'
+        const tVer = parts[2] ? Number(parts[2]) : null
+
+        if (tVer) {
+            const byVer = normalized.find(s => s.lang === tLang && s.origin === tOrigin && s.version === tVer)
+            if (byVer) return byVer
+        }
+        const byOriginMaster = normalized.find(s => s.lang === tLang && s.origin === tOrigin && s.is_master)
+        if (byOriginMaster) return byOriginMaster
+        const byOriginAny = normalized.find(s => s.lang === tLang && s.origin === tOrigin)
+        if (byOriginAny) return byOriginAny
+    }
+
+    // 3. Plain language match -> prefer `is_master: true`
+    const langMaster = normalized.find(s => s.lang === reqStr && s.is_master)
+    if (langMaster) return langMaster
+    return normalized.find(s => s.lang === reqStr) || null
+}
+
+export function loadCaptionChunks(videoId, lang, subtitleSources = [], courseFolder = null, relModulePath = '', videoBaseName = '', courseLanguage = 'en') {
     const isLocalCourse = Boolean(courseFolder && fs.existsSync(courseFolder))
+    const resolvedEntry = resolveSubtitleSourceEntry(lang, subtitleSources, courseLanguage)
 
-    if (isLocalCourse) {
-        // 1. Try subtitle_sources entry if available and valid
-        let targetLang = lang
-        let targetOrigin = null
-        if (lang && lang.includes(':')) {
-            const parts = lang.split(':')
-            targetLang = parts[0]
-            targetOrigin = parts[1]
-        }
-
-        let sourceEntry = subtitleSources.find(s =>
-            ((targetLang === 'source' && (!s.lang || s.lang === 'source')) || s.lang === targetLang) &&
-            (!targetOrigin || s.origin === targetOrigin) &&
-            s.is_master
-        )
-        if (!sourceEntry) {
-            sourceEntry = subtitleSources.find(s =>
-                ((targetLang === 'source' && (!s.lang || s.lang === 'source')) || s.lang === targetLang) &&
-                (!targetOrigin || s.origin === targetOrigin)
-            )
-        }
-        if (sourceEntry?.filePath && fs.existsSync(sourceEntry.filePath)) {
-            try {
-                const text = fs.readFileSync(sourceEntry.filePath, 'utf8')
-                const chunks = readCaptionFile(text, sourceEntry.filePath)
-                if (chunks.length) return normalizeChunks(chunks)
-            } catch { /* fall through */ }
-        }
-
-        // 2. Direct checks in course vault .tutin/captions/
-        if (videoBaseName) {
-            const cleanLang = (lang && lang !== 'source') ? lang : ''
-            const captionsDir = path.join(courseFolder, '.tutin', 'captions', relModulePath)
-
-            if (fs.existsSync(captionsDir) && cleanLang) {
-                // Check user provided / uploaded format: <base>.<lang>.vtt
-                const userVtt = path.join(captionsDir, `${videoBaseName}.${cleanLang}.vtt`)
-                if (fs.existsSync(userVtt)) {
-                    try {
-                        const text = fs.readFileSync(userVtt, 'utf8')
-                        const chunks = parseVTT(text)
-                        if (chunks.length) return normalizeChunks(chunks)
-                    } catch { /* fall through */ }
-                }
-
-                // Check AI generated format: <base>-generated.<lang>.vtt
-                const genVtt = path.join(captionsDir, `${videoBaseName}-generated.${cleanLang}.vtt`)
-                if (fs.existsSync(genVtt)) {
-                    try {
-                        const text = fs.readFileSync(genVtt, 'utf8')
-                        const chunks = parseVTT(text)
-                        if (chunks.length) return normalizeChunks(chunks)
-                    } catch { /* fall through */ }
-                }
-
-                // Check legacy format with -uploaded: <base>-uploaded.<lang>.vtt
-                const legacyUploadedVtt = path.join(captionsDir, `${videoBaseName}-uploaded.${cleanLang}.vtt`)
-                if (fs.existsSync(legacyUploadedVtt)) {
-                    try {
-                        const text = fs.readFileSync(legacyUploadedVtt, 'utf8')
-                        const chunks = parseVTT(text)
-                        if (chunks.length) return normalizeChunks(chunks)
-                    } catch { /* fall through */ }
-                }
-            }
-
-            // Also check for default .vtt when lang is 'source'
-            if (lang === 'source') {
-                const vaultSourceVtt = path.join(courseFolder, '.tutin', 'captions', relModulePath, `${videoBaseName}.vtt`)
-                if (fs.existsSync(vaultSourceVtt)) {
-                    try {
-                        const text = fs.readFileSync(vaultSourceVtt, 'utf8')
-                        const chunks = parseVTT(text)
-                        if (chunks.length) return normalizeChunks(chunks)
-                    } catch { /* fall through */ }
-                }
-                const vaultGenSourceVtt = path.join(courseFolder, '.tutin', 'captions', relModulePath, `${videoBaseName}-generated.vtt`)
-                if (fs.existsSync(vaultGenSourceVtt)) {
-                    try {
-                        const text = fs.readFileSync(vaultGenSourceVtt, 'utf8')
-                        const chunks = parseVTT(text)
-                        if (chunks.length) return normalizeChunks(chunks)
-                    } catch { /* fall through */ }
-                }
-            }
-
-            // Check legacy /Captions/ folder
-            if (cleanLang) {
-                const legacyVtt = path.join(courseFolder, 'Captions', relModulePath, `${videoBaseName}.${cleanLang}.vtt`)
-                if (fs.existsSync(legacyVtt)) {
-                    try {
-                        const text = fs.readFileSync(legacyVtt, 'utf8')
-                        const chunks = parseVTT(text)
-                        if (chunks.length) return normalizeChunks(chunks)
-                    } catch { /* fall through */ }
-                }
-            }
-        }
-    } else {
-        // Cloud course: check AppData cache
-        const cachePath = getCacheFilePath(videoId, lang)
-        if (fs.existsSync(cachePath)) {
-            try { return normalizeChunks(JSON.parse(fs.readFileSync(cachePath, 'utf8'))) } catch { /* fall through */ }
-        }
-    }
-
-    // Try any matching subtitle_sources fallback
-    let targetFallbackLang = lang
-    if (lang && lang.includes(':')) {
-        targetFallbackLang = lang.split(':')[0]
-    }
-    const isSourceLookup = !targetFallbackLang || targetFallbackLang === 'source'
-    let sourceEntry = subtitleSources.find(s =>
-        (isSourceLookup && (!s.lang || s.lang === 'source')) || s.lang === targetFallbackLang
-    )
-    if (!sourceEntry && isSourceLookup && subtitleSources.length > 0) {
-        sourceEntry = subtitleSources[0]
-    }
-    if (sourceEntry?.filePath && fs.existsSync(sourceEntry.filePath)) {
+    if (resolvedEntry?.filePath && fs.existsSync(resolvedEntry.filePath)) {
         try {
-            const text = fs.readFileSync(sourceEntry.filePath, 'utf8')
-            const chunks = readCaptionFile(text, sourceEntry.filePath)
-            if (chunks.length) return normalizeChunks(chunks)
+            const text = fs.readFileSync(resolvedEntry.filePath, 'utf8')
+            if (resolvedEntry.filePath.endsWith('.json')) {
+                const parsed = JSON.parse(text)
+                if (Array.isArray(parsed) && parsed.length > 0) return normalizeChunks(parsed)
+            } else {
+                const chunks = readCaptionFile(text, resolvedEntry.filePath)
+                if (chunks.length) return normalizeChunks(chunks)
+            }
         } catch { /* fall through */ }
+    }
+
+    let targetLang = (lang || 'en').toLowerCase().trim()
+    let targetOrigin = null
+    let targetVersion = 1
+    if (targetLang.includes(':')) {
+        const parts = targetLang.split(':')
+        targetLang = parts[0]
+        targetOrigin = parts[1]
+        if (parts[2]) targetVersion = Number(parts[2]) || 1
+    }
+    if (targetLang === 'source') {
+        targetLang = (courseLanguage || 'en').toLowerCase().trim()
+    }
+
+    if (isLocalCourse && videoBaseName) {
+        const captionsDir = path.join(courseFolder, '.tutin', 'captions', relModulePath)
+        if (fs.existsSync(captionsDir) && targetLang) {
+            const candidates = []
+            if (targetOrigin === 'generated') {
+                candidates.push(path.join(captionsDir, `${videoBaseName}-generated.${targetLang}.vtt`))
+            } else if (targetOrigin === 'uploaded' && targetVersion > 1) {
+                candidates.push(path.join(captionsDir, `${videoBaseName}-u${targetVersion}.${targetLang}.vtt`))
+            } else {
+                candidates.push(
+                    path.join(captionsDir, `${videoBaseName}.${targetLang}.vtt`),
+                    path.join(captionsDir, `${videoBaseName}-generated.${targetLang}.vtt`)
+                )
+            }
+
+            for (const candidate of candidates) {
+                if (fs.existsSync(candidate)) {
+                    try {
+                        const text = fs.readFileSync(candidate, 'utf8')
+                        const chunks = parseVTT(text)
+                        if (chunks.length) return normalizeChunks(chunks)
+                    } catch { /* fall through */ }
+                }
+            }
+        }
+    } else if (!isLocalCourse) {
+        const cacheCandidates = [
+            getCacheFilePath(videoId, targetLang, targetOrigin || 'uploaded', targetVersion),
+            getCacheFilePath(videoId, targetLang, 'generated', 1),
+            path.join(getTranscriptsDir(), `${videoId}.${targetLang}.json`),
+            path.join(getTranscriptsDir(), `${videoId}.json`)
+        ]
+        for (const cPath of cacheCandidates) {
+            if (fs.existsSync(cPath)) {
+                try {
+                    const parsed = JSON.parse(fs.readFileSync(cPath, 'utf8'))
+                    if (Array.isArray(parsed) && parsed.length > 0) return normalizeChunks(parsed)
+                } catch { /* fall through */ }
+            }
+        }
     }
 
     return []
@@ -481,90 +602,36 @@ export function listCourseLanguages(courseFolder) {
     }
 
     checkDir(path.join(courseFolder, '.tutin', 'captions'))
-    checkDir(path.join(courseFolder, 'Captions'))
 
     return { langs: [...langs] }
 }
 
 /**
- * List all languages available for a specific video.
- * For local courses: inspects exclusively the course folder (.tutin/captions, Captions, sibling files).
- * For cloud courses: inspects AppData cache and subtitleSources.
+ * List all languages and normalized track sources available for a specific video.
  */
-export function listVideoLanguages(videoId, subtitleSources = [], courseFolder = null, relModulePath = '', videoBaseName = '') {
-    const translatedLangs = new Set()
-    const isLocalCourse = Boolean(courseFolder && fs.existsSync(courseFolder))
-
-    if (isLocalCourse && videoBaseName) {
-        // Inspect course vault .tutin/captions/
-        const checkVaultDir = (baseDir) => {
-            const modDir = path.join(baseDir, relModulePath)
-            if (fs.existsSync(modDir)) {
-                try {
-                    const files = fs.readdirSync(modDir)
-                    for (const f of files) {
-                        if (f.includes('.tts.')) continue
-                        if (f.startsWith(videoBaseName) && f.endsWith('.vtt')) {
-                            const parts = f.split('.')
-                            if (parts.length >= 3) {
-                                const l = parts[parts.length - 2]
-                                if (l && l !== 'source') translatedLangs.add(l)
-                            }
-                        }
-                    }
-                } catch { }
-            }
-        }
-        checkVaultDir(path.join(courseFolder, '.tutin', 'captions'))
-        checkVaultDir(path.join(courseFolder, 'Captions'))
-    } else if (!isLocalCourse) {
-        // Cloud course: check AppData cache
-        const transcriptsDir = getTranscriptsDir()
-        try {
-            const files = fs.readdirSync(transcriptsDir)
-            for (const f of files) {
-                if (f.includes('.tts.')) continue
-                if (!f.startsWith(videoId)) continue
-                const withoutId = f.slice(videoId.length)
-                const match = withoutId.match(/^\.([a-z]{2,3}(?:-[a-z]{2,4})?)\.json$/)
-                if (match) translatedLangs.add(match[1])
-            }
-        } catch { }
-    }
-
-    let sourceExists = false
-    if (isLocalCourse && videoBaseName) {
-        sourceExists = (
-            fs.existsSync(path.join(courseFolder, '.tutin', 'captions', relModulePath, `${videoBaseName}.source.vtt`)) ||
-            fs.existsSync(path.join(courseFolder, '.tutin', 'captions', relModulePath, `${videoBaseName}.vtt`)) ||
-            fs.existsSync(path.join(courseFolder, '.tutin', 'captions', relModulePath, `${videoBaseName}-generated.vtt`)) ||
-            fs.existsSync(path.join(courseFolder, 'Captions', relModulePath, `${videoBaseName}.vtt`))
-        )
-    } else if (!isLocalCourse) {
-        sourceExists = fs.existsSync(path.join(getTranscriptsDir(), `${videoId}.json`))
-    }
-
-    const dbSources = subtitleSources.filter(s => {
+export function listVideoLanguages(videoId, subtitleSources = [], courseFolder = null, relModulePath = '', videoBaseName = '', courseLanguage = 'en') {
+    const normalized = normalizeSubtitleSources(subtitleSources, courseLanguage).filter(s => {
         if (s.filePath && !fs.existsSync(s.filePath)) return false
         return true
     })
 
-    const existingLangs = Array.from(new Set(dbSources
-        .filter(s => s.origin === 'existing' || s.origin === 'uploaded')
-        .map(s => s.lang || 'source')))
+    const existingLangs = Array.from(new Set(
+        normalized.filter(s => s.origin === 'uploaded').map(s => s.lang)
+    ))
 
-    if (existingLangs.includes('source') || dbSources.some(s => s.lang === 'source' || !s.lang)) {
-        sourceExists = true
+    const translatedLangs = Array.from(new Set(
+        normalized.filter(s => s.origin === 'generated').map(s => s.lang)
+    ))
+
+    const cLang = (courseLanguage || 'en').toLowerCase().trim()
+    const sourceExists = normalized.some(s => s.is_ai_source || s.lang === cLang) || normalized.length > 0
+
+    return {
+        sourceExists: Boolean(sourceExists),
+        translatedLangs,
+        existingLangs,
+        allSources: normalized
     }
-
-    dbSources
-        .filter(s => s.origin === 'generated' && s.lang !== 'source')
-        .forEach(s => translatedLangs.add(s.lang))
-
-    // Exclude languages that already exist as uploaded/existing sources
-    const uniqueTranslatedLangs = [...translatedLangs].filter(l => !existingLangs.includes(l))
-
-    return { sourceExists: Boolean(sourceExists), translatedLangs: uniqueTranslatedLangs, existingLangs }
 }
 
 // ── Dubbing Helpers ─────────────────────────────────────────────
@@ -849,7 +916,7 @@ export function scanVaultSummary(courseFolder) {
     scanDubsDir(path.join(courseFolder, '.tutin', 'dubs'))
     scanDubsDir(path.join(courseFolder, 'Dubs'))
 
-    // 2. Transcripts (.tutin/captions, legacy Captions, and sibling subs)
+    // 2. Transcripts (.tutin/captions and sibling subtitle files)
     const captionFiles = []
     const captionLangs = new Set()
     let generatedCaptionsCount = 0
@@ -882,7 +949,6 @@ export function scanVaultSummary(courseFolder) {
         walk(baseDir)
     }
     scanCaptionsDir(path.join(courseFolder, '.tutin', 'captions'))
-    scanCaptionsDir(path.join(courseFolder, 'Captions'))
 
     // 3. Summaries (.tutin/summaries/)
     const summaryFiles = []

@@ -21,9 +21,12 @@ export async function apiRequest<T = unknown>(
     data = null;
   }
   const errorMessage = !res.ok
-    ? (data && typeof data === "object" && "error" in data && typeof (data as { error?: unknown }).error === "string"
-        ? (data as { error: string }).error
-        : `HTTP ${res.status}`)
+    ? data &&
+      typeof data === "object" &&
+      "error" in data &&
+      typeof (data as { error?: unknown }).error === "string"
+      ? (data as { error: string }).error
+      : `HTTP ${res.status}`
     : undefined;
   return { ok: res.ok, status: res.status, data, error: errorMessage };
 }
@@ -35,4 +38,3 @@ export async function apiJson<T = unknown>(path: string, options?: RequestInit):
   }
   return (await res.json()) as T;
 }
-

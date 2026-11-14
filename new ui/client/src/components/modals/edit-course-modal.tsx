@@ -1,30 +1,13 @@
 import { useState, useEffect, useRef } from "react";
-import {
-  Clock,
-  Globe,
-  Image as ImageIcon,
-  Plus,
-  Trash2,
-  Upload,
-  X,
-} from "lucide-react";
+import { Clock, Globe, Image as ImageIcon, Plus, Trash2, Upload, X } from "lucide-react";
 import { toast } from "sonner";
 
 import { CourseThumbnail } from "@/components/layout/course-thumbnail";
 import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogTitle,
-} from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import {
-  isDirectLinkCourse,
-  updateCourse,
-  type Course,
-} from "@/lib/courses";
+import { isDirectLinkCourse, updateCourse, type Course } from "@/lib/courses";
 import { SUPPORTED_LANGUAGES, normalizeLanguageCode } from "@/lib/languages";
 import { compressImageFileToBlob } from "@/lib/media-store";
 import { parseDurationToSeconds } from "@/lib/course-lessons";
@@ -37,12 +20,7 @@ export interface EditCourseModalProps {
   onSave?: ((updatedCourse: Course) => void) | undefined;
 }
 
-export function EditCourseModal({
-  open,
-  onOpenChange,
-  course,
-  onSave,
-}: EditCourseModalProps) {
+export function EditCourseModal({ open, onOpenChange, course, onSave }: EditCourseModalProps) {
   const [activeTab, setActiveTab] = useState<"details" | "cover" | "progress">("details");
   const [title, setTitle] = useState("");
   const [instructor, setInstructor] = useState("");
@@ -184,7 +162,9 @@ export function EditCourseModal({
           <DialogTitle className="truncate text-base font-semibold tracking-tight text-foreground">
             Edit course
           </DialogTitle>
-          <DialogDescription className="sr-only">Modify course metadata and settings</DialogDescription>
+          <DialogDescription className="sr-only">
+            Modify course metadata and settings
+          </DialogDescription>
         </div>
 
         {/* Segmented Control Track */}
@@ -197,7 +177,7 @@ export function EditCourseModal({
                 "rounded-sm px-3.5 py-1.5 font-medium transition-colors",
                 activeTab === "details"
                   ? "bg-card text-foreground shadow-card"
-                  : "text-muted-foreground hover:text-foreground"
+                  : "text-muted-foreground hover:text-foreground",
               )}
             >
               Details
@@ -209,7 +189,7 @@ export function EditCourseModal({
                 "rounded-sm px-3.5 py-1.5 font-medium transition-colors",
                 activeTab === "cover"
                   ? "bg-card text-foreground shadow-card"
-                  : "text-muted-foreground hover:text-foreground"
+                  : "text-muted-foreground hover:text-foreground",
               )}
             >
               Cover image
@@ -222,7 +202,7 @@ export function EditCourseModal({
                   "rounded-sm px-3.5 py-1.5 font-medium transition-colors",
                   activeTab === "progress"
                     ? "bg-card text-foreground shadow-card"
-                    : "text-muted-foreground hover:text-foreground"
+                    : "text-muted-foreground hover:text-foreground",
                 )}
               >
                 Progress
@@ -250,7 +230,10 @@ export function EditCourseModal({
 
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 <div className="space-y-1.5">
-                  <Label htmlFor="course-instructor" className="text-xs font-medium text-foreground">
+                  <Label
+                    htmlFor="course-instructor"
+                    className="text-xs font-medium text-foreground"
+                  >
                     Instructor
                   </Label>
                   <Input
@@ -335,13 +318,11 @@ export function EditCourseModal({
               <div className="flex flex-col gap-5 sm:flex-row sm:items-center">
                 <div className="relative aspect-video w-full max-w-[240px] shrink-0 overflow-hidden rounded-xl bg-secondary shadow-card">
                   {thumbnailUrl ? (
-                    <img
-                      src={thumbnailUrl}
-                      alt={title}
-                      className="size-full object-cover"
-                    />
+                    <img src={thumbnailUrl} alt={title} className="size-full object-cover" />
                   ) : (
-                    <CourseThumbnail course={{ ...course, thumbnailUrl: undefined, thumbnailData: null }} />
+                    <CourseThumbnail
+                      course={{ ...course, thumbnailUrl: undefined, thumbnailData: null }}
+                    />
                   )}
                 </div>
 
@@ -424,7 +405,10 @@ export function EditCourseModal({
                 </div>
 
                 <div className="space-y-1.5">
-                  <Label htmlFor="completed-lessons" className="text-xs font-medium text-foreground">
+                  <Label
+                    htmlFor="completed-lessons"
+                    className="text-xs font-medium text-foreground"
+                  >
                     Completed lessons
                   </Label>
                   <Input
@@ -434,7 +418,9 @@ export function EditCourseModal({
                     max={lessons}
                     value={completedLessons}
                     onChange={(e) =>
-                      setCompletedLessons(Math.max(0, Math.min(lessons, parseInt(e.target.value) || 0)))
+                      setCompletedLessons(
+                        Math.max(0, Math.min(lessons, parseInt(e.target.value) || 0)),
+                      )
                     }
                     className="rounded-lg border-0 bg-secondary/75 text-sm focus-visible:bg-background"
                   />
@@ -496,4 +482,3 @@ export function EditCourseModal({
     </Dialog>
   );
 }
-

@@ -25,7 +25,11 @@ interface AnalyticsHistoryItem {
 }
 
 function Card({ className, children }: { className?: string; children: ReactNode }) {
-  return <section className={cn("min-w-0 rounded-xl bg-card p-6 shadow-card", className)}>{children}</section>;
+  return (
+    <section className={cn("min-w-0 rounded-xl bg-card p-6 shadow-card", className)}>
+      {children}
+    </section>
+  );
 }
 
 function Metric({
@@ -87,7 +91,7 @@ function Heatmap({ byDate }: { byDate: Map<string, { min: number; lessons: numbe
     return out;
   }, [byDate, range]);
 
-  const weeks: typeof days[] = [];
+  const weeks: (typeof days)[] = [];
   for (let i = 0; i < days.length; i += 7) weeks.push(days.slice(i, i + 7));
 
   const level = (m: number) =>
@@ -337,7 +341,9 @@ function LearningFocus({ courses }: { courses: Course[] }) {
           <ul className="min-w-0 w-full space-y-3 sm:w-auto sm:flex-1">
             {fields.map((u) => (
               <li key={u.label} className="flex items-start gap-3 text-sm">
-                <span className={cn("mt-1.5 size-2.5 shrink-0 rounded-full", u.cls.split(" ")[1])} />
+                <span
+                  className={cn("mt-1.5 size-2.5 shrink-0 rounded-full", u.cls.split(" ")[1])}
+                />
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center justify-between gap-2">
                     <span className="truncate font-medium text-foreground">{u.label}</span>
@@ -422,7 +428,9 @@ export function AnalyticsDashboard() {
       if (Number.isNaN(d.getTime())) continue;
       d.setHours(0, 0, 0, 0);
       const key = toLocalDateKey(d);
-      const estimatedSecs = Math.round((item.video.duration || 0) * (item.video.watchProgress || 0));
+      const estimatedSecs = Math.round(
+        (item.video.duration || 0) * (item.video.watchProgress || 0),
+      );
       const existing = byDate.get(key);
       if (!existing) {
         byDate.set(key, { min: Math.max(1, Math.round(estimatedSecs / 60)), lessons: 1 });
@@ -432,7 +440,8 @@ export function AnalyticsDashboard() {
     // Fallback watch time from video progress if no analytics sessions recorded yet
     if (totalWatchSeconds === 0 && historyItems.length > 0) {
       totalWatchSeconds = historyItems.reduce(
-        (sum, item) => sum + Math.round((item.video.duration || 0) * (item.video.watchProgress || 0)),
+        (sum, item) =>
+          sum + Math.round((item.video.duration || 0) * (item.video.watchProgress || 0)),
         0,
       );
     }
@@ -468,7 +477,9 @@ export function AnalyticsDashboard() {
       prevTime = t;
     }
 
-    const completedCourses = courses.filter((c) => c.completionPercentage === 100 || c.progress === 100).length;
+    const completedCourses = courses.filter(
+      (c) => c.completionPercentage === 100 || c.progress === 100,
+    ).length;
     const completionPct =
       courses.length > 0 ? Math.round((completedCourses / courses.length) * 100) : 0;
 
@@ -487,7 +498,9 @@ export function AnalyticsDashboard() {
   return (
     <div className="mx-auto w-full max-w-[1440px] px-5 pb-12 pt-6 sm:px-8 sm:pt-8 lg:px-10">
       <header className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <h1 className="text-2xl font-bold tracking-tight text-foreground sm:text-3xl">Statistics</h1>
+        <h1 className="text-2xl font-bold tracking-tight text-foreground sm:text-3xl">
+          Statistics
+        </h1>
         {(coursesLoading || dataLoading) && (
           <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
             <Loader2 className="size-3.5 animate-spin" /> Syncing…
@@ -506,7 +519,12 @@ export function AnalyticsDashboard() {
               +{Number((computed.weekWatchSeconds / 3600).toFixed(1))}h this week
             </span>
           </Metric>
-          <Metric warm icon={<Flame className="size-5" />} label="Streak" value={`${computed.currentStreak} ${computed.currentStreak === 1 ? "day" : "days"}`}>
+          <Metric
+            warm
+            icon={<Flame className="size-5" />}
+            label="Streak"
+            value={`${computed.currentStreak} ${computed.currentStreak === 1 ? "day" : "days"}`}
+          >
             Personal best: {computed.bestStreak} {computed.bestStreak === 1 ? "day" : "days"}
           </Metric>
           <Metric

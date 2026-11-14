@@ -3,7 +3,7 @@
 Local-first desktop web workstation for organizing, studying, and annotating local video courses, YouTube playlists, Google Drive collections, and external course links.
 
 > [!NOTE]
-> AI transcription, neural translation, AI summarization, and XTTS voice dubbing backends from TutIn v5 are intentionally excluded in `v6.0` pending a ground-up rebuild. Manual `.srt`/`.vtt` subtitle import, Smart Captions batch matching, and viewing existing `.tutin/summaries/*.md` files remain active, while AI and Voice controls are disabled in the UI.
+> AI speech-to-text transcription (Python `faster-whisper` + Silero VAD with automatic WebGPU/WASM browser fallback), 27-language subtitle translation (offline `Xenova/nllb-200-distilled-600M` worker + OpenRouter dialect translation for Egyptian & Saudi Arabic), clause-level cue normalization, and two-origin (`Uploaded` vs `AI`) multi-track subtitle management (`Master` & `Source` selection) are active across the Video Player, Curriculum Manager, and Settings (`AI` tab). XTTS voice dubbing synthesis and AI summarization remain deferred to a future phase.
 
 ## Quick Start
 

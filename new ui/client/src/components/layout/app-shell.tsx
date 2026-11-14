@@ -48,14 +48,16 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { Link, useRouterState } from "@tanstack/react-router";
+import {
+  cancelAllTranscriptJobs,
+  cancelTranscriptJob,
+  useTranscriptJobs,
+} from "@/lib/transcript-ai";
+import { getLanguageLabel } from "@/lib/languages";
 import {
   COURSE_SORT_OPTIONS,
   deleteCourse,
@@ -79,7 +81,7 @@ import { EditCourseModal } from "@/components/modals/edit-course-modal";
 import { AddCourseModal, type AddCourseSource } from "@/components/modals/add-course-modal";
 import { DotLogo } from "@/components/layout/dot-logo";
 import { CourseThumbnail } from "@/components/layout/course-thumbnail";
-import { InstructorAvatar } from "@/components/layout/instructor-avatar";
+import { InstructorAvatar, normalizeInstructorSlug } from "@/components/layout/instructor-avatar";
 import { Toaster, toast } from "sonner";
 import { trackExternalCourseOpen } from "@/lib/watch-history";
 
@@ -131,12 +133,28 @@ function DockButton({
     <Tooltip>
       <TooltipTrigger asChild>
         {to ? (
-          <Button asChild variant="ghost" size="icon" className={cls}><Link to={to} aria-label={label} aria-current={active ? "page" : undefined}>{children}</Link></Button>
+          <Button asChild variant="ghost" size="icon" className={cls}>
+            <Link to={to} aria-label={label} aria-current={active ? "page" : undefined}>
+              {children}
+            </Link>
+          </Button>
         ) : (
-          <Button type="button" variant="ghost" size="icon" aria-label={label} aria-pressed={active} onClick={onClick} className={cls}>{children}</Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            aria-label={label}
+            aria-pressed={active}
+            onClick={onClick}
+            className={cls}
+          >
+            {children}
+          </Button>
         )}
       </TooltipTrigger>
-      <TooltipContent side="right" sideOffset={10}>{label}</TooltipContent>
+      <TooltipContent side="right" sideOffset={10}>
+        {label}
+      </TooltipContent>
     </Tooltip>
   );
 }
@@ -153,13 +171,159 @@ function IconDock({
   onSettings: () => void;
 }) {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
+  const jobsMap = useTranscriptJobs();
+  const activeJobs = useMemo(
+    () =>
+      Object.values(jobsMap).filter((j) => j.status === "running" || j.status === "queued"),
+    [jobsMap],
+  );
+  const [celebrating, setCelebrating] = useState(false);
+  const [jobsPopoverOpen, setJobsPopoverOpen] = useState(false);
+  const prevActiveCountRef = useRef(0);
+  const hoverCloseTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    const prev = prevActiveCountRef.current;
+    const curr = activeJobs.length;
+    prevActiveCountRef.current = curr;
+
+    if (prev > 0 && curr === 0) {
+      setJobsPopoverOpen(false);
+      setCelebrating(true);
+      const id = window.setTimeout(() => setCelebrating(false), 2400);
+      return () => window.clearTimeout(id);
+    }
+    return undefined;
+  }, [activeJobs.length]);
+
+  const logoMode =
+    activeJobs.length > 0
+      ? "thinking"
+      : celebrating
+        ? "celebrate"
+        : pathname.startsWith("/learn")
+          ? "playing"
+          : "idle";
+
+  const openJobsHover = () => {
+    if (hoverCloseTimerRef.current !== null) {
+      window.clearTimeout(hoverCloseTimerRef.current);
+      hoverCloseTimerRef.current = null;
+    }
+    if (activeJobs.length > 0) {
+      setJobsPopoverOpen(true);
+    }
+  };
+
+  const closeJobsHover = () => {
+    if (hoverCloseTimerRef.current !== null) {
+      window.clearTimeout(hoverCloseTimerRef.current);
+    }
+    hoverCloseTimerRef.current = window.setTimeout(() => {
+      setJobsPopoverOpen(false);
+    }, 180);
+  };
+
   const indicatorStyle = {
     transform: `translate3d(0, calc(${activeIndex} * 3rem), 0)`,
   };
 
   return (
-    <aside className="sticky top-0 flex h-dvh w-16 shrink-0 flex-col items-center py-3 sm:py-4 select-none z-30" aria-label="Main navigation">
-      <Link to="/" className="flex size-10 items-center justify-center rounded-lg text-foreground transition-colors hover:text-foreground/70 shrink-0" aria-label="TutIn home"><DotLogo mode={pathname.startsWith("/learn") ? "playing" : "idle"} /></Link>
+    <aside
+      className="sticky top-0 flex h-dvh w-16 shrink-0 flex-col items-center py-3 sm:py-4 select-none z-30"
+      aria-label="Main navigation"
+    >
+      {activeJobs.length > 0 ? (
+        <Popover open={jobsPopoverOpen} onOpenChange={setJobsPopoverOpen}>
+          <PopoverTrigger asChild>
+            <button
+              type="button"
+              onMouseEnter={openJobsHover}
+              onMouseLeave={closeJobsHover}
+              className="relative flex size-10 shrink-0 items-center justify-center rounded-lg text-foreground transition-colors hover:bg-accent/60"
+              aria-label={`Generating subtitles (${activeJobs.length})`}
+            >
+              <DotLogo mode={logoMode} />
+            </button>
+          </PopoverTrigger>
+          <PopoverContent
+            side="right"
+            align="start"
+            sideOffset={12}
+            onMouseEnter={openJobsHover}
+            onMouseLeave={closeJobsHover}
+            className="w-72 rounded-xl border border-border/50 bg-card p-3 shadow-workspace"
+          >
+            <div className="flex items-center justify-between gap-2 pb-2">
+              <span className="ai-shimmer-text truncate text-xs font-semibold">
+                Subtitles ({activeJobs.length})
+              </span>
+              {activeJobs.length > 1 && (
+                <button
+                  type="button"
+                  onClick={() => cancelAllTranscriptJobs()}
+                  className="text-[11px] font-medium text-muted-foreground transition-colors hover:text-destructive"
+                >
+                  Cancel all
+                </button>
+              )}
+            </div>
+            <div className="max-h-56 space-y-1.5 overflow-y-auto custom-scrollbar-sm">
+              {activeJobs.map((job) => (
+                <div
+                  key={job.videoId}
+                  className="ai-shimmer-row relative overflow-hidden rounded-lg border border-border/50 bg-secondary/55 px-2.5 py-2"
+                >
+                  <div className="flex items-center justify-between gap-2 text-xs">
+                    <Link
+                      to="/learn/$courseId"
+                      params={{ courseId: job.courseId }}
+                      onClick={() => setJobsPopoverOpen(false)}
+                      className="min-w-0 flex-1 truncate font-medium text-foreground hover:text-primary"
+                    >
+                      {job.videoTitle}
+                    </Link>
+                    <div className="flex shrink-0 items-center gap-1.5">
+                      <span className="font-mono text-[11px] font-semibold text-primary tabular-nums">
+                        {job.status === "queued" ? "Queued" : `${job.progress}%`}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => cancelTranscriptJob(job.videoId)}
+                        title="Cancel"
+                        aria-label="Cancel"
+                        className="rounded p-0.5 text-muted-foreground transition-colors hover:bg-destructive/15 hover:text-destructive"
+                      >
+                        <X className="size-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                  <div className="mt-0.5 flex items-center justify-between text-[11px] text-muted-foreground">
+                    <span className="truncate">
+                      {job.mode === "transcribe" ? "Transcribe" : "Translate"} ·{" "}
+                      {getLanguageLabel(job.targetLanguage)} · AI
+                    </span>
+                  </div>
+                  <div className="mt-1.5 h-1 w-full overflow-hidden rounded-full bg-secondary">
+                    <div
+                      className="h-full bg-gradient-to-r from-primary via-chart-2 to-chart-1 transition-all duration-300"
+                      style={{ width: `${Math.max(5, job.progress)}%` }}
+                    />
+                  </div>
+                </div>
+              ))}
+            </div>
+          </PopoverContent>
+        </Popover>
+      ) : (
+        <Link
+          to="/"
+          className="flex size-10 items-center justify-center rounded-lg text-foreground transition-colors hover:text-foreground/70 shrink-0"
+          aria-label="TutIn home"
+        >
+          <DotLogo mode={logoMode} />
+        </Link>
+      )}
       <nav className="relative mt-9 flex flex-col gap-2 shrink-0">
         <span
           aria-hidden="true"
@@ -174,15 +338,37 @@ function IconDock({
         {navItems.map((item, idx) => {
           const Icon = item.icon;
           return (
-            <DockButton key={item.label} label={item.label} to={item.to} active={idx === activeIndex}>
+            <DockButton
+              key={item.label}
+              label={item.label}
+              to={item.to}
+              active={idx === activeIndex}
+            >
               <Icon />
             </DockButton>
           );
         })}
       </nav>
       <div className="mt-auto flex flex-col items-center gap-2 shrink-0 pt-4">
-        <DockButton label={dark ? "Light theme" : "Dark theme"} onClick={onThemeToggle}>{dark ? <Sun /> : <Moon />}</DockButton>
-        <DockButton label="Settings" onClick={onSettings}><Settings /></DockButton>
+        <DockButton label={dark ? "Light theme" : "Dark theme"} onClick={onThemeToggle}>
+          <span className="relative flex size-4 items-center justify-center">
+            <Sun
+              className={cn(
+                "size-4 transition-all duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none",
+                dark ? "rotate-0 scale-100 opacity-100" : "-rotate-90 scale-0 opacity-0",
+              )}
+            />
+            <Moon
+              className={cn(
+                "absolute size-4 transition-all duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none",
+                dark ? "rotate-90 scale-0 opacity-0" : "rotate-0 scale-100 opacity-100",
+              )}
+            />
+          </span>
+        </DockButton>
+        <DockButton label="Settings" onClick={onSettings}>
+          <Settings />
+        </DockButton>
       </div>
     </aside>
   );
@@ -202,12 +388,20 @@ function AddCourseControl() {
   return (
     <>
       <div className="flex shrink-0 overflow-hidden rounded-lg shadow-card">
-        <Button size="lg" onClick={() => setSource("local")} className="rounded-none rounded-l-lg border-r border-primary-foreground/20 px-4">
+        <Button
+          size="lg"
+          onClick={() => setSource("local")}
+          className="rounded-none rounded-l-lg border-r border-primary-foreground/20 px-4"
+        >
           <Plus /> Add Course
         </Button>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button size="lg" aria-label="Course sources" className="rounded-none rounded-r-lg px-3">
+            <Button
+              size="lg"
+              aria-label="Course sources"
+              className="rounded-none rounded-r-lg px-3"
+            >
               <ChevronDown />
             </Button>
           </DropdownMenuTrigger>
@@ -220,19 +414,44 @@ function AddCourseControl() {
             </DropdownMenuItem>
             <DropdownMenuItem onSelect={() => setSource("youtube")} className="gap-2.5 rounded-md">
               <svg className="size-4 shrink-0 fill-current text-foreground" viewBox="0 0 24 24">
-                <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z" fillRule="evenodd" />
+                <path
+                  d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"
+                  fillRule="evenodd"
+                />
               </svg>
               YouTube
             </DropdownMenuItem>
             <DropdownMenuItem onSelect={() => setSource("drive")} className="gap-2.5 rounded-md">
               <svg className="size-4 shrink-0 fill-current text-foreground" viewBox="0 0 192 192">
-                <mask id="a" width="168" height="154" x="12" y="18" maskUnits="userSpaceOnUse" style={{ maskType: "alpha" }}>
-                  <path fill="#fff" d="M63.09 37c14.626-25.333 51.193-25.334 65.819 0l45.033 78c14.626 25.334-3.657 57.001-32.91 57.001H50.967c-29.253 0-47.536-31.667-32.91-57.001z" />
+                <mask
+                  id="a"
+                  width="168"
+                  height="154"
+                  x="12"
+                  y="18"
+                  maskUnits="userSpaceOnUse"
+                  style={{ maskType: "alpha" }}
+                >
+                  <path
+                    fill="#fff"
+                    d="M63.09 37c14.626-25.333 51.193-25.334 65.819 0l45.033 78c14.626 25.334-3.657 57.001-32.91 57.001H50.967c-29.253 0-47.536-31.667-32.91-57.001z"
+                  />
                 </mask>
                 <g mask="url(#a)">
-                  <path fill="currentColor" opacity="0.9" d="M206.905 172.02h-91.888l-19.015-32.934 45.944-79.578z" />
-                  <path fill="currentColor" opacity="0.65" d="M-14.919 172.006 50.04 59.494v.002L31.032 92.422h38.02L115 172.004l-129.918.001z" />
-                  <path fill="currentColor" d="M96.007-20.085 141.954 59.5l-19.011 32.928H31.048z" />
+                  <path
+                    fill="currentColor"
+                    opacity="0.9"
+                    d="M206.905 172.02h-91.888l-19.015-32.934 45.944-79.578z"
+                  />
+                  <path
+                    fill="currentColor"
+                    opacity="0.65"
+                    d="M-14.919 172.006 50.04 59.494v.002L31.032 92.422h38.02L115 172.004l-129.918.001z"
+                  />
+                  <path
+                    fill="currentColor"
+                    d="M96.007-20.085 141.954 59.5l-19.011 32.928H31.048z"
+                  />
                 </g>
               </svg>
               Google Drive
@@ -360,7 +579,10 @@ function CourseMenu({
               <DropdownMenuItem className="rounded-md cursor-pointer" onClick={handleEdit}>
                 <Pencil className="size-4" /> Edit details
               </DropdownMenuItem>
-              <DropdownMenuItem className="rounded-md text-destructive focus:text-destructive cursor-pointer" onClick={handleDeleteClick}>
+              <DropdownMenuItem
+                className="rounded-md text-destructive focus:text-destructive cursor-pointer"
+                onClick={handleDeleteClick}
+              >
                 <Trash2 className="size-4" /> Delete
               </DropdownMenuItem>
             </>
@@ -380,11 +602,17 @@ function CourseMenu({
                 </DropdownMenuItem>
               )}
               {course.folderPath && (
-                <DropdownMenuItem className="rounded-md cursor-pointer" onClick={handleShowInExplorer}>
+                <DropdownMenuItem
+                  className="rounded-md cursor-pointer"
+                  onClick={handleShowInExplorer}
+                >
                   <FolderOpen className="size-4" /> Show in Explorer
                 </DropdownMenuItem>
               )}
-              <DropdownMenuItem className="rounded-md text-destructive focus:text-destructive cursor-pointer" onClick={handleDeleteClick}>
+              <DropdownMenuItem
+                className="rounded-md text-destructive focus:text-destructive cursor-pointer"
+                onClick={handleDeleteClick}
+              >
                 <Trash2 className="size-4" /> Delete
               </DropdownMenuItem>
             </>
@@ -428,8 +656,7 @@ export function CourseCard({
   onRescan?: ((course: Course) => void) | undefined;
   onEdit?: ((course: Course) => void) | undefined;
 }) {
-  const completed =
-    course.completedVideos ?? Math.round((course.lessons * course.progress) / 100);
+  const completed = course.completedVideos ?? Math.round((course.lessons * course.progress) / 100);
   const isComplete = course.completionPercentage >= 100;
   const isDirectLink = isDirectLinkCourse(course);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -462,29 +689,32 @@ export function CourseCard({
   }, []);
 
   return (
-     <article
-       data-menu-open={menuGrace ? "true" : undefined}
-       className="group relative flex h-full min-w-0 flex-col overflow-hidden rounded-xl bg-card shadow-card transition-transform duration-300 hover:-translate-y-1 data-[menu-open=true]:-translate-y-1"
-     >
-       {isDirectLink ? (
-         <a
-           href={course.courseUrl}
-           target="_blank"
-           rel="noopener noreferrer"
-           onClick={() => trackExternalCourseOpen(String(course.id))}
-           className="absolute inset-0 z-10 rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
-           aria-label={`Open ${course.title} in new tab`}
-           title={course.title}
-         />
-       ) : (
-         <Link
-           className="absolute inset-0 z-10 rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
-           to="/learn/$courseId"
-           params={{ courseId: String(course.id) }}
-           aria-label={`Open ${course.title}`}
-           title={course.title}
-         />
-       )}
+    <article
+      data-menu-open={menuGrace ? "true" : undefined}
+      onDragStart={(e) => e.preventDefault()}
+      className="group relative flex h-full min-w-0 select-none flex-col overflow-hidden rounded-xl bg-card shadow-card transition-transform duration-300 hover:-translate-y-1 data-[menu-open=true]:-translate-y-1"
+    >
+      {isDirectLink ? (
+        <a
+          href={course.courseUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          draggable={false}
+          onClick={() => trackExternalCourseOpen(String(course.id))}
+          className="absolute inset-0 z-10 rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+          aria-label={`Open ${course.title} in new tab`}
+          title={course.title}
+        />
+      ) : (
+        <Link
+          draggable={false}
+          className="absolute inset-0 z-10 rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+          to="/learn/$courseId"
+          params={{ courseId: String(course.id) }}
+          aria-label={`Open ${course.title}`}
+          title={course.title}
+        />
+      )}
       <div className="relative aspect-video overflow-hidden">
         {/* Thumbnail with smooth 700ms hover zoom */}
         <div className="size-full transition-transform duration-700 ease-out group-hover:scale-105 group-data-[menu-open=true]:scale-105">
@@ -500,7 +730,16 @@ export function CourseCard({
             {isDirectLink ? (
               <Link2 className="size-6 text-foreground dark:text-white" />
             ) : (
-              <svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="size-6 translate-x-[0.5px] text-foreground dark:text-white" aria-hidden="true">
+              <svg
+                viewBox="0 0 24 24"
+                fill="currentColor"
+                stroke="currentColor"
+                strokeWidth={2}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                className="size-6 translate-x-[0.5px] text-foreground dark:text-white"
+                aria-hidden="true"
+              >
                 <polygon points="6 3 20 12 6 21 6 3" />
               </svg>
             )}
@@ -529,25 +768,35 @@ export function CourseCard({
           {course.title}
         </h2>
         {course.instructor.trim() ? (
-          <div className="mt-3 flex items-center gap-2.5">
-            <InstructorAvatar name={course.instructor} course={course} size="sm" />
-            <span className="truncate text-sm text-muted-foreground">{course.instructor}</span>
+          <div className="mt-3 flex items-center">
+            <Link
+              to="/instructors"
+              search={{ instructor: normalizeInstructorSlug(course.instructor) }}
+              onClick={(e) => e.stopPropagation()}
+              className="relative z-20 inline-flex min-w-0 max-w-full items-center gap-2.5 rounded-md text-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              title={`View ${course.instructor}`}
+            >
+              <InstructorAvatar name={course.instructor} course={course} size="sm" />
+              <span className="truncate">{course.instructor}</span>
+            </Link>
           </div>
         ) : null}
         <div className="mt-auto pt-5">
           <div className="h-1.5 overflow-hidden rounded-sm bg-secondary">
             <div
-              className={cn("h-full transition-colors", isComplete ? "bg-chart-4" : "bg-foreground/55")}
+              className={cn(
+                "h-full transition-colors",
+                isComplete ? "bg-chart-4" : "bg-foreground/55",
+              )}
               style={{ width: `${course.progress}%` }}
             />
           </div>
           <div className="mt-2.5 flex items-center justify-between text-xs">
-            <span className="text-muted-foreground">{completed} / {course.lessons} lessons</span>
+            <span className="text-muted-foreground">
+              {completed} / {course.lessons} lessons
+            </span>
             <span
-              className={cn(
-                "font-semibold",
-                isComplete ? "text-chart-4" : "text-foreground/75",
-              )}
+              className={cn("font-semibold", isComplete ? "text-chart-4" : "text-foreground/75")}
             >
               {course.progress}%
             </span>
@@ -560,26 +809,24 @@ export function CourseCard({
 
 function EmptyState({ clear }: { clear: () => void }) {
   return (
-     <div className="col-span-full flex min-h-96 flex-col items-center justify-center rounded-xl bg-secondary/40 px-6 py-14 text-center">
+    <div className="col-span-full flex min-h-96 flex-col items-center justify-center rounded-xl bg-secondary/40 px-6 py-14 text-center">
       <Library className="size-10 text-muted-foreground" strokeWidth={1.5} />
       <h2 className="mt-5 text-lg font-semibold">No courses found</h2>
-      <p className="mt-2 max-w-sm text-sm leading-6 text-muted-foreground">No courses match this view.</p>
-       <Button variant="secondary" className="mt-6 rounded-md" onClick={clear}>Clear filters</Button>
+      <p className="mt-2 max-w-sm text-sm leading-6 text-muted-foreground">
+        No courses match this view.
+      </p>
+      <Button variant="secondary" className="mt-6 rounded-md" onClick={clear}>
+        Clear filters
+      </Button>
     </div>
   );
 }
 
-export function AppShell({
-  children,
-}: {
-  children: ReactNode;
-}) {
+export function AppShell({ children }: { children: ReactNode }) {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const activeNavIndex = getActiveNavIndex(pathname);
   const fixedViewport =
-    pathname === "/roadmap" ||
-    pathname.startsWith("/roadmap/") ||
-    pathname.startsWith("/canvas/");
+    pathname === "/roadmap" || pathname.startsWith("/roadmap/") || pathname.startsWith("/canvas/");
   const mainRef = useRef<HTMLElement>(null);
   const [navMotion, setNavMotion] = useState({
     pathname,
@@ -608,6 +855,7 @@ export function AppShell({
   const [welcomeOpen, setWelcomeOpen] = useState(false);
   const [rescanCourse, setRescanCourse] = useState<Course | null>(null);
   const [editingCourse, setEditingCourse] = useState<Course | null>(null);
+  const themeTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     const syncThemeDom = (themeMode: ThemeMode) => {
@@ -661,9 +909,23 @@ export function AppShell({
       next === "system"
         ? window.matchMedia("(prefers-color-scheme: dark)").matches
         : next === "dark";
+    const root = document.documentElement;
+    const isChanging = root.classList.contains("dark") !== isDark;
+
+    if (isChanging) {
+      if (themeTimerRef.current !== null) {
+        window.clearTimeout(themeTimerRef.current);
+      }
+      root.classList.add("theme-transitioning");
+      themeTimerRef.current = window.setTimeout(() => {
+        root.classList.remove("theme-transitioning");
+        themeTimerRef.current = null;
+      }, 320);
+    }
+
     setMode(next);
     setDark(isDark);
-    document.documentElement.classList.toggle("dark", isDark);
+    root.classList.toggle("dark", isDark);
     if (next === "system") window.localStorage.removeItem("tutin-theme");
     else window.localStorage.setItem("tutin-theme", next);
     writeAppSettings({ ...readAppSettings(), theme: next });
@@ -673,7 +935,12 @@ export function AppShell({
   return (
     <TooltipProvider delayDuration={250}>
       <div className="flex h-dvh overflow-hidden bg-shell text-foreground">
-        <IconDock activeIndex={activeNavIndex} dark={dark} onThemeToggle={toggleTheme} onSettings={() => setSettingsOpen(true)} />
+        <IconDock
+          activeIndex={activeNavIndex}
+          dark={dark}
+          onThemeToggle={toggleTheme}
+          onSettings={() => setSettingsOpen(true)}
+        />
         <SettingsModal
           open={settingsOpen}
           onOpenChange={setSettingsOpen}
@@ -701,7 +968,10 @@ export function AppShell({
               : "overflow-y-auto overflow-x-hidden custom-scrollbar",
           )}
         >
-          <div key={pathname} className={cn(fixedViewport ? "h-full" : "min-h-full", navMotion.transitionClass)}>
+          <div
+            key={pathname}
+            className={cn(fixedViewport ? "h-full" : "min-h-full", navMotion.transitionClass)}
+          >
             {children}
           </div>
         </main>
@@ -721,7 +991,11 @@ export function CourseSortDropdown({
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="sm" className="rounded-md text-muted-foreground hover:text-foreground">
+        <Button
+          variant="ghost"
+          size="sm"
+          className="rounded-md text-muted-foreground hover:text-foreground"
+        >
           {sort} <ChevronDown className="ml-1 size-4" />
         </Button>
       </DropdownMenuTrigger>
@@ -830,7 +1104,8 @@ export function HomePage() {
                 onClick={() => setFilter(item)}
                 className={cn(
                   "h-9 shrink-0 rounded-sm px-3.5 text-xs font-normal text-muted-foreground shadow-none sm:px-4 sm:text-sm",
-                  filter === item && "bg-card font-medium text-foreground shadow-card hover:bg-card",
+                  filter === item &&
+                    "bg-card font-medium text-foreground shadow-card hover:bg-card",
                 )}
               >
                 {item}
@@ -871,13 +1146,19 @@ export function HomePage() {
           Loading courses…
         </div>
       ) : (
-        <section className="mt-8 grid gap-5 md:grid-cols-2 xl:grid-cols-4" aria-label="Course library">
+        <section
+          className="mt-8 grid gap-5 md:grid-cols-2 xl:grid-cols-4"
+          aria-label="Course library"
+        >
           {visibleCourses.length ? (
-            visibleCourses.map((course) => (
-              <CourseCard key={course.id} course={course} />
-            ))
+            visibleCourses.map((course) => <CourseCard key={course.id} course={course} />)
           ) : (
-            <EmptyState clear={() => { setQuery(""); setFilter("All"); }} />
+            <EmptyState
+              clear={() => {
+                setQuery("");
+                setFilter("All");
+              }}
+            />
           )}
         </section>
       )}

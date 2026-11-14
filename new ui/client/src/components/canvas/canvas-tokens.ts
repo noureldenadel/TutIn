@@ -1,14 +1,7 @@
 import type { CanvasStrokeColorToken } from "@/lib/course-canvas";
 
 export type CanvasToolMode =
-  | "select"
-  | "pan"
-  | "note"
-  | "text"
-  | "pen"
-  | "highlighter"
-  | "eraser"
-  | "connect";
+  "select" | "pan" | "note" | "text" | "pen" | "highlighter" | "eraser" | "connect";
 
 export interface StrokeColorOption {
   token: CanvasStrokeColorToken;
@@ -41,7 +34,8 @@ export const ARTBOARD_ACCENT_VARS = [
 ] as const;
 
 export function getArtboardAccentVar(tintIndex: number): string {
-  const safe = ((tintIndex % ARTBOARD_ACCENT_VARS.length) + ARTBOARD_ACCENT_VARS.length) % ARTBOARD_ACCENT_VARS.length;
+  const safe =
+    ((tintIndex % ARTBOARD_ACCENT_VARS.length) + ARTBOARD_ACCENT_VARS.length) %
+    ARTBOARD_ACCENT_VARS.length;
   return ARTBOARD_ACCENT_VARS[safe]!;
 }
-

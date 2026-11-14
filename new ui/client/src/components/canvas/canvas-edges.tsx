@@ -1,5 +1,10 @@
 import { useMemo } from "react";
-import { getDetachedSideAnchors, type CanvasCard, type CanvasEdge, type CanvasSide } from "@/lib/course-canvas";
+import {
+  getDetachedSideAnchors,
+  type CanvasCard,
+  type CanvasEdge,
+  type CanvasSide,
+} from "@/lib/course-canvas";
 
 function getBezierPoints(
   from: { x: number; y: number; side: CanvasSide },
@@ -103,11 +108,7 @@ export function CanvasEdgesLayer({
           orient="auto"
           markerUnits="userSpaceOnUse"
         >
-          <path
-            d="M 1 1 L 8 4.5 L 1 8 Z"
-            fill="var(--foreground)"
-            fillOpacity="0.72"
-          />
+          <path d="M 1 1 L 8 4.5 L 1 8 Z" fill="var(--foreground)" fillOpacity="0.72" />
         </marker>
         <marker
           id="canvas-arrow-selected"
@@ -138,10 +139,8 @@ export function CanvasEdgesLayer({
         const isAuto = edge.edgeKind === "auto-chrono";
         const isSelected = edge.id === selectedEdgeId;
 
-        const midX =
-          0.125 * fromPoint.x + 0.375 * c1x + 0.375 * c2x + 0.125 * toPoint.x;
-        const midY =
-          0.125 * fromPoint.y + 0.375 * c1y + 0.375 * c2y + 0.125 * toPoint.y;
+        const midX = 0.125 * fromPoint.x + 0.375 * c1x + 0.375 * c2x + 0.125 * toPoint.x;
+        const midY = 0.125 * fromPoint.y + 0.375 * c1y + 0.375 * c2y + 0.125 * toPoint.y;
 
         return (
           <g key={edge.id}>
@@ -151,7 +150,9 @@ export function CanvasEdgesLayer({
                 fill="none"
                 stroke="transparent"
                 strokeWidth={16}
-                className={interactive ? "pointer-events-auto cursor-pointer" : "pointer-events-none"}
+                className={
+                  interactive ? "pointer-events-auto cursor-pointer" : "pointer-events-none"
+                }
                 onClick={(e) => {
                   if (!interactive) return;
                   e.stopPropagation();
@@ -191,12 +192,7 @@ export function CanvasEdgesLayer({
                   onDeleteEdge(edge.id);
                 }}
               >
-                <circle
-                  r="10"
-                  fill="var(--card)"
-                  stroke="var(--border)"
-                  strokeWidth="1.2"
-                />
+                <circle r="10" fill="var(--card)" stroke="var(--border)" strokeWidth="1.2" />
                 <path
                   d="M -3.5 -3.5 L 3.5 3.5 M 3.5 -3.5 L -3.5 3.5"
                   stroke="var(--destructive)"
@@ -222,4 +218,3 @@ export function CanvasEdgesLayer({
     </svg>
   );
 }
-

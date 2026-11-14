@@ -101,11 +101,7 @@ function mapApiNoteRow(
   const matchedLessonIdx = lessons.findIndex((l) => l.lessonId === videoId);
   const rawIdx = Number(raw["lessonIdx"]);
   const lessonIdx =
-    matchedLessonIdx >= 0
-      ? matchedLessonIdx
-      : Number.isFinite(rawIdx) && rawIdx >= 0
-      ? rawIdx
-      : 0;
+    matchedLessonIdx >= 0 ? matchedLessonIdx : Number.isFinite(rawIdx) && rawIdx >= 0 ? rawIdx : 0;
 
   const rawContent = String(raw["content"] ?? "");
   const rawImages = Array.isArray(raw["images"])
@@ -250,10 +246,7 @@ export function saveCourseNotes(
   return next.map(cloneNote);
 }
 
-export async function createNoteOnServer(
-  courseId: string,
-  note: NoteItem,
-): Promise<NoteItem> {
+export async function createNoteOnServer(courseId: string, note: NoteItem): Promise<NoteItem> {
   const existing = getCourseNotes(courseId);
   const withCreatedAt: NoteItem = {
     ...note,

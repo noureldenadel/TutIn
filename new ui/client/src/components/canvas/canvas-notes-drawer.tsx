@@ -138,9 +138,7 @@ export function CanvasNotesDrawer({
       {/* Grouped Lesson Notes */}
       <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-3 custom-scrollbar-sm">
         {groupedLessons.length === 0 ? (
-          <div className="py-10 text-center text-xs text-muted-foreground">
-            No matching notes.
-          </div>
+          <div className="py-10 text-center text-xs text-muted-foreground">No matching notes.</div>
         ) : (
           groupedLessons.map(({ lessonIdx, lesson, items }) => (
             <div key={lessonIdx} className="space-y-1.5">
@@ -148,7 +146,8 @@ export function CanvasNotesDrawer({
                 title={lesson?.moduleTitle}
                 className="truncate px-1 text-[11px] font-semibold text-muted-foreground"
               >
-                {formatCanvasLessonCode(lessons, lessonIdx)} · {lesson?.title ?? `Lesson ${lessonIdx + 1}`}
+                {formatCanvasLessonCode(lessons, lessonIdx)} ·{" "}
+                {lesson?.title ?? `Lesson ${lessonIdx + 1}`}
               </p>
 
               {items.map((note) => {

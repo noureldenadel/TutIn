@@ -21,7 +21,6 @@ import {
   Copy,
   Download,
   Gauge,
-  Globe2,
   LayoutGrid,
   ListChecks,
   Maximize,
@@ -39,6 +38,7 @@ import {
   Plus,
   Settings,
   Sparkles,
+  Subtitles,
   Trash2,
   Upload,
   X,
@@ -89,14 +89,27 @@ import {
 } from "@/lib/course-notes";
 import { cn } from "@/lib/utils";
 import { generateId, videoStreamUrl, type Course } from "@/lib/courses";
-import { InstructorAvatar } from "@/components/layout/instructor-avatar";
-import { SmartCaptionsModal, type SmartCaptionMatch } from "@/components/modals/smart-captions-modal";
+import { InstructorAvatar, normalizeInstructorSlug } from "@/components/layout/instructor-avatar";
+import {
+  SmartCaptionsModal,
+  type SmartCaptionMatch,
+} from "@/components/modals/smart-captions-modal";
 import {
   arePlayerShortcutsEnabled,
   readAppSettings,
   SETTINGS_CHANGED_EVENT,
 } from "@/lib/app-settings";
-import { getLanguageLabel } from "@/lib/languages";
+import { formatTrackDisplayLabel, getLanguageLabel, getLanguageName } from "@/lib/languages";
+import {
+  TRANSCRIPT_UPDATED_EVENT,
+  cancelTranscriptJob,
+  deleteSubtitleTrack,
+  setSubtitleTrackMaster,
+  setSubtitleTrackSource,
+  useVideoTranscriptJob,
+} from "@/lib/transcript-ai";
+import { TranscriptTranslateModal } from "@/components/modals/transcript-translate-modal";
+import type { SubtitleSource } from "@/lib/course-lessons";
 import {
   getHistoryThresholdSeconds,
   parseYoutubeIframeMessage,
@@ -140,7 +153,11 @@ interface TranscriptTrack {
   label: string;
   short: string;
   rtl: boolean;
-  origin?: string | undefined;
+  origin?: "uploaded" | "generated" | string | undefined;
+  version?: number | undefined;
+  fileName?: string | undefined;
+  is_master?: boolean | undefined;
+  is_ai_source?: boolean | undefined;
 }
 
 const RTL_LANG_PREFIXES = ["ar", "he", "fa", "ur"];
@@ -187,11 +204,10 @@ function normalizeTranscriptChunks(raw: unknown): TranscriptCue[] {
     if (!text) continue;
     const rawStart = Array.isArray(item.timestamp) ? item.timestamp[0] : item.start;
     const rawEnd = Array.isArray(item.timestamp) ? item.timestamp[1] : item.end;
-    const start = typeof rawStart === "number" && Number.isFinite(rawStart) ? Math.max(0, rawStart) : 0;
+    const start =
+      typeof rawStart === "number" && Number.isFinite(rawStart) ? Math.max(0, rawStart) : 0;
     const end =
-      typeof rawEnd === "number" && Number.isFinite(rawEnd) && rawEnd > start
-        ? rawEnd
-        : start + 5;
+      typeof rawEnd === "number" && Number.isFinite(rawEnd) && rawEnd > start ? rawEnd : start + 5;
     cues.push({ start, end, text });
   }
   return cues;
@@ -243,6 +259,17 @@ export function CoursePlayer({
   const [subtitleTrack, setSubtitleTrack] = useState<string>("off");
   const [transcriptLang, setTranscriptLang] = useState<string | null>(null);
   const [availableTracks, setAvailableTracks] = useState<TranscriptTrack[]>([]);
+  const pendingTrackSelectionRef = useRef<string | null>(null);
+  const dubAudioRef = useRef<HTMLAudioElement>(null);
+  const lastDubLangRef = useRef<string>("original");
+  const volumeRef = useRef(volume);
+  const mutedRef = useRef(muted);
+  const speedRef = useRef(speed);
+  volumeRef.current = volume;
+  mutedRef.current = muted;
+  speedRef.current = speed;
+  const [dubLanguages, setDubLanguages] = useState<string[]>([]);
+  const [selectedDubLang, setSelectedDubLang] = useState<string>("original");
   const [transcriptCues, setTranscriptCues] = useState<TranscriptCue[]>([]);
   const [cuesLoading, setCuesLoading] = useState(false);
   const [savedSummary, setSavedSummary] = useState("");
@@ -252,7 +279,9 @@ export function CoursePlayer({
   const [panelOpen, setPanelOpen] = useState(true);
   const [tab, setTab] = useState<Tab>(initialTab ?? "playlist");
   const [active, setActive] = useState(
-    typeof initialLessonIdx === "number" && Number.isFinite(initialLessonIdx) && initialLessonIdx >= 0
+    typeof initialLessonIdx === "number" &&
+      Number.isFinite(initialLessonIdx) &&
+      initialLessonIdx >= 0
       ? Math.floor(initialLessonIdx)
       : 0,
   );
@@ -359,8 +388,7 @@ export function CoursePlayer({
   const externalDirectUrl =
     !youtubeId && !driveFileId && !localVideoUrl && currentLesson?.url ? currentLesson.url : "";
   const isPlayableExternalVideo =
-    Boolean(externalDirectUrl) &&
-    /\.(mp4|webm|ogg|mov|m4v|ts)(\?|$)/i.test(externalDirectUrl);
+    Boolean(externalDirectUrl) && /\.(mp4|webm|ogg|mov|m4v|ts)(\?|$)/i.test(externalDirectUrl);
   const resolvedVideoSrc = localVideoUrl || (isPlayableExternalVideo ? externalDirectUrl : "");
   const isEmbeddedPlayer = Boolean(youtubeId || driveFileId);
   const isExternalResourceOnly = Boolean(externalDirectUrl && !isPlayableExternalVideo);
@@ -502,8 +530,7 @@ export function CoursePlayer({
       const endPos = sess.latestPosition;
       const dur = sess.latestDuration;
       const qualified =
-        sess.historyQualified ||
-        sess.accumulatedSecs >= getHistoryThresholdSeconds(dur);
+        sess.historyQualified || sess.accumulatedSecs >= getHistoryThresholdSeconds(dur);
       const shouldSavePos = endPos > 0 && pendingSeekRef.current === null;
       studySessionRef.current = null;
 
@@ -557,7 +584,8 @@ export function CoursePlayer({
     } else if (
       appSettings.resumePlayback &&
       currentLesson.lastWatchedPosition > 0 &&
-      (!currentLesson.durationSec || currentLesson.lastWatchedPosition < currentLesson.durationSec - 3)
+      (!currentLesson.durationSec ||
+        currentLesson.lastWatchedPosition < currentLesson.durationSec - 3)
     ) {
       pendingSeekRef.current = currentLesson.lastWatchedPosition;
       setTime(currentLesson.lastWatchedPosition);
@@ -584,13 +612,20 @@ export function CoursePlayer({
 
   useEffect(() => {
     const onTranscriptUpdated = (e: Event) => {
-      const detail = (e as CustomEvent<{ videoId?: string }>).detail;
+      const detail = (e as CustomEvent<{ videoId?: string; targetLang?: string; trackId?: string }>)
+        .detail;
       if (!detail?.videoId || detail.videoId === currentLesson?.lessonId) {
+        const nextSelection = detail?.trackId || detail?.targetLang;
+        if (nextSelection) {
+          pendingTrackSelectionRef.current = nextSelection;
+          setTranscriptLang(nextSelection);
+          setSubtitleTrack(nextSelection);
+        }
         setTranscriptRefreshTick((n) => n + 1);
       }
     };
-    window.addEventListener("tutin:transcript-updated", onTranscriptUpdated);
-    return () => window.removeEventListener("tutin:transcript-updated", onTranscriptUpdated);
+    window.addEventListener(TRANSCRIPT_UPDATED_EVENT, onTranscriptUpdated);
+    return () => window.removeEventListener(TRANSCRIPT_UPDATED_EVENT, onTranscriptUpdated);
   }, [currentLesson?.lessonId]);
 
   // Fetch available subtitle/transcript tracks & saved summary for active lesson
@@ -609,64 +644,120 @@ export function CoursePlayer({
 
     void fetch(apiUrl(`/api/transcripts/${encodeURIComponent(vid)}/languages`))
       .then((res) => (res.ok ? res.json() : null))
-      .then((data: {
-        sourceExists?: boolean;
-        existingLangs?: string[];
-        translatedLangs?: string[];
-      } | null) => {
-        if (cancelled || !data) return;
-        const tracks: TranscriptTrack[] = [];
-        const seen = new Set<string>();
+      .then(
+        (
+          data: {
+            sourceExists?: boolean;
+            existingLangs?: string[];
+            translatedLangs?: string[];
+            subtitleSources?: SubtitleSource[];
+            allSources?: SubtitleSource[];
+          } | null,
+        ) => {
+          if (cancelled || !data) return;
+          const tracks: TranscriptTrack[] = [];
+          const validIds = new Set<string>();
 
-        if (data.sourceExists) {
-          seen.add("source");
-          tracks.push({
-            id: "source",
-            lang: "source",
-            label: "Original (Source)",
-            short: "Original",
-            rtl: false,
-          });
-        }
-        for (const lang of data.existingLangs ?? []) {
-          if (seen.has(lang)) continue;
-          seen.add(lang);
-          const name = getLanguageLabel(lang);
-          tracks.push({
-            id: `sub-${lang}`,
-            lang,
-            label: name,
-            short: name,
-            rtl: isRtlLanguage(lang),
-          });
-        }
-        for (const lang of data.translatedLangs ?? []) {
-          if (seen.has(lang)) continue;
-          seen.add(lang);
-          const name = getLanguageLabel(lang);
-          tracks.push({
-            id: `trans-${lang}`,
-            lang,
-            label: `${name} (Translated)`,
-            short: name,
-            rtl: isRtlLanguage(lang),
-          });
-        }
+          const rawSources = Array.isArray(data.subtitleSources)
+            ? data.subtitleSources
+            : Array.isArray(data.allSources)
+              ? data.allSources
+              : [];
 
-        setAvailableTracks(tracks);
-        const preferred =
-          (currentLesson.primaryTranscript && seen.has(currentLesson.primaryTranscript)
-            ? currentLesson.primaryTranscript
-            : null) ||
-          tracks[0]?.lang ||
-          null;
-        setTranscriptLang(preferred);
-        if (preferred) {
-          setSubtitleTrack((prev) => (prev !== "off" && seen.has(prev) ? prev : preferred));
-        } else {
-          setSubtitleTrack("off");
-        }
-      })
+          if (rawSources.length > 0) {
+            for (const src of rawSources) {
+              const langCode = src.lang || "en";
+              const id = src.id || `${langCode}:${src.origin || "uploaded"}`;
+              if (validIds.has(id)) continue;
+              validIds.add(id);
+              const displayLabel = formatTrackDisplayLabel(src);
+              tracks.push({
+                id,
+                lang: langCode,
+                label: displayLabel,
+                short: displayLabel,
+                rtl: isRtlLanguage(langCode),
+                origin: src.origin,
+                version: src.version,
+                fileName: src.fileName,
+                is_master: src.is_master,
+                is_ai_source: src.is_ai_source,
+              });
+            }
+          } else {
+            for (const lang of data.existingLangs ?? []) {
+              const id = `${lang}:uploaded`;
+              if (validIds.has(id)) continue;
+              validIds.add(id);
+              const displayLabel = formatTrackDisplayLabel({ lang, origin: "uploaded" });
+              tracks.push({
+                id,
+                lang,
+                label: displayLabel,
+                short: displayLabel,
+                rtl: isRtlLanguage(lang),
+                origin: "uploaded",
+                is_master: true,
+              });
+            }
+            for (const lang of data.translatedLangs ?? []) {
+              const id = `${lang}:generated`;
+              if (validIds.has(id)) continue;
+              validIds.add(id);
+              const displayLabel = formatTrackDisplayLabel({ lang, origin: "generated" });
+              tracks.push({
+                id,
+                lang,
+                label: displayLabel,
+                short: displayLabel,
+                rtl: isRtlLanguage(lang),
+                origin: "generated",
+                is_master: !tracks.some((t) => t.lang === lang),
+              });
+            }
+          }
+
+          setAvailableTracks(tracks);
+
+          const resolveTrackId = (candidate: string | null | undefined): string | null => {
+            if (!candidate) return null;
+            if (validIds.has(candidate)) return candidate;
+            const byMaster = tracks.find(
+              (t) => t.lang.toLowerCase() === candidate.toLowerCase() && t.is_master,
+            );
+            if (byMaster) return byMaster.id;
+            const byLang = tracks.find((t) => t.lang.toLowerCase() === candidate.toLowerCase());
+            return byLang ? byLang.id : null;
+          };
+
+          const pendingTarget = pendingTrackSelectionRef.current;
+          const resolvedPending = pendingTarget ? resolveTrackId(pendingTarget) : null;
+          if (resolvedPending) {
+            pendingTrackSelectionRef.current = null;
+          }
+
+          setTranscriptLang((prev) => {
+            if (resolvedPending) return resolvedPending;
+            const kept = resolveTrackId(prev);
+            if (kept) return kept;
+            const fromPrimary = resolveTrackId(currentLesson.primaryTranscript);
+            if (fromPrimary) return fromPrimary;
+            const fromSpoken = resolveTrackId(course.language || "en");
+            if (fromSpoken) return fromSpoken;
+            return tracks[0]?.id ?? null;
+          });
+
+          setSubtitleTrack((prev) => {
+            if (resolvedPending) return resolvedPending;
+            if (prev === "off") return tracks[0]?.id ?? "off";
+            const kept = resolveTrackId(prev);
+            if (kept) return kept;
+            const fromPrimary = resolveTrackId(currentLesson.primaryTranscript);
+            if (fromPrimary) return fromPrimary;
+            return tracks[0]?.id ?? "off";
+          });
+        },
+      )
       .catch(() => {
         if (!cancelled) {
           setAvailableTracks([]);
@@ -686,7 +777,12 @@ export function CoursePlayer({
     return () => {
       cancelled = true;
     };
-  }, [currentLesson?.lessonId, currentLesson?.primaryTranscript, transcriptRefreshTick]);
+  }, [
+    course.language,
+    currentLesson?.lessonId,
+    currentLesson?.primaryTranscript,
+    transcriptRefreshTick,
+  ]);
 
   const activeCueLang = subtitleTrack !== "off" ? subtitleTrack : transcriptLang;
   useEffect(() => {
@@ -722,7 +818,17 @@ export function CoursePlayer({
 
   const activeCaptionCue = useMemo(() => {
     if (subtitleTrack === "off" || isEmbeddedPlayer || transcriptCues.length === 0) return null;
-    return transcriptCues.find((c) => time >= c.start && time <= c.end) ?? null;
+    const direct = transcriptCues.find((c) => time >= c.start && time <= c.end);
+    if (direct) return direct;
+    // Brief bridge across micro-gaps (< 0.35s) within the same spoken sentence, hiding on silence > 1.5s
+    for (let i = 0; i < transcriptCues.length - 1; i++) {
+      const curr = transcriptCues[i]!;
+      const next = transcriptCues[i + 1]!;
+      if (time > curr.end && time < next.start && next.start - curr.end <= 0.35) {
+        return curr;
+      }
+    }
+    return null;
   }, [subtitleTrack, isEmbeddedPlayer, transcriptCues, time]);
 
   const seek = useCallback(
@@ -731,12 +837,16 @@ export function CoursePlayer({
       if (!v) return;
       const target = Math.max(0, Math.min(t, v.duration || effectiveDuration || t));
       v.currentTime = target;
+      const dubEl = dubAudioRef.current;
+      if (dubEl && selectedDubLang !== "original" && target < (dubEl.duration || Infinity)) {
+        dubEl.currentTime = target;
+      }
       setTime(target);
       if (studySessionRef.current) {
         studySessionRef.current.latestPosition = target;
       }
     },
-    [effectiveDuration],
+    [effectiveDuration, selectedDubLang],
   );
   const togglePlay = () => {
     const v = videoRef.current;
@@ -848,16 +958,187 @@ export function CoursePlayer({
   }, []);
 
   useEffect(() => {
+    const isDubActive = !isEmbeddedPlayer && selectedDubLang !== "original";
     const v = videoRef.current;
     if (v) {
       v.volume = volume;
-      v.muted = muted;
+      v.muted = isDubActive ? true : muted;
     }
-  }, [volume, muted]);
+    const a = dubAudioRef.current;
+    if (a) {
+      a.volume = volume;
+      a.muted = muted;
+    }
+  }, [volume, muted, selectedDubLang, isEmbeddedPlayer]);
   useEffect(() => {
     const v = videoRef.current;
     if (v) v.playbackRate = speed;
-  }, [speed]);
+    const a = dubAudioRef.current;
+    if (a) a.playbackRate = speed;
+  }, [speed, selectedDubLang]);
+
+  useEffect(() => {
+    const lessonId = currentLesson?.lessonId;
+    setSelectedDubLang("original");
+    if (!lessonId || isEmbeddedPlayer) {
+      setDubLanguages([]);
+      return;
+    }
+
+    let cancelled = false;
+    fetch(apiUrl(`/api/dub/video/${encodeURIComponent(lessonId)}/languages`))
+      .then((res) => (res.ok ? res.json() : { languages: [] }))
+      .then((data: { languages?: string[] }) => {
+        if (cancelled) return;
+        const list = Array.isArray(data.languages)
+          ? data.languages.map((l) => String(l).trim().toLowerCase()).filter(Boolean)
+          : [];
+        setDubLanguages(list);
+        if (lastDubLangRef.current !== "original" && list.includes(lastDubLangRef.current)) {
+          setSelectedDubLang(lastDubLangRef.current);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setDubLanguages([]);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [currentLesson?.lessonId, isEmbeddedPlayer]);
+
+  useEffect(() => {
+    const lessonId = currentLesson?.lessonId;
+    const v = videoRef.current;
+    const a = dubAudioRef.current;
+
+    if (!lessonId || isEmbeddedPlayer || selectedDubLang === "original" || !v || !a) {
+      if (a) {
+        a.pause();
+        if (a.getAttribute("src")) {
+          a.removeAttribute("src");
+          a.load();
+        }
+      }
+      if (v) {
+        v.muted = mutedRef.current;
+        v.volume = volumeRef.current;
+      }
+      return;
+    }
+
+    const srcUrl = apiUrl(
+      `/api/dub/audio/${encodeURIComponent(lessonId)}?lang=${encodeURIComponent(selectedDubLang)}`,
+    );
+    v.muted = true;
+    a.volume = volumeRef.current;
+    a.muted = mutedRef.current;
+    a.playbackRate = v.playbackRate || speedRef.current;
+    a.src = srcUrl;
+    a.load();
+
+    const syncTimeFromVideo = () => {
+      const target = v.currentTime || 0;
+      const limit = Number.isFinite(a.duration) && a.duration > 0 ? a.duration : Infinity;
+      if (target < limit && Math.abs(a.currentTime - target) > 0.2) {
+        try {
+          a.currentTime = target;
+        } catch {
+          // Ignore seek before metadata settles
+        }
+      }
+    };
+
+    const handlePlay = () => {
+      v.muted = true;
+      a.playbackRate = v.playbackRate || speedRef.current;
+      syncTimeFromVideo();
+      if (a.readyState >= 1 && (v.currentTime || 0) < (a.duration || Infinity) - 0.15) {
+        void a.play().catch(() => {});
+      }
+    };
+
+    const handlePause = () => {
+      a.pause();
+      syncTimeFromVideo();
+    };
+
+    const handleSeek = () => {
+      syncTimeFromVideo();
+    };
+
+    const handleRateChange = () => {
+      a.playbackRate = v.playbackRate || speedRef.current;
+    };
+
+    const handleTimeUpdate = () => {
+      v.muted = true;
+      if (v.paused || v.ended || a.readyState < 2) return;
+      const limit = Number.isFinite(a.duration) && a.duration > 0 ? a.duration : Infinity;
+      if (v.currentTime >= limit - 0.15) return;
+      if (a.paused) {
+        void a.play().catch(() => {});
+      }
+      if (Math.abs(a.currentTime - v.currentTime) > 0.45) {
+        try {
+          a.currentTime = v.currentTime;
+        } catch {
+          // Ignore temporary seek errors
+        }
+      }
+    };
+
+    const handleAudioReady = () => {
+      a.volume = volumeRef.current;
+      a.muted = mutedRef.current;
+      a.playbackRate = v.playbackRate || speedRef.current;
+      syncTimeFromVideo();
+      if (!v.paused && !v.ended && v.currentTime < (a.duration || Infinity) - 0.15) {
+        void a.play().catch(() => {});
+      }
+    };
+
+    const handleVideoLoadedMetadata = () => {
+      v.muted = true;
+      syncTimeFromVideo();
+    };
+
+    const handleAudioError = () => {
+      setSelectedDubLang("original");
+      lastDubLangRef.current = "original";
+      v.muted = mutedRef.current;
+      v.volume = volumeRef.current;
+      toast.error("Could not load dubbed audio");
+    };
+
+    v.addEventListener("play", handlePlay);
+    v.addEventListener("playing", handlePlay);
+    v.addEventListener("pause", handlePause);
+    v.addEventListener("waiting", handlePause);
+    v.addEventListener("ended", handlePause);
+    v.addEventListener("seeking", handleSeek);
+    v.addEventListener("seeked", handleSeek);
+    v.addEventListener("ratechange", handleRateChange);
+    v.addEventListener("timeupdate", handleTimeUpdate);
+    v.addEventListener("loadedmetadata", handleVideoLoadedMetadata);
+    a.addEventListener("loadedmetadata", handleAudioReady);
+    a.addEventListener("error", handleAudioError);
+
+    return () => {
+      v.removeEventListener("play", handlePlay);
+      v.removeEventListener("playing", handlePlay);
+      v.removeEventListener("pause", handlePause);
+      v.removeEventListener("waiting", handlePause);
+      v.removeEventListener("ended", handlePause);
+      v.removeEventListener("seeking", handleSeek);
+      v.removeEventListener("seeked", handleSeek);
+      v.removeEventListener("ratechange", handleRateChange);
+      v.removeEventListener("timeupdate", handleTimeUpdate);
+      v.removeEventListener("loadedmetadata", handleVideoLoadedMetadata);
+      a.removeEventListener("loadedmetadata", handleAudioReady);
+      a.removeEventListener("error", handleAudioError);
+    };
+  }, [currentLesson?.lessonId, isEmbeddedPlayer, selectedDubLang]);
 
   const goTo = useCallback(
     (i: number) => {
@@ -906,11 +1187,17 @@ export function CoursePlayer({
       if (qualified) sess.historyQualified = true;
       const canSavePosition = sess.latestPosition > 0 && pendingSeekRef.current === null;
       if (canSavePosition || qualified) {
-        void updateVideoProgress(sess.videoId, sess.latestPosition, sess.latestDuration, course.id, {
-          recordHistory: qualified,
-          recordPosition: canSavePosition,
-          keepalive: true,
-        });
+        void updateVideoProgress(
+          sess.videoId,
+          sess.latestPosition,
+          sess.latestDuration,
+          course.id,
+          {
+            recordHistory: qualified,
+            recordPosition: canSavePosition,
+            keepalive: true,
+          },
+        );
       }
     };
 
@@ -1186,6 +1473,20 @@ export function CoursePlayer({
     languageName?: string | undefined;
     matches: SmartCaptionMatch[];
   } | null>(null);
+  const [transcriptModalState, setTranscriptModalState] = useState<{
+    open: boolean;
+    mode: "transcribe" | "translate";
+    targetLang?: string | undefined;
+  }>({ open: false, mode: "transcribe" });
+  const [spokenCourseLang, setSpokenCourseLang] = useState<string>(() =>
+    (course.language || "en").toLowerCase(),
+  );
+
+  useEffect(() => {
+    if (course.language) {
+      setSpokenCourseLang(course.language.toLowerCase());
+    }
+  }, [course.language]);
 
   const handleUploadCaptions = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files ?? []);
@@ -1213,17 +1514,23 @@ export function CoursePlayer({
         success?: boolean;
         language?: string;
         languageName?: string;
+        track?: SubtitleSource;
         detectedMatches?: SmartCaptionMatch[];
       };
 
       const uploadedLang = data.language || "en";
-      setSubtitleTrack(uploadedLang);
-      setTranscriptLang(uploadedLang);
+      const uploadedTrackId = data.track?.id || `${uploadedLang}:uploaded`;
+      setSubtitleTrack(uploadedTrackId);
+      setTranscriptLang(uploadedTrackId);
       setTranscriptRefreshTick((n) => n + 1);
       await fetchCourseCurriculum(course.id, true);
       window.dispatchEvent(
-        new CustomEvent("tutin:transcript-updated", {
-          detail: { videoId: currentLesson.lessonId, lang: uploadedLang },
+        new CustomEvent(TRANSCRIPT_UPDATED_EVENT, {
+          detail: {
+            videoId: currentLesson.lessonId,
+            targetLang: uploadedLang,
+            trackId: uploadedTrackId,
+          },
         }),
       );
       toast.success(`Imported ${firstFile.name}`);
@@ -1239,6 +1546,84 @@ export function CoursePlayer({
       toast.error(err instanceof Error ? err.message : "Failed to import subtitles");
     }
   };
+
+  const handleSetTrackMaster = useCallback(
+    async (trackId: string) => {
+      if (!currentLesson) return;
+      try {
+        await setSubtitleTrackMaster(currentLesson.lessonId, trackId, String(course.id));
+        setTranscriptRefreshTick((n) => n + 1);
+        await fetchCourseCurriculum(course.id, true);
+        toast.success("Set as master track");
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "Failed to set master track");
+      }
+    },
+    [course.id, currentLesson],
+  );
+
+  const handleSetTrackSource = useCallback(
+    async (trackId: string) => {
+      if (!currentLesson) return;
+      try {
+        await setSubtitleTrackSource(currentLesson.lessonId, trackId, String(course.id));
+        setTranscriptRefreshTick((n) => n + 1);
+        await fetchCourseCurriculum(course.id, true);
+        toast.success("Set as source track");
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "Failed to set source track");
+      }
+    },
+    [course.id, currentLesson],
+  );
+
+  const handleDeleteTrack = useCallback(
+    async (trackId: string) => {
+      if (!currentLesson) return;
+      try {
+        await deleteSubtitleTrack(currentLesson.lessonId, trackId);
+        if (transcriptLang === trackId) {
+          setTranscriptLang(null);
+        }
+        if (subtitleTrack === trackId) {
+          setSubtitleTrack("off");
+        }
+        setTranscriptRefreshTick((n) => n + 1);
+        await fetchCourseCurriculum(course.id, true);
+        toast.success("Subtitle track removed");
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "Failed to remove track");
+      }
+    },
+    [course.id, currentLesson, subtitleTrack, transcriptLang],
+  );
+
+  const handleDeleteDubTrack = useCallback(
+    async (lang: string) => {
+      if (!currentLesson) return;
+      try {
+        const res = await fetch(
+          apiUrl(
+            `/api/dub/video/${encodeURIComponent(currentLesson.lessonId)}?lang=${encodeURIComponent(lang)}`,
+          ),
+          { method: "DELETE" },
+        );
+        if (!res.ok) {
+          const errData = (await res.json().catch(() => ({}))) as { error?: string };
+          throw new Error(errData.error || "Failed to remove dub track");
+        }
+        if (selectedDubLang === lang) {
+          lastDubLangRef.current = "original";
+          setSelectedDubLang("original");
+        }
+        setDubLanguages((prev) => prev.filter((l) => l !== lang));
+        toast.success("Dub track removed");
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "Failed to remove dub track");
+      }
+    },
+    [currentLesson, selectedDubLang],
+  );
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => shortcutHandlerRef.current(e);
@@ -1259,7 +1644,8 @@ export function CoursePlayer({
           />
           <div
             ref={frameRef}
-            className="group relative z-10 min-h-0 w-full flex-1 overflow-hidden rounded-xl bg-player shadow-workspace max-lg:aspect-video"
+            onDragStart={(e) => e.preventDefault()}
+            className="group relative z-10 min-h-0 w-full flex-1 select-none overflow-hidden rounded-xl bg-player shadow-workspace max-lg:aspect-video"
           >
             {curriculumLoading ? (
               <div className="flex size-full items-center justify-center text-sm text-white/70">
@@ -1332,8 +1718,9 @@ export function CoursePlayer({
                 key={currentLesson.lessonId}
                 src={isTsVideo ? undefined : resolvedVideoSrc || undefined}
                 playsInline
+                draggable={false}
                 preload="metadata"
-                className="size-full object-contain"
+                className="size-full select-none object-contain"
                 onClick={togglePlay}
                 onPlay={() => {
                   setPlaying(true);
@@ -1394,7 +1781,8 @@ export function CoursePlayer({
                   }
                   if (
                     metaDur > 0 &&
-                    (!currentLesson.durationSec || Math.abs(metaDur - currentLesson.durationSec) > 3)
+                    (!currentLesson.durationSec ||
+                      Math.abs(metaDur - currentLesson.durationSec) > 3)
                   ) {
                     void updateCourseVideo(currentLesson.lessonId, course.id, {
                       duration: Math.round(metaDur),
@@ -1424,7 +1812,10 @@ export function CoursePlayer({
             {!isEmbeddedPlayer && !isExternalResourceOnly && activeCaptionCue && (
               <div
                 dir={
-                  availableTracks.find((t) => t.lang === subtitleTrack)?.rtl ? "rtl" : "ltr"
+                  availableTracks.find((t) => t.id === subtitleTrack || t.lang === subtitleTrack)
+                    ?.rtl
+                    ? "rtl"
+                    : "ltr"
                 }
                 className="pointer-events-none absolute inset-x-6 bottom-20 flex justify-center"
               >
@@ -1445,235 +1836,310 @@ export function CoursePlayer({
               </button>
             )}
             {!isEmbeddedPlayer && !isExternalResourceOnly && currentLesson && (
-            <div
-              className={cn(
-                "absolute inset-x-0 bottom-0 flex flex-col justify-end bg-gradient-to-t from-black/80 via-black/40 to-transparent px-4 pb-4 pt-12 text-white transition-opacity duration-200",
-                playing
-                  ? "opacity-0 group-hover:opacity-100 focus-within:opacity-100"
-                  : "opacity-100",
-              )}
-            >
-              {/* Timeline Progress Bar */}
-              <div className="group/timeline mb-3">
-                <Slider
-                  value={[time]}
-                  max={effectiveDuration || 1}
-                  step={0.1}
-                  onValueChange={([t]) => seek(t ?? 0)}
-                  aria-label="Timeline"
-                  className="cursor-pointer [&_[role=slider]]:size-3 [&_[role=slider]]:border-0 [&_[role=slider]]:bg-white [&_[role=slider]]:opacity-0 [&_[role=slider]]:transition-opacity group-hover/timeline:[&_[role=slider]]:opacity-100 focus-within:[&_[role=slider]]:opacity-100 [&>span:first-child]:h-1 [&>span:first-child]:bg-white/30 [&>span:first-child>span]:bg-white"
-                />
-              </div>
-
-              {/* Controls Bar */}
-              <div className="flex min-w-0 items-center justify-between gap-2">
-                {/* Left Side Group */}
-                <div className="flex min-w-0 items-center gap-2">
-                  {/* Play / Pause Button */}
-                  <button
-                    type="button"
-                    onClick={togglePlay}
-                    aria-label={playing ? "Pause" : "Play"}
-                    title={playing ? "Pause (Space)" : "Play (Space)"}
-                    className="flex size-10 shrink-0 items-center justify-center rounded-full bg-white/[0.08] text-white backdrop-blur-sm transition-all hover:bg-white/[0.15]"
-                  >
-                    {playing ? (
-                      <PauseIcon className="size-5" />
-                    ) : (
-                      <PlayIcon className="size-5 translate-x-[0.5px]" />
-                    )}
-                  </button>
-
-                  {/* Prev / Next Pill */}
-                  <div className="flex h-10 shrink-0 items-center gap-3 rounded-full bg-white/[0.08] px-3.5 text-white backdrop-blur-sm transition-all hover:bg-white/[0.12]">
-                    <button
-                      type="button"
-                      onClick={() => goTo(active - 1)}
-                      disabled={active === 0}
-                      aria-label="Previous lesson"
-                      title="Previous lesson (Shift+P)"
-                      className="p-1 transition-opacity hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-35"
-                    >
-                      <PrevIcon className="size-5" />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => goTo(active + 1)}
-                      disabled={active === lessonTitles.length - 1}
-                      aria-label="Next lesson"
-                      title="Next lesson (Shift+N)"
-                      className="p-1 transition-opacity hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-35"
-                    >
-                      <NextIcon className="size-5" />
-                    </button>
-                  </div>
-
-                  {/* Volume Pill */}
-                  <div className="group/volume flex h-10 shrink-0 items-center rounded-full bg-white/[0.08] px-3 text-white backdrop-blur-sm transition-all hover:bg-white/[0.15] focus-within:bg-white/[0.15]">
-                    <button
-                      type="button"
-                      onClick={() => setMuted(!muted)}
-                      aria-label={muted ? "Unmute" : "Mute"}
-                      title={muted ? "Unmute (M)" : "Mute (M)"}
-                      className="p-1 transition-opacity hover:opacity-80"
-                    >
-                      <VolumeIcon volume={volume} muted={muted} />
-                    </button>
-                    <div className="w-0 overflow-hidden opacity-0 transition-all duration-200 group-hover/volume:ml-1.5 group-hover/volume:w-20 group-hover/volume:pr-1 group-hover/volume:opacity-100 group-focus-within/volume:ml-1.5 group-focus-within/volume:w-20 group-focus-within/volume:pr-1 group-focus-within/volume:opacity-100">
-                      <Slider
-                        value={[muted ? 0 : volume]}
-                        max={1}
-                        step={0.01}
-                        onValueChange={([v]) => {
-                          setVolume(v ?? 0);
-                          setMuted(false);
-                        }}
-                        aria-label="Volume"
-                        className="w-[72px] cursor-pointer [&_[role=slider]]:size-3 [&_[role=slider]]:border-0 [&_[role=slider]]:bg-white [&>span:first-child]:h-1 [&>span:first-child]:bg-white/30 [&>span:first-child>span]:bg-white"
-                      />
-                    </div>
-                  </div>
-
-                  {/* Time Pill */}
-                  <button
-                    type="button"
-                    onClick={() => setRemainingTime(!remainingTime)}
-                    aria-label={remainingTime ? "Show elapsed time" : "Show remaining time"}
-                    title={remainingTime ? "Show elapsed time" : "Show remaining time"}
-                    className="flex h-10 shrink-0 select-none items-center rounded-full bg-white/[0.08] px-4 text-xs font-semibold tabular-nums text-white backdrop-blur-sm transition-all hover:bg-white/[0.15]"
-                  >
-                    {remainingTime
-                      ? `−${fmtTime(Math.max(0, effectiveDuration - time))}`
-                      : `${fmtTime(time)} / ${fmtTime(effectiveDuration)}`}
-                  </button>
+              <div
+                className={cn(
+                  "absolute inset-x-0 bottom-0 flex flex-col justify-end bg-gradient-to-t from-black/80 via-black/40 to-transparent px-4 pb-4 pt-12 text-white transition-opacity duration-200",
+                  playing
+                    ? "opacity-0 group-hover:opacity-100 focus-within:opacity-100"
+                    : "opacity-100",
+                )}
+              >
+                {/* Timeline Progress Bar */}
+                <div className="group/timeline mb-3">
+                  <Slider
+                    value={[time]}
+                    max={effectiveDuration || 1}
+                    step={0.1}
+                    onValueChange={([t]) => seek(t ?? 0)}
+                    aria-label="Timeline"
+                    className="cursor-pointer [&_[role=slider]]:size-3 [&_[role=slider]]:border-0 [&_[role=slider]]:bg-white [&_[role=slider]]:opacity-0 [&_[role=slider]]:transition-opacity group-hover/timeline:[&_[role=slider]]:opacity-100 focus-within:[&_[role=slider]]:opacity-100 [&>span:first-child]:h-1 [&>span:first-child]:bg-white/30 [&>span:first-child>span]:bg-white"
+                  />
                 </div>
 
-                {/* Right Side Pill */}
-                <div className="flex h-10 shrink-0 items-center gap-1 rounded-full bg-white/[0.08] px-3 py-1 text-white backdrop-blur-sm transition-all hover:bg-white/[0.12]">
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
+                {/* Controls Bar */}
+                <div className="flex min-w-0 items-center justify-between gap-2">
+                  {/* Left Side Group */}
+                  <div className="flex min-w-0 items-center gap-2">
+                    {/* Play / Pause Button */}
+                    <button
+                      type="button"
+                      onClick={togglePlay}
+                      aria-label={playing ? "Pause" : "Play"}
+                      title={playing ? "Pause (Space)" : "Play (Space)"}
+                      className="flex size-10 shrink-0 items-center justify-center rounded-full bg-white/[0.08] text-white backdrop-blur-sm transition-all hover:bg-white/[0.15]"
+                    >
+                      {playing ? (
+                        <PauseIcon className="size-5" />
+                      ) : (
+                        <PlayIcon className="size-5 translate-x-[0.5px]" />
+                      )}
+                    </button>
+
+                    {/* Prev / Next Pill */}
+                    <div className="flex h-10 shrink-0 items-center gap-3 rounded-full bg-white/[0.08] px-3.5 text-white backdrop-blur-sm transition-all hover:bg-white/[0.12]">
                       <button
                         type="button"
-                        aria-label="Audio and subtitles"
-                        title="Audio & Subtitles (C)"
-                        className="flex items-center justify-center rounded-full p-1.5 text-white opacity-75 transition-all hover:bg-white/15 hover:opacity-100 data-[state=open]:opacity-100 [&_svg]:size-5"
+                        onClick={() => goTo(active - 1)}
+                        disabled={active === 0}
+                        aria-label="Previous lesson"
+                        title="Previous lesson (Shift+P)"
+                        className="p-1 transition-opacity hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-35"
                       >
-                        <MessageSquareText />
+                        <PrevIcon className="size-5" />
                       </button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent
-                      side="top"
-                      sideOffset={10}
-                      align="end"
-                      className="w-56 rounded-lg p-1.5"
-                    >
-                      <p className="px-2 py-1.5 text-xs font-semibold text-muted-foreground">
-                        Audio
-                      </p>
-                      <DropdownMenuItem className="rounded-md">
-                        Original <Check className="ml-auto" />
-                      </DropdownMenuItem>
-                      <DropdownMenuItem
-                        disabled
-                        className="cursor-not-allowed rounded-md opacity-45"
+                      <button
+                        type="button"
+                        onClick={() => goTo(active + 1)}
+                        disabled={active === lessonTitles.length - 1}
+                        aria-label="Next lesson"
+                        title="Next lesson (Shift+N)"
+                        className="p-1 transition-opacity hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-35"
                       >
-                        Dubbed
-                      </DropdownMenuItem>
-                      <DropdownMenuSeparator />
-                      <p className="px-2 py-1.5 text-xs font-semibold text-muted-foreground">
-                        Subtitles
-                      </p>
-                      {availableTracks.map((tr) => (
+                        <NextIcon className="size-5" />
+                      </button>
+                    </div>
+
+                    {/* Volume Pill */}
+                    <div className="group/volume flex h-10 shrink-0 items-center rounded-full bg-white/[0.08] px-3 text-white backdrop-blur-sm transition-all hover:bg-white/[0.15] focus-within:bg-white/[0.15]">
+                      <button
+                        type="button"
+                        onClick={() => setMuted(!muted)}
+                        aria-label={muted ? "Unmute" : "Mute"}
+                        title={muted ? "Unmute (M)" : "Mute (M)"}
+                        className="p-1 transition-opacity hover:opacity-80"
+                      >
+                        <VolumeIcon volume={volume} muted={muted} />
+                      </button>
+                      <div className="w-0 overflow-hidden opacity-0 transition-all duration-200 group-hover/volume:ml-1.5 group-hover/volume:w-20 group-hover/volume:pr-1 group-hover/volume:opacity-100 group-focus-within/volume:ml-1.5 group-focus-within/volume:w-20 group-focus-within/volume:pr-1 group-focus-within/volume:opacity-100">
+                        <Slider
+                          value={[muted ? 0 : volume]}
+                          max={1}
+                          step={0.01}
+                          onValueChange={([v]) => {
+                            setVolume(v ?? 0);
+                            setMuted(false);
+                          }}
+                          aria-label="Volume"
+                          className="w-[72px] cursor-pointer [&_[role=slider]]:size-3 [&_[role=slider]]:border-0 [&_[role=slider]]:bg-white [&>span:first-child]:h-1 [&>span:first-child]:bg-white/30 [&>span:first-child>span]:bg-white"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Time Pill */}
+                    <button
+                      type="button"
+                      onClick={() => setRemainingTime(!remainingTime)}
+                      aria-label={remainingTime ? "Show elapsed time" : "Show remaining time"}
+                      title={remainingTime ? "Show elapsed time" : "Show remaining time"}
+                      className="flex h-10 shrink-0 select-none items-center rounded-full bg-white/[0.08] px-4 text-xs font-semibold tabular-nums text-white backdrop-blur-sm transition-all hover:bg-white/[0.15]"
+                    >
+                      {remainingTime
+                        ? `−${fmtTime(Math.max(0, effectiveDuration - time))}`
+                        : `${fmtTime(time)} / ${fmtTime(effectiveDuration)}`}
+                    </button>
+                  </div>
+
+                  {/* Right Side Pill */}
+                  <div className="flex h-10 shrink-0 items-center gap-1 rounded-full bg-white/[0.08] px-3 py-1 text-white backdrop-blur-sm transition-all hover:bg-white/[0.12]">
+                    <Popover>
+                      <PopoverTrigger asChild>
+                        <button
+                          type="button"
+                          aria-label="Audio and subtitles"
+                          title="Audio & Subtitles (C)"
+                          className="flex items-center justify-center rounded-full p-1.5 text-white opacity-75 transition-all hover:bg-white/15 hover:opacity-100 data-[state=open]:opacity-100 [&_svg]:size-5"
+                        >
+                          <MessageSquareText />
+                        </button>
+                      </PopoverTrigger>
+                      <PopoverContent
+                        side="top"
+                        sideOffset={10}
+                        align="end"
+                        className="w-[340px] max-w-[calc(100vw-1rem)] sm:w-[390px] overflow-hidden rounded-lg border border-border/50 p-0"
+                      >
+                        <div className="grid grid-cols-2 divide-x divide-border/50">
+                          <div className="flex min-w-0 flex-col">
+                            <div className="border-b border-border/50 px-3 py-2">
+                              <p className="text-xs font-semibold text-muted-foreground">Audio</p>
+                            </div>
+                            <div
+                              role="menu"
+                              aria-label="Audio tracks"
+                              className="max-h-56 space-y-0.5 overflow-y-auto p-1.5 custom-scrollbar-sm"
+                            >
+                              <button
+                                type="button"
+                                role="menuitemradio"
+                                aria-checked={selectedDubLang === "original"}
+                                onClick={() => {
+                                  lastDubLangRef.current = "original";
+                                  setSelectedDubLang("original");
+                                }}
+                                className={cn(
+                                  "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:text-accent-foreground focus-visible:outline-none",
+                                  selectedDubLang === "original" && "bg-accent/60 font-medium",
+                                )}
+                              >
+                                <span className="truncate">
+                                  Original ({getLanguageName(spokenCourseLang)})
+                                </span>
+                                {selectedDubLang === "original" && (
+                                  <Check className="ml-auto size-4 shrink-0 text-primary" />
+                                )}
+                              </button>
+                              {dubLanguages.map((lang) => {
+                                const isSelected = selectedDubLang === lang;
+                                return (
+                                  <button
+                                    key={lang}
+                                    type="button"
+                                    role="menuitemradio"
+                                    aria-checked={isSelected}
+                                    onClick={() => {
+                                      lastDubLangRef.current = lang;
+                                      setSelectedDubLang(lang);
+                                    }}
+                                    className={cn(
+                                      "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:text-accent-foreground focus-visible:outline-none",
+                                      isSelected && "bg-accent/60 font-medium",
+                                    )}
+                                  >
+                                    <span className="truncate">{getLanguageName(lang)}</span>
+                                    {isSelected && (
+                                      <Check className="ml-auto size-4 shrink-0 text-primary" />
+                                    )}
+                                  </button>
+                                );
+                              })}
+                              {dubLanguages.length === 0 && (
+                                <p className="px-2 py-1.5 text-xs text-muted-foreground">
+                                  No dubbed audio
+                                </p>
+                              )}
+                            </div>
+                          </div>
+
+                          <div className="flex min-w-0 flex-col">
+                            <div className="border-b border-border/50 px-3 py-2">
+                              <p className="text-xs font-semibold text-muted-foreground">
+                                Subtitles
+                              </p>
+                            </div>
+                            <div
+                              role="menu"
+                              aria-label="Subtitle tracks"
+                              className="max-h-56 space-y-0.5 overflow-y-auto p-1.5 custom-scrollbar-sm"
+                            >
+                              <button
+                                type="button"
+                                role="menuitemradio"
+                                aria-checked={subtitleTrack === "off"}
+                                onClick={() => setSubtitleTrack("off")}
+                                className={cn(
+                                  "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:text-accent-foreground focus-visible:outline-none",
+                                  subtitleTrack === "off" && "bg-accent/60 font-medium",
+                                )}
+                              >
+                                <span className="truncate">Off</span>
+                                {subtitleTrack === "off" && (
+                                  <Check className="ml-auto size-4 shrink-0 text-primary" />
+                                )}
+                              </button>
+                              {availableTracks.map((tr) => {
+                                const isSelected =
+                                  subtitleTrack === tr.id || subtitleTrack === tr.lang;
+                                return (
+                                  <button
+                                    key={tr.id}
+                                    type="button"
+                                    role="menuitemradio"
+                                    aria-checked={isSelected}
+                                    onClick={() => {
+                                      setSubtitleTrack(tr.id);
+                                      setTranscriptLang(tr.id);
+                                    }}
+                                    className={cn(
+                                      "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:text-accent-foreground focus-visible:outline-none",
+                                      isSelected && "bg-accent/60 font-medium",
+                                    )}
+                                  >
+                                    <span className="truncate">{tr.label}</span>
+                                    {isSelected && (
+                                      <Check className="ml-auto size-4 shrink-0 text-primary" />
+                                    )}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        </div>
+                      </PopoverContent>
+                    </Popover>
+
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <button
+                          type="button"
+                          aria-label="Settings"
+                          title="Settings"
+                          className="flex items-center justify-center rounded-full p-1.5 text-white opacity-75 transition-all hover:bg-white/15 hover:opacity-100 data-[state=open]:opacity-100 [&_svg]:size-5"
+                        >
+                          <Settings />
+                        </button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent
+                        side="top"
+                        sideOffset={10}
+                        align="end"
+                        className="w-52 rounded-lg p-1.5"
+                      >
+                        <p className="px-2 py-1.5 text-xs font-semibold text-muted-foreground">
+                          Playback speed
+                        </p>
+                        {[0.75, 1, 1.25, 1.5, 2].map((s) => (
+                          <DropdownMenuItem
+                            key={s}
+                            className="rounded-md"
+                            onClick={() => setSpeed(s)}
+                          >
+                            <Gauge />
+                            {s}×{speed === s && <Check className="ml-auto" />}
+                          </DropdownMenuItem>
+                        ))}
+                        <DropdownMenuSeparator />
                         <DropdownMenuItem
-                          key={tr.id}
                           className="rounded-md"
-                          onClick={() => {
-                            setSubtitleTrack(tr.lang);
-                            setTranscriptLang(tr.lang);
+                          onSelect={(event) => {
+                            event.preventDefault();
+                            setAutoplay(!autoplay);
                           }}
                         >
-                          {tr.short} {subtitleTrack === tr.lang && <Check className="ml-auto" />}
+                          Autoplay next{autoplay && <Check className="ml-auto" />}
                         </DropdownMenuItem>
-                      ))}
-                      <DropdownMenuItem
-                        className="rounded-md"
-                        onClick={() => setSubtitleTrack("off")}
-                      >
-                        Off {subtitleTrack === "off" && <Check className="ml-auto" />}
-                      </DropdownMenuItem>
-                      <DropdownMenuSeparator />
-                      <DropdownMenuItem
-                        className="rounded-md"
-                        onClick={() => captionFileInputRef.current?.click()}
-                      >
-                        <Upload /> Import subtitles…
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
 
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <button
-                        type="button"
-                        aria-label="Settings"
-                        title="Settings"
-                        className="flex items-center justify-center rounded-full p-1.5 text-white opacity-75 transition-all hover:bg-white/15 hover:opacity-100 data-[state=open]:opacity-100 [&_svg]:size-5"
-                      >
-                        <Settings />
-                      </button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent
-                      side="top"
-                      sideOffset={10}
-                      align="end"
-                      className="w-52 rounded-lg p-1.5"
+                    <PlayerBtn label="Picture-in-Picture (P)" onClick={togglePiP} active={isPiP}>
+                      <PictureInPicture />
+                    </PlayerBtn>
+
+                    <PlayerBtn
+                      label={isFullscreen ? "Exit fullscreen (F)" : "Fullscreen (F)"}
+                      onClick={toggleFullscreen}
                     >
-                      <p className="px-2 py-1.5 text-xs font-semibold text-muted-foreground">
-                        Playback speed
-                      </p>
-                      {[0.75, 1, 1.25, 1.5, 2].map((s) => (
-                        <DropdownMenuItem
-                          key={s}
-                          className="rounded-md"
-                          onClick={() => setSpeed(s)}
-                        >
-                          <Gauge />
-                          {s}×{speed === s && <Check className="ml-auto" />}
-                        </DropdownMenuItem>
-                      ))}
-                      <DropdownMenuSeparator />
-                      <DropdownMenuItem
-                        className="rounded-md"
-                        onSelect={(event) => {
-                          event.preventDefault();
-                          setAutoplay(!autoplay);
-                        }}
-                      >
-                        Autoplay next{autoplay && <Check className="ml-auto" />}
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
+                      {isFullscreen ? <Minimize /> : <Maximize />}
+                    </PlayerBtn>
 
-                  <PlayerBtn label="Picture-in-Picture (P)" onClick={togglePiP} active={isPiP}>
-                    <PictureInPicture />
-                  </PlayerBtn>
-
-                  <PlayerBtn
-                    label={isFullscreen ? "Exit fullscreen (F)" : "Fullscreen (F)"}
-                    onClick={toggleFullscreen}
-                  >
-                    {isFullscreen ? <Minimize /> : <Maximize />}
-                  </PlayerBtn>
-
-                  <PlayerBtn
-                    label={panelOpen ? "Hide sidebar" : "Show sidebar"}
-                    onClick={() => setPanelOpen(!panelOpen)}
-                  >
-                    {panelOpen ? <PanelRightClose /> : <PanelRightOpen />}
-                  </PlayerBtn>
+                    <PlayerBtn
+                      label={panelOpen ? "Hide sidebar" : "Show sidebar"}
+                      onClick={() => setPanelOpen(!panelOpen)}
+                    >
+                      {panelOpen ? <PanelRightClose /> : <PanelRightOpen />}
+                    </PlayerBtn>
+                  </div>
                 </div>
               </div>
-            </div>
             )}
           </div>
         </div>
@@ -1705,9 +2171,16 @@ export function CoursePlayer({
               {currentLesson?.title ?? course.title}
             </h1>
             {course.instructor.trim() ? (
-              <div className="mt-1.5 flex items-center gap-2 text-sm text-muted-foreground">
-                <InstructorAvatar name={course.instructor} course={course} size="sm" />
-                <span>{course.instructor}</span>
+              <div className="mt-1.5">
+                <Link
+                  to="/instructors"
+                  search={{ instructor: normalizeInstructorSlug(course.instructor) }}
+                  className="inline-flex items-center gap-2 rounded-md text-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  title={`View ${course.instructor}`}
+                >
+                  <InstructorAvatar name={course.instructor} course={course} size="sm" />
+                  <span>{course.instructor}</span>
+                </Link>
               </div>
             ) : null}
           </div>
@@ -1717,10 +2190,7 @@ export function CoursePlayer({
       {panelOpen && (
         <aside className="relative z-10 flex h-[640px] w-full shrink-0 flex-col overflow-hidden rounded-xl bg-card shadow-card lg:h-full lg:w-[380px]">
           <div className="border-b border-border/50 p-3">
-            <div
-              role="tablist"
-              className="grid grid-cols-3 gap-1 rounded-lg bg-secondary/75 p-1"
-            >
+            <div role="tablist" className="grid grid-cols-3 gap-1 rounded-lg bg-secondary/75 p-1">
               {(
                 [
                   ["playlist", BookOpen, "Playlist"],
@@ -1778,21 +2248,73 @@ export function CoursePlayer({
                 youtubeId={youtubeId}
                 availableTracks={availableTracks}
                 selectedLang={transcriptLang}
-                onSelectLang={(nextLang) => {
-                  setTranscriptLang(nextLang);
-                  setSubtitleTrack(nextLang);
+                onSelectLang={(nextTrackId) => {
+                  setTranscriptLang(nextTrackId);
+                  setSubtitleTrack(nextTrackId);
                 }}
+                dubLanguages={dubLanguages}
+                selectedDubLang={selectedDubLang}
+                onSelectDubLang={(nextDubLang) => {
+                  lastDubLangRef.current = nextDubLang;
+                  setSelectedDubLang(nextDubLang);
+                }}
+                onDeleteDubTrack={(lang) => void handleDeleteDubTrack(lang)}
                 cues={transcriptCues}
                 cuesLoading={cuesLoading}
-                savedSummary={savedSummary}
                 time={time}
                 seek={seek}
                 onImportSubtitles={() => captionFileInputRef.current?.click()}
+                onOpenAiModal={(mode, targetLang) =>
+                  setTranscriptModalState({ open: true, mode, targetLang })
+                }
+                onSetMaster={(trackId) => void handleSetTrackMaster(trackId)}
+                onSetSource={(trackId) => void handleSetTrackSource(trackId)}
+                onDeleteTrack={(trackId) => void handleDeleteTrack(trackId)}
                 onTranscriptReload={() => setTranscriptRefreshTick((n) => n + 1)}
+                aiPanel={
+                  currentLesson ? (
+                    <TranscriptTranslateModal
+                      variant="inline"
+                      isOpen={transcriptModalState.open}
+                      onClose={() => setTranscriptModalState((prev) => ({ ...prev, open: false }))}
+                      courseId={String(course.id)}
+                      courseLanguage={spokenCourseLang}
+                      lessons={[
+                        {
+                          id: currentLesson.lessonId,
+                          title: currentLesson.title,
+                          youtubeId: youtubeId ?? undefined,
+                          subtitleSources: availableTracks.map((tr) => ({
+                            id: tr.id,
+                            lang: tr.lang,
+                            origin: tr.origin === "generated" ? "generated" : "uploaded",
+                            version: tr.version,
+                            label: tr.label,
+                            fileName: tr.fileName,
+                            is_master: tr.is_master,
+                            is_ai_source: tr.is_ai_source,
+                          })),
+                          hasTranscript: availableTracks.length > 0,
+                        },
+                      ]}
+                      defaultMode={transcriptModalState.mode}
+                      defaultTargetLang={transcriptModalState.targetLang}
+                      onCourseLanguageChanged={(nextLang) => setSpokenCourseLang(nextLang)}
+                      onJobQueued={(targetLang, mode) => {
+                        const nextId = `${targetLang}:${mode === "translate" || mode === "transcribe" ? "generated" : "uploaded"}`;
+                        pendingTrackSelectionRef.current = nextId;
+                      }}
+                    />
+                  ) : null
+                }
               />
             )}
           </div>
         </aside>
+      )}
+
+      {!isEmbeddedPlayer && currentLesson && (
+        <audio ref={dubAudioRef} preload="auto" className="hidden" />
       )}
 
       <input
@@ -2102,7 +2624,10 @@ function PlaylistTab({
             0,
           );
           const modAllDone = mod.lessons.length > 0 && modDoneCount === mod.lessons.length;
-          const modTotalSecs = mod.lessons.reduce((acc, l) => acc + (l.durationSec || parseTs(l.duration)), 0);
+          const modTotalSecs = mod.lessons.reduce(
+            (acc, l) => acc + (l.durationSec || parseTs(l.duration)),
+            0,
+          );
           const isOpen = openMods[modIdx] ?? true;
 
           return (
@@ -2141,8 +2666,7 @@ function PlaylistTab({
                         data-lesson-idx={i}
                         className={cn(
                           "flex items-center gap-3 rounded-lg px-3 py-3 transition-colors hover:bg-secondary/60",
-                          isActive &&
-                            "bg-primary-soft/75 shadow-brand hover:bg-primary-soft/75",
+                          isActive && "bg-primary-soft/75 shadow-brand hover:bg-primary-soft/75",
                         )}
                       >
                         <button
@@ -2810,7 +3334,8 @@ function NotesTab({
                 key={note.id}
                 className={cn(
                   "group overflow-hidden rounded-lg bg-secondary/55 transition-colors hover:bg-secondary/75",
-                  isEditing && "rounded-xl bg-background ring-1 ring-primary/35 shadow-card hover:bg-background",
+                  isEditing &&
+                    "rounded-xl bg-background ring-1 ring-primary/35 shadow-card hover:bg-background",
                 )}
               >
                 {isEditing ? (
@@ -3063,37 +3588,60 @@ function TranscriptTab({
   availableTracks,
   selectedLang,
   onSelectLang,
+  dubLanguages,
+  selectedDubLang,
+  onSelectDubLang,
+  onDeleteDubTrack,
   cues,
   cuesLoading,
-  savedSummary,
   time,
   seek,
   onImportSubtitles,
+  onOpenAiModal,
+  onSetMaster,
+  onSetSource,
+  onDeleteTrack,
   onTranscriptReload,
+  aiPanel,
 }: {
   videoId?: string | undefined;
   youtubeId?: string | null | undefined;
   availableTracks: TranscriptTrack[];
   selectedLang: string | null;
-  onSelectLang: (lang: string) => void;
+  onSelectLang: (trackId: string) => void;
+  dubLanguages: string[];
+  selectedDubLang: string;
+  onSelectDubLang: (lang: string) => void;
+  onDeleteDubTrack: (lang: string) => void;
   cues: TranscriptCue[];
   cuesLoading: boolean;
-  savedSummary: string;
   time: number;
   seek: (t: number) => void;
   onImportSubtitles: () => void;
+  onOpenAiModal: (mode: "transcribe" | "translate", targetLang?: string) => void;
+  onSetMaster: (trackId: string) => void;
+  onSetSource: (trackId: string) => void;
+  onDeleteTrack: (trackId: string) => void;
   onTranscriptReload: () => void;
+  aiPanel?: ReactNode;
 }) {
-  const [showSummary, setShowSummary] = useState(false);
   const [fetchingYt, setFetchingYt] = useState(false);
   const listRef = useRef<HTMLOListElement>(null);
-
-  useEffect(() => {
-    setShowSummary(false);
-  }, [videoId]);
+  const activeJob = useVideoTranscriptJob(videoId);
 
   const currentTrack =
-    availableTracks.find((t) => t.lang === selectedLang) ?? availableTracks[0] ?? null;
+    availableTracks.find((t) => t.id === selectedLang || t.lang === selectedLang) ??
+    availableTracks[0] ??
+    null;
+
+  const effectiveSourceId = useMemo(() => {
+    return (
+      availableTracks.find((t) => t.is_ai_source)?.id ??
+      availableTracks.find((t) => t.is_master)?.id ??
+      availableTracks[0]?.id ??
+      null
+    );
+  }, [availableTracks]);
 
   const activeIdx = useMemo(() => {
     if (cues.length === 0) return -1;
@@ -3123,34 +3671,233 @@ function TranscriptTab({
     if (!youtubeId || !videoId) return;
     setFetchingYt(true);
     try {
+      const langParam =
+        currentTrack && currentTrack.lang !== "source"
+          ? `&lang=${encodeURIComponent(currentTrack.lang)}`
+          : "";
       const res = await fetch(
         apiUrl(
-          `/api/youtube/transcript?videoId=${encodeURIComponent(youtubeId)}${
-            selectedLang && selectedLang !== "source"
-              ? `&lang=${encodeURIComponent(selectedLang)}`
-              : ""
-          }`,
+          `/api/youtube/transcript?videoId=${encodeURIComponent(youtubeId)}&dbVideoId=${encodeURIComponent(videoId)}${langParam}`,
         ),
       );
-      if (!res.ok) throw new Error("YouTube captions unavailable");
+      if (!res.ok) throw new Error("YouTube subtitles unavailable");
       const data = (await res.json()) as { chunks?: TranscriptCue[]; lang?: string };
       if (Array.isArray(data.chunks) && data.chunks.length > 0) {
         onTranscriptReload();
-        toast.success("Fetched YouTube captions");
+        toast.success("Fetched YouTube subtitles");
       } else {
-        toast.error("No captions returned for this YouTube video");
+        toast.error("No subtitles returned for this YouTube video");
       }
     } catch {
-      toast.error("Could not fetch YouTube captions");
+      toast.error("Could not fetch YouTube subtitles");
     } finally {
       setFetchingYt(false);
     }
   };
 
+  const isJobActive = Boolean(
+    activeJob && (activeJob.status === "running" || activeJob.status === "queued"),
+  );
+  const activeJobTrackLabel = activeJob
+    ? `${getLanguageName(activeJob.targetLanguage)} · AI`
+    : "";
+
   return (
     <div className="flex h-full flex-col">
-      <div className="space-y-3 px-3 pb-3 pt-1">
-        <div className="flex items-center gap-1.5">
+      <div className="space-y-2 px-3 pb-3 pt-1">
+        <div className="flex items-center">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="secondary"
+                className={cn(
+                  "t-resize relative min-w-0 flex-1 justify-between overflow-hidden rounded-lg bg-secondary/75 hover:bg-secondary",
+                  isJobActive && "ai-shimmer-row border border-primary/25",
+                )}
+              >
+                <span className="flex min-w-0 items-center gap-2 truncate">
+                  <Subtitles className="shrink-0 text-primary" />
+                  <span className={cn("truncate", isJobActive && "ai-shimmer-text font-medium")}>
+                    {currentTrack
+                      ? currentTrack.label
+                      : isJobActive
+                        ? activeJobTrackLabel
+                        : "No subtitles"}
+                  </span>
+                  {currentTrack?.is_master && (
+                    <span className="rounded-sm bg-chart-4/15 px-1.5 py-0.5 text-[10px] font-semibold text-chart-4">
+                      Master
+                    </span>
+                  )}
+                  {currentTrack && currentTrack.id === effectiveSourceId && (
+                    <span className="rounded-sm bg-primary/15 px-1.5 py-0.5 text-[10px] font-semibold text-primary">
+                      Source
+                    </span>
+                  )}
+                </span>
+                <ChevronDown className="ml-2 shrink-0 text-muted-foreground" />
+                {isJobActive && activeJob && (
+                  <span
+                    aria-hidden="true"
+                    className="pointer-events-none absolute inset-x-0 bottom-0 h-0.5 bg-secondary/60"
+                  >
+                    <span
+                      className="block h-full bg-gradient-to-r from-primary via-chart-2 to-chart-1 transition-all duration-300"
+                      style={{ width: `${Math.max(6, activeJob.progress)}%` }}
+                    />
+                  </span>
+                )}
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent
+              align="start"
+              className="w-[var(--radix-dropdown-menu-trigger-width)] min-w-[250px] rounded-lg p-1.5"
+            >
+              {availableTracks.map((tr) => {
+                const isSelected = currentTrack?.id === tr.id;
+                const isSource = tr.id === effectiveSourceId;
+                return (
+                  <DropdownMenuItem
+                    key={tr.id}
+                    className="rounded-md flex items-center justify-between gap-2 pr-1.5"
+                    onClick={() => onSelectLang(tr.id)}
+                  >
+                    <span className="flex min-w-0 flex-1 items-center gap-1.5 truncate">
+                      <Check
+                        className={cn(
+                          "size-3.5 shrink-0 text-primary",
+                          !isSelected && "opacity-0",
+                        )}
+                      />
+                      <span className="truncate">{tr.label}</span>
+                    </span>
+                    <div
+                      className="ml-auto flex shrink-0 items-center gap-1"
+                      onPointerDown={(e) => e.stopPropagation()}
+                      onPointerUp={(e) => e.stopPropagation()}
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      {tr.is_master ? (
+                        <span className="rounded-sm bg-chart-4/15 px-1.5 py-0.5 text-[10px] font-semibold text-chart-4">
+                          Master
+                        </span>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            onSetMaster(tr.id);
+                          }}
+                          title="Set as master for this language"
+                          className="rounded-sm border border-dashed border-muted-foreground/35 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground/70 transition-colors hover:border-chart-4/60 hover:bg-chart-4/10 hover:text-chart-4"
+                        >
+                          Master
+                        </button>
+                      )}
+                      {isSource ? (
+                        <span className="rounded-sm bg-primary/15 px-1.5 py-0.5 text-[10px] font-semibold text-primary">
+                          Source
+                        </span>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            onSetSource(tr.id);
+                          }}
+                          title="Set as translation source"
+                          className="rounded-sm border border-dashed border-muted-foreground/35 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground/70 transition-colors hover:border-primary/60 hover:bg-primary/10 hover:text-primary"
+                        >
+                          Source
+                        </button>
+                      )}
+                      {videoId && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            onDeleteTrack(tr.id);
+                          }}
+                          title="Delete track"
+                          aria-label="Delete track"
+                          className="rounded p-1 text-muted-foreground/75 transition-colors hover:bg-destructive/15 hover:text-destructive"
+                        >
+                          <Trash2 className="size-3.5" />
+                        </button>
+                      )}
+                    </div>
+                  </DropdownMenuItem>
+                );
+              })}
+
+              {isJobActive && activeJob && (
+                <DropdownMenuItem
+                  className="ai-shimmer-row t-resize relative mt-0.5 flex items-center justify-between gap-2 overflow-hidden rounded-md border border-primary/20 py-2 pr-1.5"
+                  onClick={() => onOpenAiModal(activeJob.mode, activeJob.targetLanguage)}
+                >
+                  <span className="flex min-w-0 flex-1 items-center gap-1.5 truncate">
+                    <Check className="size-3.5 shrink-0 opacity-0" />
+                    <span className="ai-shimmer-text truncate font-medium">
+                      {activeJobTrackLabel}
+                    </span>
+                  </span>
+                  <div
+                    className="ml-auto flex shrink-0 items-center gap-1.5"
+                    onPointerDown={(e) => e.stopPropagation()}
+                    onPointerUp={(e) => e.stopPropagation()}
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <span className="font-mono text-[11px] font-semibold text-primary tabular-nums">
+                      {activeJob.status === "queued" ? "Queued" : `${activeJob.progress}%`}
+                    </span>
+                    {videoId && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          cancelTranscriptJob(videoId);
+                        }}
+                        title="Cancel"
+                        aria-label="Cancel"
+                        className="rounded p-1 text-muted-foreground/75 transition-colors hover:bg-destructive/15 hover:text-destructive"
+                      >
+                        <X className="size-3.5" />
+                      </button>
+                    )}
+                  </div>
+                  <span
+                    aria-hidden="true"
+                    className="pointer-events-none absolute inset-x-0 bottom-0 h-0.5 bg-secondary/60"
+                  >
+                    <span
+                      className="block h-full bg-gradient-to-r from-primary via-chart-2 to-chart-1 transition-all duration-300"
+                      style={{ width: `${Math.max(6, activeJob.progress)}%` }}
+                    />
+                  </span>
+                </DropdownMenuItem>
+              )}
+
+              {(availableTracks.length > 0 || isJobActive) && <DropdownMenuSeparator />}
+              <DropdownMenuItem
+                className="rounded-md text-primary focus:text-primary"
+                onClick={() =>
+                  onOpenAiModal(availableTracks.length > 0 ? "translate" : "transcribe")
+                }
+              >
+                <Sparkles /> Generate / translate…
+              </DropdownMenuItem>
+              <DropdownMenuItem className="rounded-md" onClick={onImportSubtitles}>
+                <Upload /> Import subtitles…
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+
+        <div className="flex items-center">
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button
@@ -3158,136 +3905,141 @@ function TranscriptTab({
                 className="min-w-0 flex-1 justify-between rounded-lg bg-secondary/75 hover:bg-secondary"
               >
                 <span className="flex min-w-0 items-center gap-2 truncate">
-                  <Globe2 className="shrink-0 text-primary" />
+                  <Mic className="shrink-0 text-primary" />
                   <span className="truncate">
-                    {currentTrack ? currentTrack.short : "No subtitles"}
+                    {selectedDubLang === "original"
+                      ? "Original audio"
+                      : `${getLanguageName(selectedDubLang)} · Dub`}
                   </span>
-                  {currentTrack?.lang === "source" && (
-                    <span className="text-muted-foreground">(Source)</span>
-                  )}
                 </span>
                 <ChevronDown className="shrink-0 text-muted-foreground" />
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent
               align="start"
-              className="w-[var(--radix-dropdown-menu-trigger-width)] rounded-lg p-1.5"
+              className="w-[var(--radix-dropdown-menu-trigger-width)] min-w-[250px] rounded-lg p-1.5"
             >
-              {availableTracks.map((tr) => (
-                <DropdownMenuItem
-                  key={tr.id}
-                  className="rounded-md"
-                  onClick={() => onSelectLang(tr.lang)}
-                >
-                  {tr.label}
-                  {currentTrack?.lang === tr.lang && <Check className="ml-auto text-primary" />}
-                </DropdownMenuItem>
-              ))}
-              {availableTracks.length > 0 && <DropdownMenuSeparator />}
               <DropdownMenuItem
-                className="rounded-md text-primary focus:text-primary"
-                onClick={onImportSubtitles}
+                className="rounded-md flex items-center gap-1.5"
+                onClick={() => onSelectDubLang("original")}
               >
-                <Upload /> Import subtitles…
+                <Check
+                  className={cn(
+                    "size-3.5 shrink-0 text-primary",
+                    selectedDubLang !== "original" && "opacity-0",
+                  )}
+                />
+                <span className="truncate">Original audio</span>
               </DropdownMenuItem>
-              <DropdownMenuItem
-                disabled
-                className="cursor-not-allowed rounded-md text-muted-foreground opacity-45"
-              >
-                <Plus /> Add language…
-              </DropdownMenuItem>
+              {dubLanguages.map((lang) => {
+                const isSelected = selectedDubLang === lang;
+                return (
+                  <DropdownMenuItem
+                    key={lang}
+                    className="rounded-md flex items-center justify-between gap-2 pr-1.5"
+                    onClick={() => onSelectDubLang(lang)}
+                  >
+                    <span className="flex min-w-0 flex-1 items-center gap-1.5 truncate">
+                      <Check
+                        className={cn(
+                          "size-3.5 shrink-0 text-primary",
+                          !isSelected && "opacity-0",
+                        )}
+                      />
+                      <span className="truncate">{getLanguageName(lang)} · Dub</span>
+                    </span>
+                    {videoId && (
+                      <div
+                        className="ml-auto flex shrink-0 items-center"
+                        onPointerDown={(e) => e.stopPropagation()}
+                        onPointerUp={(e) => e.stopPropagation()}
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            onDeleteDubTrack(lang);
+                          }}
+                          title="Delete dub track"
+                          aria-label="Delete dub track"
+                          className="rounded p-1 text-muted-foreground/75 transition-colors hover:bg-destructive/15 hover:text-destructive"
+                        >
+                          <Trash2 className="size-3.5" />
+                        </button>
+                      </div>
+                    )}
+                  </DropdownMenuItem>
+                );
+              })}
             </DropdownMenuContent>
           </DropdownMenu>
-
-          {videoId && currentTrack && cues.length > 0 && (
-            <Button
-              asChild
-              variant="ghost"
-              size="icon"
-              title="Download subtitles (.srt)"
-              aria-label="Download subtitles"
-              className="size-9 shrink-0 rounded-lg text-muted-foreground"
-            >
-              <a
-                href={apiUrl(
-                  `/api/transcripts/${encodeURIComponent(videoId)}/download?lang=${encodeURIComponent(currentTrack.lang)}&format=srt`,
-                )}
-                download
-              >
-                <Download className="size-4" />
-              </a>
-            </Button>
-          )}
         </div>
 
-        <div className="flex gap-2">
-          <button
-            type="button"
-            disabled
-            title="Voice dubbing unavailable"
-            className="flex flex-1 cursor-not-allowed items-center justify-center gap-1.5 rounded-md bg-secondary/75 px-3 py-2 text-xs font-semibold text-muted-foreground opacity-45"
-          >
-            <Mic className="size-3.5" /> Voice dub
-          </button>
-          <button
-            type="button"
-            disabled={!savedSummary}
-            title={savedSummary ? "Toggle saved summary" : "AI summary generation unavailable"}
-            onClick={() => {
-              if (savedSummary) setShowSummary((s) => !s);
-            }}
-            className={cn(
-              "flex flex-1 items-center justify-center gap-1.5 rounded-md bg-secondary/75 px-3 py-2 text-xs font-semibold text-muted-foreground transition-colors",
-              savedSummary
-                ? "hover:bg-secondary hover:text-foreground"
-                : "cursor-not-allowed opacity-45",
-              showSummary && savedSummary && "bg-primary-soft text-primary",
-            )}
-          >
-            <Sparkles className="size-3.5" /> {showSummary ? "Hide summary" : "Summary"}
-          </button>
-        </div>
-
-        {showSummary && savedSummary && (
-          <div className="max-h-48 overflow-y-auto whitespace-pre-wrap rounded-lg bg-primary-soft/60 p-3 text-xs leading-5 text-foreground custom-scrollbar-sm">
-            <p className="mb-1 flex items-center gap-1.5 font-semibold text-primary">
-              <Sparkles className="size-3.5" /> Summary
-            </p>
-            {savedSummary}
-          </div>
-        )}
+        {aiPanel}
       </div>
 
       {cuesLoading ? (
         <div className="flex flex-1 items-center justify-center text-xs text-muted-foreground">
-          Loading transcript…
+          Loading subtitles…
         </div>
       ) : cues.length === 0 ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
-          <p className="text-sm text-muted-foreground">No transcript or subtitles yet.</p>
-          <div className="flex flex-wrap justify-center gap-2">
-            <Button
-              type="button"
-              size="sm"
-              variant="secondary"
-              onClick={onImportSubtitles}
-              className="rounded-md"
-            >
-              <Upload className="size-3.5" /> Import subtitles
-            </Button>
-            {youtubeId && (
+          {isJobActive && activeJob ? (
+            <div className="t-resize flex flex-col items-center gap-2">
+              <div className="space-y-1">
+                <p className="ai-shimmer-text text-sm font-medium">{activeJob.message}</p>
+                <p className="font-mono text-xs text-muted-foreground tabular-nums">
+                  {activeJobTrackLabel} · {activeJob.progress}%
+                </p>
+              </div>
               <Button
                 type="button"
                 size="sm"
                 variant="ghost"
-                disabled={fetchingYt}
-                onClick={() => void handleFetchYoutubeTranscript()}
-                className="rounded-md"
+                onClick={() => videoId && cancelTranscriptJob(videoId)}
+                className="mt-1 h-7 rounded-md px-2.5 text-xs text-muted-foreground hover:text-destructive"
               >
-                {fetchingYt ? "Fetching…" : "Fetch YouTube captions"}
+                Cancel
               </Button>
-            )}
-          </div>
+            </div>
+          ) : (
+            <>
+              <p className="text-sm text-muted-foreground">No subtitles yet.</p>
+              <div className="flex flex-wrap justify-center gap-2">
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={() => onOpenAiModal("transcribe")}
+                  className="rounded-md"
+                >
+                  <Sparkles className="size-3.5" /> Generate AI
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="secondary"
+                  onClick={onImportSubtitles}
+                  className="rounded-md"
+                >
+                  <Upload className="size-3.5" /> Import file
+                </Button>
+                {youtubeId && (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    disabled={fetchingYt}
+                    onClick={() => void handleFetchYoutubeTranscript()}
+                    className="rounded-md"
+                  >
+                    {fetchingYt ? "Fetching…" : "Fetch YouTube"}
+                  </Button>
+                )}
+              </div>
+            </>
+          )}
         </div>
       ) : (
         <ol

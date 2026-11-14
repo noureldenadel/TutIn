@@ -16,14 +16,36 @@ import {
   RefreshCw,
   Save,
   Settings2,
+  Sparkles,
   Subtitles,
   Trash2,
+  Upload,
   X,
 } from "lucide-react";
 import { toast } from "sonner";
 
 import { apiUrl } from "@/lib/api";
-import { getLanguageLabel } from "@/lib/languages";
+import { formatTrackDisplayLabel, getLanguageLabel, getOriginLabel } from "@/lib/languages";
+import {
+  TRANSCRIPT_UPDATED_EVENT,
+  cancelAllTranscriptJobs,
+  cancelTranscriptJob,
+  deleteSubtitleTrack,
+  setSubtitleTrackMaster,
+  setSubtitleTrackSource,
+  useTranscriptJobs,
+} from "@/lib/transcript-ai";
+import {
+  TranscriptTranslateModal,
+  type TranscriptModalLessonItem,
+} from "@/components/modals/transcript-translate-modal";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
   createCourseModule,
   createCourseVideo,
@@ -49,7 +71,7 @@ import {
   type Course,
 } from "@/lib/courses";
 import { cn } from "@/lib/utils";
-import { InstructorAvatar } from "@/components/layout/instructor-avatar";
+import { InstructorAvatar, normalizeInstructorSlug } from "@/components/layout/instructor-avatar";
 import { EditCourseModal } from "@/components/modals/edit-course-modal";
 import {
   SmartCaptionsModal,
@@ -113,32 +135,50 @@ export function CurriculumManager({ course: initialCourse }: { course: Course })
   >(null);
   const [deleting, setDeleting] = useState(false);
 
-  // Subtitle file upload
+  // Subtitle file upload & AI transcript modal
   const captionInputRef = useRef<HTMLInputElement>(null);
   const pendingCaptionLessonRef = useRef<CourseLessonItem | null>(null);
   const [uploadingCaptionId, setUploadingCaptionId] = useState<string | null>(null);
+  const [selectedLessonIds, setSelectedLessonIds] = useState<Set<string>>(new Set());
+  const [aiModalState, setAiModalState] = useState<{
+    open: boolean;
+    mode: "transcribe" | "translate";
+    lessons: TranscriptModalLessonItem[];
+  }>({ open: false, mode: "transcribe", lessons: [] });
+
+  const jobsMap = useTranscriptJobs();
+  const courseActiveJobs = useMemo(
+    () =>
+      Object.values(jobsMap).filter(
+        (j) => j.courseId === course.id && (j.status === "running" || j.status === "queued"),
+      ),
+    [jobsMap, course.id],
+  );
 
   useEffect(() => {
     setCourse(initialCourse);
   }, [initialCourse]);
 
-  const applyCurriculum = useCallback((nextModules: CourseModuleSpec[], nextLessons: CourseLessonItem[]) => {
-    const grouped: ManagedModule[] = nextModules.map((mod, idx) => ({
-      id: mod.id,
-      title: mod.title,
-      order: idx,
-      lessons: nextLessons.filter((l) => l.moduleId === mod.id),
-    }));
-    setModules(grouped);
-    setDirtyOrder(false);
-    setOpenMods((prev) => {
-      const next = { ...prev };
-      for (const m of grouped) {
-        if (next[m.id] === undefined) next[m.id] = true;
-      }
-      return next;
-    });
-  }, []);
+  const applyCurriculum = useCallback(
+    (nextModules: CourseModuleSpec[], nextLessons: CourseLessonItem[]) => {
+      const grouped: ManagedModule[] = nextModules.map((mod, idx) => ({
+        id: mod.id,
+        title: mod.title,
+        order: idx,
+        lessons: nextLessons.filter((l) => l.moduleId === mod.id),
+      }));
+      setModules(grouped);
+      setDirtyOrder(false);
+      setOpenMods((prev) => {
+        const next = { ...prev };
+        for (const m of grouped) {
+          if (next[m.id] === undefined) next[m.id] = true;
+        }
+        return next;
+      });
+    },
+    [],
+  );
 
   const loadCurriculum = useCallback(
     async (force = false) => {
@@ -175,6 +215,76 @@ export function CurriculumManager({ course: initialCourse }: { course: Course })
     window.addEventListener(COURSES_CHANGED_EVENT, onCoursesChanged);
     return () => window.removeEventListener(COURSES_CHANGED_EVENT, onCoursesChanged);
   }, [course.id]);
+
+  useEffect(() => {
+    const onTranscriptUpdated = () => {
+      void loadCurriculum(true);
+    };
+    window.addEventListener(TRANSCRIPT_UPDATED_EVENT, onTranscriptUpdated);
+    return () => window.removeEventListener(TRANSCRIPT_UPDATED_EVENT, onTranscriptUpdated);
+  }, [loadCurriculum]);
+
+  const allLessonsFlat = useMemo(() => modules.flatMap((m) => m.lessons), [modules]);
+
+  const toModalLesson = useCallback(
+    (lesson: CourseLessonItem): TranscriptModalLessonItem => ({
+      id: lesson.lessonId,
+      title: lesson.title,
+      subtitleSources: lesson.subtitleSources,
+      availableLanguages: lesson.subtitleSources
+        .map((s) => s.lang)
+        .filter((l): l is string => typeof l === "string" && l.length > 0),
+      hasTranscript: lesson.subtitleSources.length > 0,
+    }),
+    [],
+  );
+
+  const toggleLessonSelected = (lessonId: string) => {
+    setSelectedLessonIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(lessonId)) next.delete(lessonId);
+      else next.add(lessonId);
+      return next;
+    });
+  };
+
+  const toggleAllSelected = () => {
+    if (selectedLessonIds.size === allLessonsFlat.length && allLessonsFlat.length > 0) {
+      setSelectedLessonIds(new Set());
+    } else {
+      setSelectedLessonIds(new Set(allLessonsFlat.map((l) => l.lessonId)));
+    }
+  };
+
+  const handleSetTrackMaster = async (videoId: string, trackId: string) => {
+    try {
+      await setSubtitleTrackMaster(videoId, trackId, String(course.id));
+      await loadCurriculum(true);
+      toast.success("Set as master track");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to set master");
+    }
+  };
+
+  const handleSetTrackSource = async (videoId: string, trackId: string) => {
+    try {
+      await setSubtitleTrackSource(videoId, trackId, String(course.id));
+      await loadCurriculum(true);
+      toast.success("Set as source track");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to set source");
+    }
+  };
+
+  const handleDeleteTrack = async (videoId: string, trackId: string) => {
+    try {
+      await deleteSubtitleTrack(videoId, trackId);
+      await loadCurriculum(true);
+      toast.success("Subtitle track removed");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to remove track");
+    }
+  };
 
   const totals = useMemo(() => {
     let lessonsCount = 0;
@@ -429,10 +539,15 @@ export function CurriculumManager({ course: initialCourse }: { course: Course })
 
           <div className="mt-2 flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
             {course.instructor.trim() ? (
-              <span className="inline-flex items-center gap-1.5">
+              <Link
+                to="/instructors"
+                search={{ instructor: normalizeInstructorSlug(course.instructor) }}
+                className="inline-flex items-center gap-1.5 rounded-md transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                title={`View ${course.instructor}`}
+              >
                 <InstructorAvatar name={course.instructor} course={course} size="sm" />
                 <span>{course.instructor}</span>
-              </span>
+              </Link>
             ) : null}
             <span>
               {modules.length} {modules.length === 1 ? "module" : "modules"}
@@ -512,22 +627,72 @@ export function CurriculumManager({ course: initialCourse }: { course: Course })
             onClick={() => void handleAddModule()}
             className="h-9 shrink-0 rounded-md"
           >
-            {addingModule ? <Loader2 className="size-4 animate-spin" /> : <Plus className="size-4" />}
+            {addingModule ? (
+              <Loader2 className="size-4 animate-spin" />
+            ) : (
+              <Plus className="size-4" />
+            )}
             Add module
           </Button>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          {courseActiveJobs.length > 0 && (
+            <div className="flex items-center gap-2 rounded-lg border border-primary/30 bg-primary-soft/40 px-2.5 py-1 text-xs">
+              <Loader2 className="size-3.5 animate-spin text-primary" />
+              <span className="font-medium text-foreground">
+                {courseActiveJobs.length} {courseActiveJobs.length === 1 ? "job" : "jobs"} active
+              </span>
+              <button
+                type="button"
+                onClick={() => cancelAllTranscriptJobs(course.id)}
+                className="rounded px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground hover:bg-secondary hover:text-foreground"
+              >
+                Cancel
+              </button>
+            </div>
+          )}
+
+          {allLessonsFlat.length > 0 && (
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              onClick={toggleAllSelected}
+              className="rounded-md text-xs text-muted-foreground"
+            >
+              {selectedLessonIds.size > 0
+                ? `${selectedLessonIds.size} selected · Clear`
+                : "Select all"}
+            </Button>
+          )}
+
           <Button
             type="button"
             size="sm"
             variant="secondary"
-            disabled
-            title="AI transcription unavailable"
-            className="cursor-not-allowed rounded-md opacity-45"
+            disabled={allLessonsFlat.length === 0}
+            onClick={() => {
+              const targetLessons =
+                selectedLessonIds.size > 0
+                  ? allLessonsFlat.filter((l) => selectedLessonIds.has(l.lessonId))
+                  : allLessonsFlat;
+              setAiModalState({
+                open: true,
+                mode: "transcribe",
+                lessons: targetLessons.map(toModalLesson),
+              });
+            }}
+            className="rounded-md"
           >
-            <BookOpen className="size-4" /> Transcribe missing
+            <Sparkles className="size-4 text-primary" />
+            <span>
+              {selectedLessonIds.size > 0
+                ? `Subtitles / AI (${selectedLessonIds.size})`
+                : "Subtitles / AI"}
+            </span>
           </Button>
+
           {dirtyOrder && (
             <Button
               type="button"
@@ -683,12 +848,28 @@ export function CurriculumManager({ course: initialCourse }: { course: Course })
                         const globalIdx = globalIndexByLessonId.get(lesson.lessonId) ?? 0;
                         const secs = getLessonDurationSeconds(lesson);
                         const captionCount = lesson.subtitleSources?.length ?? 0;
+                        const lessonJob = jobsMap[lesson.lessonId];
+                        const isJobActive =
+                          lessonJob &&
+                          (lessonJob.status === "running" || lessonJob.status === "queued");
+                        const isSelected = selectedLessonIds.has(lesson.lessonId);
 
                         return (
                           <div
                             key={lesson.lessonId}
-                            className="flex items-center gap-3 px-4 py-2.5 transition-colors hover:bg-secondary/45"
+                            className={cn(
+                              "flex items-center gap-3 px-4 py-2.5 transition-colors hover:bg-secondary/45",
+                              isSelected && "bg-primary-soft/25",
+                            )}
                           >
+                            <input
+                              type="checkbox"
+                              checked={isSelected}
+                              onChange={() => toggleLessonSelected(lesson.lessonId)}
+                              aria-label={`Select ${lesson.title}`}
+                              className="size-3.5 shrink-0 cursor-pointer rounded border-border accent-primary"
+                            />
+
                             <button
                               type="button"
                               aria-label={
@@ -737,17 +918,57 @@ export function CurriculumManager({ course: initialCourse }: { course: Course })
                               )}
                             </div>
 
+                            {isJobActive && lessonJob && (
+                              <div className="ai-shimmer-row t-resize flex shrink-0 items-center gap-1.5 rounded-md border border-primary/25 bg-primary-soft/40 px-2 py-0.5 text-[11px]">
+                                <span className="ai-shimmer-text max-w-[120px] truncate font-medium">
+                                  {getLanguageLabel(lessonJob.targetLanguage)} · AI
+                                </span>
+                                <span className="font-mono font-semibold text-primary tabular-nums">
+                                  {lessonJob.status === "queued" ? "Queued" : `${lessonJob.progress}%`}
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => cancelTranscriptJob(lesson.lessonId)}
+                                  title="Cancel job"
+                                  className="rounded p-0.5 text-muted-foreground hover:bg-secondary hover:text-foreground"
+                                >
+                                  <X className="size-3" />
+                                </button>
+                              </div>
+                            )}
+
                             {captionCount > 0 && (
                               <div className="hidden items-center gap-1 sm:flex">
-                                {lesson.subtitleSources.slice(0, 3).map((src) => (
-                                  <Badge
-                                    key={`${src.lang}-${src.fileName ?? ""}`}
-                                    variant="secondary"
-                                    className="px-1.5 py-0 text-[10px] uppercase"
-                                  >
-                                    {src.lang}
+                                {lesson.subtitleSources.slice(0, 4).map((src) => {
+                                  const originShort = getOriginLabel(src.origin, src.version);
+                                  const effectiveSource =
+                                    lesson.subtitleSources.find((s) => s.is_ai_source) ??
+                                    lesson.subtitleSources.find((s) => s.is_master) ??
+                                    lesson.subtitleSources[0];
+                                  const isSource = effectiveSource === src;
+                                  return (
+                                    <Badge
+                                      key={src.id || `${src.lang}-${src.fileName ?? ""}`}
+                                      variant="secondary"
+                                      title={`${formatTrackDisplayLabel(src)}${isSource ? " (Source)" : ""}`}
+                                      className={cn(
+                                        "px-1.5 py-0 text-[10px]",
+                                        lesson.subtitleSources.length > 1 &&
+                                          isSource &&
+                                          "ring-1 ring-primary/40",
+                                      )}
+                                    >
+                                      <span className="uppercase">{src.lang}</span>
+                                      <span className="mx-0.5 opacity-60">·</span>
+                                      <span className="font-normal opacity-85">{originShort}</span>
+                                    </Badge>
+                                  );
+                                })}
+                                {captionCount > 4 && (
+                                  <Badge variant="secondary" className="px-1.5 py-0 text-[10px]">
+                                    +{captionCount - 4}
                                   </Badge>
-                                ))}
+                                )}
                               </div>
                             )}
 
@@ -780,33 +1001,192 @@ export function CurriculumManager({ course: initialCourse }: { course: Course })
                               >
                                 <ArrowDown className="size-3.5" />
                               </Button>
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="icon"
-                                disabled={uploadingCaptionId === lesson.lessonId}
-                                onClick={() => triggerCaptionUpload(lesson)}
-                                title="Upload subtitles (.srt / .vtt)"
-                                aria-label="Upload subtitles"
-                                className="size-7 text-muted-foreground"
-                              >
-                                {uploadingCaptionId === lesson.lessonId ? (
-                                  <Loader2 className="size-3.5 animate-spin" />
-                                ) : (
-                                  <Subtitles className="size-3.5" />
-                                )}
-                              </Button>
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="icon"
-                                disabled
-                                title="Voice dubbing unavailable"
-                                aria-label="Voice dubbing unavailable"
-                                className="size-7 cursor-not-allowed text-muted-foreground opacity-40"
-                              >
-                                <Mic className="size-3.5" />
-                              </Button>
+
+                              <DropdownMenu>
+                                <DropdownMenuTrigger asChild>
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="icon"
+                                    disabled={uploadingCaptionId === lesson.lessonId}
+                                    title="Subtitles & AI"
+                                    aria-label="Subtitles & AI"
+                                    className={cn(
+                                      "size-7 text-muted-foreground",
+                                      captionCount > 0 && "text-primary",
+                                    )}
+                                  >
+                                    {uploadingCaptionId === lesson.lessonId ? (
+                                      <Loader2 className="size-3.5 animate-spin" />
+                                    ) : (
+                                      <Subtitles className="size-3.5" />
+                                    )}
+                                  </Button>
+                                </DropdownMenuTrigger>
+                                <DropdownMenuContent align="end" className="w-64 rounded-lg p-1.5">
+                                  {lesson.subtitleSources.length > 0 && (
+                                    <>
+                                      <p className="px-2 py-1 text-[11px] font-semibold text-muted-foreground">
+                                        Tracks
+                                      </p>
+                                      {lesson.subtitleSources.map((src) => {
+                                        const trackId =
+                                          src.id || `${src.lang}:${src.origin || "uploaded"}`;
+                                        const effectiveSource =
+                                          lesson.subtitleSources.find((s) => s.is_ai_source) ??
+                                          lesson.subtitleSources.find((s) => s.is_master) ??
+                                          lesson.subtitleSources[0];
+                                        const isSource = effectiveSource === src;
+                                        return (
+                                          <div
+                                            key={trackId}
+                                            className="flex items-center justify-between gap-2 rounded-md px-2 py-1.5 text-xs hover:bg-secondary/60"
+                                          >
+                                            <div className="min-w-0 flex-1">
+                                              <div className="flex items-center gap-1.5 truncate font-medium text-foreground">
+                                                <span className="truncate">
+                                                  {formatTrackDisplayLabel(src)}
+                                                </span>
+                                              </div>
+                                            </div>
+                                            <div className="flex shrink-0 items-center gap-1">
+                                              {src.is_master ? (
+                                                <span className="rounded-sm bg-chart-4/15 px-1.5 py-0.5 text-[10px] font-semibold text-chart-4">
+                                                  Master
+                                                </span>
+                                              ) : (
+                                                <button
+                                                  type="button"
+                                                  onClick={() =>
+                                                    void handleSetTrackMaster(
+                                                      lesson.lessonId,
+                                                      trackId,
+                                                    )
+                                                  }
+                                                  title="Set as master for this language"
+                                                  className="rounded-sm border border-dashed border-muted-foreground/35 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground/70 transition-colors hover:border-chart-4/60 hover:bg-chart-4/10 hover:text-chart-4"
+                                                >
+                                                  Master
+                                                </button>
+                                              )}
+                                              {isSource ? (
+                                                <span className="rounded-sm bg-primary/15 px-1.5 py-0.5 text-[10px] font-semibold text-primary">
+                                                  Source
+                                                </span>
+                                              ) : (
+                                                <button
+                                                  type="button"
+                                                  onClick={() =>
+                                                    void handleSetTrackSource(
+                                                      lesson.lessonId,
+                                                      trackId,
+                                                    )
+                                                  }
+                                                  title="Set as translation source"
+                                                  className="rounded-sm border border-dashed border-muted-foreground/35 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground/70 transition-colors hover:border-primary/60 hover:bg-primary/10 hover:text-primary"
+                                                >
+                                                  Source
+                                                </button>
+                                              )}
+                                              <button
+                                                type="button"
+                                                onClick={() =>
+                                                  void handleDeleteTrack(lesson.lessonId, trackId)
+                                                }
+                                                title="Delete track"
+                                                aria-label="Delete track"
+                                                className="rounded p-1 text-muted-foreground/75 transition-colors hover:bg-destructive/15 hover:text-destructive"
+                                              >
+                                                <Trash2 className="size-3.5" />
+                                              </button>
+                                            </div>
+                                          </div>
+                                        );
+                                      })}
+                                      <DropdownMenuSeparator />
+                                    </>
+                                  )}
+                                  {isJobActive && lessonJob && (
+                                    <>
+                                      <DropdownMenuItem
+                                        className="ai-shimmer-row t-resize relative mb-1 flex items-center justify-between gap-2 overflow-hidden rounded-md border border-primary/20 py-2 pr-1.5"
+                                        onClick={() =>
+                                          setAiModalState({
+                                            open: true,
+                                            mode: lessonJob.mode,
+                                            lessons: [toModalLesson(lesson)],
+                                          })
+                                        }
+                                      >
+                                        <span className="flex min-w-0 flex-1 items-center gap-2 truncate">
+                                          <span className="ai-shimmer-text truncate font-medium">
+                                            {getLanguageLabel(lessonJob.targetLanguage)} · AI
+                                          </span>
+                                        </span>
+                                        <div
+                                          className="ml-auto flex shrink-0 items-center gap-1.5"
+                                          onPointerDown={(e) => e.stopPropagation()}
+                                          onPointerUp={(e) => e.stopPropagation()}
+                                          onClick={(e) => e.stopPropagation()}
+                                        >
+                                          <span className="font-mono text-[11px] font-semibold text-primary tabular-nums">
+                                            {lessonJob.status === "queued"
+                                              ? "Queued"
+                                              : `${lessonJob.progress}%`}
+                                          </span>
+                                          <button
+                                            type="button"
+                                            onClick={(e) => {
+                                              e.preventDefault();
+                                              e.stopPropagation();
+                                              cancelTranscriptJob(lesson.lessonId);
+                                            }}
+                                            title="Cancel"
+                                            aria-label="Cancel"
+                                            className="rounded p-1 text-muted-foreground/75 transition-colors hover:bg-destructive/15 hover:text-destructive"
+                                          >
+                                            <X className="size-3.5" />
+                                          </button>
+                                        </div>
+                                        <span
+                                          aria-hidden="true"
+                                          className="pointer-events-none absolute inset-x-0 bottom-0 h-0.5 bg-secondary/60"
+                                        >
+                                          <span
+                                            className="block h-full bg-gradient-to-r from-primary via-chart-2 to-chart-1 transition-all duration-300"
+                                            style={{ width: `${Math.max(6, lessonJob.progress)}%` }}
+                                          />
+                                        </span>
+                                      </DropdownMenuItem>
+                                      <DropdownMenuSeparator />
+                                    </>
+                                  )}
+                                  <DropdownMenuItem
+                                    className="rounded-md"
+                                    onClick={() =>
+                                      setAiModalState({
+                                        open: true,
+                                        mode:
+                                          lesson.subtitleSources.length > 0
+                                            ? "translate"
+                                            : "transcribe",
+                                        lessons: [toModalLesson(lesson)],
+                                      })
+                                    }
+                                  >
+                                    <Sparkles className="size-3.5 text-primary" />
+                                    <span>Generate / translate AI…</span>
+                                  </DropdownMenuItem>
+                                  <DropdownMenuItem
+                                    className="rounded-md"
+                                    onClick={() => triggerCaptionUpload(lesson)}
+                                  >
+                                    <Upload className="size-3.5" />
+                                    <span>Upload file (.srt / .vtt)…</span>
+                                  </DropdownMenuItem>
+                                </DropdownMenuContent>
+                              </DropdownMenu>
+
                               <Button
                                 type="button"
                                 variant="ghost"
@@ -978,6 +1358,18 @@ export function CurriculumManager({ course: initialCourse }: { course: Course })
           }}
         />
       )}
+
+      <TranscriptTranslateModal
+        isOpen={aiModalState.open}
+        onClose={() => setAiModalState((prev) => ({ ...prev, open: false }))}
+        courseId={course.id}
+        courseLanguage={course.language || "en"}
+        lessons={aiModalState.lessons}
+        defaultMode={aiModalState.mode}
+        onCourseLanguageChanged={(nextLang) => {
+          setCourse((prev) => ({ ...prev, language: nextLang }));
+        }}
+      />
     </div>
   );
 }

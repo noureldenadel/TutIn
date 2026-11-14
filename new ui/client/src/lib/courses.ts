@@ -3,12 +3,7 @@ import { apiJson, apiRequest, apiUrl } from "@/lib/api";
 import { formatDurationClock } from "@/lib/format";
 
 export type CourseSourceType =
-  | "local"
-  | "youtube"
-  | "google-drive"
-  | "external-link"
-  | "drive"
-  | "link";
+  "local" | "youtube" | "google-drive" | "external-link" | "drive" | "link";
 
 export interface Course {
   id: string;
@@ -62,10 +57,10 @@ export function isDirectLinkCourse(
   }
   return Boolean(
     course.courseUrl &&
-      course.sourceType !== "youtube" &&
-      course.sourceType !== "google-drive" &&
-      course.sourceType !== "drive" &&
-      (course.totalVideos ?? course.lessons ?? 0) === 0,
+    course.sourceType !== "youtube" &&
+    course.sourceType !== "google-drive" &&
+    course.sourceType !== "drive" &&
+    (course.totalVideos ?? course.lessons ?? 0) === 0,
   );
 }
 
@@ -79,13 +74,9 @@ export function mapApiCourse(raw: Record<string, unknown>): Course {
   const totalDuration = Number(raw["totalDuration"] ?? 0) || 0;
   const totalVideos = Number(raw["totalVideos"] ?? raw["lessons"] ?? 0) || 0;
   const completedVideos = Number(raw["completedVideos"] ?? 0) || 0;
-  const completionPercentage = Number(
-    raw["completionPercentage"] ?? raw["progress"] ?? 0,
-  ) || 0;
+  const completionPercentage = Number(raw["completionPercentage"] ?? raw["progress"] ?? 0) || 0;
   const progress =
-    completionPercentage >= 100
-      ? 100
-      : Math.min(99, Math.max(0, Math.round(completionPercentage)));
+    completionPercentage >= 100 ? 100 : Math.min(99, Math.max(0, Math.round(completionPercentage)));
 
   const rawSourceType = String(raw["sourceType"] ?? "local") as CourseSourceType;
   const rawThumbUrl =
@@ -112,14 +103,11 @@ export function mapApiCourse(raw: Record<string, unknown>): Course {
   return {
     id,
     title: String(raw["title"] ?? "Untitled Course"),
-    originalTitle:
-      typeof raw["originalTitle"] === "string" ? raw["originalTitle"] : undefined,
+    originalTitle: typeof raw["originalTitle"] === "string" ? raw["originalTitle"] : undefined,
     description: typeof raw["description"] === "string" ? raw["description"] : "",
-    folderPath:
-      typeof raw["folderPath"] === "string" ? raw["folderPath"] : null,
+    folderPath: typeof raw["folderPath"] === "string" ? raw["folderPath"] : null,
     sourceType: rawSourceType,
-    instructor:
-      typeof raw["instructor"] === "string" ? raw["instructor"].trim() : "",
+    instructor: typeof raw["instructor"] === "string" ? raw["instructor"].trim() : "",
     language: typeof raw["language"] === "string" ? raw["language"] : "en",
     tags: rawTags,
     customMetadata: customMeta,
@@ -133,27 +121,25 @@ export function mapApiCourse(raw: Record<string, unknown>): Course {
       totalDuration > 0
         ? formatDurationClock(totalDuration)
         : typeof raw["duration"] === "string" && raw["duration"]
-        ? raw["duration"]
-        : isDirectLinkCourse({
-            sourceType: rawSourceType,
-            courseUrl: typeof raw["courseUrl"] === "string" ? raw["courseUrl"] : undefined,
-            totalVideos,
-            lessons: totalVideos,
-          })
-        ? "External"
-        : "00:00:00",
+          ? raw["duration"]
+          : isDirectLinkCourse({
+                sourceType: rawSourceType,
+                courseUrl: typeof raw["courseUrl"] === "string" ? raw["courseUrl"] : undefined,
+                totalVideos,
+                lessons: totalVideos,
+              })
+            ? "External"
+            : "00:00:00",
     thumbnailUrl: rawThumbUrl ?? rawThumbData,
     thumbnailData: rawThumbData ?? null,
     dateAdded: typeof raw["dateAdded"] === "string" ? raw["dateAdded"] : undefined,
-    lastAccessedAt:
-      typeof raw["lastAccessedAt"] === "string" ? raw["lastAccessedAt"] : null,
+    lastAccessedAt: typeof raw["lastAccessedAt"] === "string" ? raw["lastAccessedAt"] : null,
     completedAt: typeof raw["completedAt"] === "string" ? raw["completedAt"] : null,
     order: typeof raw["order"] === "number" ? raw["order"] : undefined,
     courseUrl: typeof raw["courseUrl"] === "string" ? raw["courseUrl"] : undefined,
     youtubePlaylistId:
       typeof raw["youtubePlaylistId"] === "string" ? raw["youtubePlaylistId"] : null,
-    driveFolderId:
-      typeof raw["driveFolderId"] === "string" ? raw["driveFolderId"] : null,
+    driveFolderId: typeof raw["driveFolderId"] === "string" ? raw["driveFolderId"] : null,
     thumbnailHue: Number.isFinite(hueFromMeta) ? hueFromMeta : undefined,
     thumbnailSeed: Number.isFinite(seedFromMeta) ? seedFromMeta : undefined,
   };
@@ -237,33 +223,25 @@ export async function updateCourse(
   courseId: string,
   updates: Record<string, unknown>,
 ): Promise<{ success: boolean }> {
-  const res = await apiJson<{ success: boolean }>(
-    `/api/courses/${encodeURIComponent(courseId)}`,
-    {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(updates),
-    },
-  );
+  const res = await apiJson<{ success: boolean }>(`/api/courses/${encodeURIComponent(courseId)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(updates),
+  });
   await fetchCourses(true);
   if (typeof window !== "undefined") {
-    window.dispatchEvent(
-      new CustomEvent(COURSE_UPDATED_EVENT, { detail: { courseId, updates } }),
-    );
+    window.dispatchEvent(new CustomEvent(COURSE_UPDATED_EVENT, { detail: { courseId, updates } }));
   }
   return res;
 }
 
 export async function deleteCourse(courseId: string): Promise<{ success: boolean }> {
-  const res = await apiJson<{ success: boolean }>(
-    `/api/courses/${encodeURIComponent(courseId)}`,
-    { method: "DELETE" },
-  );
+  const res = await apiJson<{ success: boolean }>(`/api/courses/${encodeURIComponent(courseId)}`, {
+    method: "DELETE",
+  });
   notifyCoursesChanged(coursesCache.filter((c) => c.id !== courseId));
   if (typeof window !== "undefined") {
-    window.dispatchEvent(
-      new CustomEvent(COURSE_DELETED_EVENT, { detail: { courseId } }),
-    );
+    window.dispatchEvent(new CustomEvent(COURSE_DELETED_EVENT, { detail: { courseId } }));
   }
   return res;
 }
@@ -280,9 +258,7 @@ export async function reorderCourses(
   return res;
 }
 
-export async function recalculateCourseProgress(
-  courseId: string,
-): Promise<{
+export async function recalculateCourseProgress(courseId: string): Promise<{
   completedVideos: number;
   totalVideos: number;
   totalDuration: number;
@@ -402,12 +378,8 @@ export function useSavedCourseQuery(courseId: string): {
   isLoading: boolean;
   refresh: () => Promise<void>;
 } {
-  const [course, setCourse] = useState<Course | null>(
-    () => findSavedCourseById(courseId) ?? null,
-  );
-  const [isLoading, setIsLoading] = useState<boolean>(
-    () => !findSavedCourseById(courseId),
-  );
+  const [course, setCourse] = useState<Course | null>(() => findSavedCourseById(courseId) ?? null);
+  const [isLoading, setIsLoading] = useState<boolean>(() => !findSavedCourseById(courseId));
 
   const refresh = useCallback(async () => {
     setIsLoading(true);

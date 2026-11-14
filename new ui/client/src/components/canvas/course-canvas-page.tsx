@@ -1,10 +1,4 @@
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Download, X } from "lucide-react";
 import { toast } from "sonner";
 
@@ -90,7 +84,8 @@ function measureImageDimensions(srcUrl: string): Promise<{ width: number; height
     const img = new Image();
     img.onload = () => {
       const targetWidth = Math.min(420, Math.max(220, img.naturalWidth || 320));
-      const ratio = img.naturalHeight > 0 && img.naturalWidth > 0 ? img.naturalHeight / img.naturalWidth : 0.65;
+      const ratio =
+        img.naturalHeight > 0 && img.naturalWidth > 0 ? img.naturalHeight / img.naturalWidth : 0.65;
       resolve({
         width: Math.round(targetWidth),
         height: Math.round(targetWidth * ratio) + 34,
@@ -117,7 +112,12 @@ export function CourseCanvasPage({ course }: { course: Course }) {
 
   const [notes, setNotes] = useState<NoteItem[]>(() => getCourseNotes(courseId));
   const [canvasState, setCanvasState] = useState<CourseCanvasState>(() =>
-    reconcileCanvasWithNotes(loadCourseCanvas(courseId, lessons), getCourseNotes(courseId), lessons, courseId),
+    reconcileCanvasWithNotes(
+      loadCourseCanvas(courseId, lessons),
+      getCourseNotes(courseId),
+      lessons,
+      courseId,
+    ),
   );
 
   // Undo / redo stacks + StrictMode-safe refs
@@ -142,7 +142,12 @@ export function CourseCanvasPage({ course }: { course: Course }) {
 
   const [spacePressed, setSpacePressed] = useState(false);
   const [isPanning, setIsPanning] = useState(false);
-  const [marqueeRect, setMarqueeRect] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
+  const [marqueeRect, setMarqueeRect] = useState<{
+    x: number;
+    y: number;
+    w: number;
+    h: number;
+  } | null>(null);
   const [activeStroke, setActiveStroke] = useState<CanvasStroke | null>(null);
   const [connectingFrom, setConnectingFrom] = useState<{
     cardId: string;
@@ -342,25 +347,28 @@ export function CourseCanvasPage({ course }: { course: Course }) {
     };
   }, []);
 
-  const zoomAroundScreenPoint = useCallback((clientX: number, clientY: number, nextZoom: number) => {
-    const rect = containerRef.current?.getBoundingClientRect();
-    if (!rect) return;
-    const clampedZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, nextZoom));
-    setCanvasState((prev) => {
-      const sx = clientX - rect.left;
-      const sy = clientY - rect.top;
-      const wx = (sx - prev.viewport.x) / prev.viewport.zoom;
-      const wy = (sy - prev.viewport.y) / prev.viewport.zoom;
-      return {
-        ...prev,
-        viewport: {
-          x: sx - wx * clampedZoom,
-          y: sy - wy * clampedZoom,
-          zoom: clampedZoom,
-        },
-      };
-    });
-  }, []);
+  const zoomAroundScreenPoint = useCallback(
+    (clientX: number, clientY: number, nextZoom: number) => {
+      const rect = containerRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      const clampedZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, nextZoom));
+      setCanvasState((prev) => {
+        const sx = clientX - rect.left;
+        const sy = clientY - rect.top;
+        const wx = (sx - prev.viewport.x) / prev.viewport.zoom;
+        const wy = (sy - prev.viewport.y) / prev.viewport.zoom;
+        return {
+          ...prev,
+          viewport: {
+            x: sx - wx * clampedZoom,
+            y: sy - wy * clampedZoom,
+            zoom: clampedZoom,
+          },
+        };
+      });
+    },
+    [],
+  );
 
   const centerViewportZoom = useCallback(
     (factor: number) => {
@@ -511,8 +519,7 @@ export function CourseCanvasPage({ course }: { course: Course }) {
       applyWithUndo((prev) => restoreNoteCardToCanvas(prev, note, lessons));
 
       const cardId =
-        stateRef.current.cards.find((c) => c.noteId === noteId)?.id ??
-        getVideoNoteCardId(noteId);
+        stateRef.current.cards.find((c) => c.noteId === noteId)?.id ?? getVideoNoteCardId(noteId);
       requestAnimationFrame(() => focusCard(cardId));
     },
     [notes, lessons, applyWithUndo, focusCard],
@@ -603,21 +610,18 @@ export function CourseCanvasPage({ course }: { course: Course }) {
     [applyWithUndo, courseId, deleteCardsByIds],
   );
 
-  const handleCancelCardEdit = useCallback(
-    (cardId: string) => {
-      editingDraftRef.current = null;
-      setEditingCardId(null);
-      const card = stateRef.current.cards.find((c) => c.id === cardId);
-      if (card && card.isCanvasOnly && !hasMeaningfulHtmlContent(card.htmlContent)) {
-        setCanvasState((prev) => ({
-          ...prev,
-          cards: prev.cards.filter((c) => c.id !== cardId),
-        }));
-        setSelectedCardIds(new Set());
-      }
-    },
-    [],
-  );
+  const handleCancelCardEdit = useCallback((cardId: string) => {
+    editingDraftRef.current = null;
+    setEditingCardId(null);
+    const card = stateRef.current.cards.find((c) => c.id === cardId);
+    if (card && card.isCanvasOnly && !hasMeaningfulHtmlContent(card.htmlContent)) {
+      setCanvasState((prev) => ({
+        ...prev,
+        cards: prev.cards.filter((c) => c.id !== cardId),
+      }));
+      setSelectedCardIds(new Set());
+    }
+  }, []);
 
   const commitPendingEdit = useCallback(() => {
     const pending = editingDraftRef.current;
@@ -744,7 +748,9 @@ export function CourseCanvasPage({ course }: { course: Course }) {
                 ? {
                     ...c,
                     groupId: null,
-                    membershipState: c.isCanvasOnly ? ("canvas-only" as const) : ("detached" as const),
+                    membershipState: c.isCanvasOnly
+                      ? ("canvas-only" as const)
+                      : ("detached" as const),
                   }
                 : c,
             );
@@ -983,9 +989,10 @@ export function CourseCanvasPage({ course }: { course: Course }) {
 
     if (activeStroke) {
       const nativeEv = e.nativeEvent as PointerEvent;
-      const events = typeof nativeEv.getCoalescedEvents === "function"
-        ? nativeEv.getCoalescedEvents()
-        : [nativeEv];
+      const events =
+        typeof nativeEv.getCoalescedEvents === "function"
+          ? nativeEv.getCoalescedEvents()
+          : [nativeEv];
       const appended: [number, number, number][] = (events.length > 0 ? events : [nativeEv]).map(
         (ev) => {
           const wp = screenToWorld(ev.clientX, ev.clientY);
@@ -998,9 +1005,10 @@ export function CourseCanvasPage({ course }: { course: Course }) {
 
     if (eraseSweepRef.current) {
       const nativeEv = e.nativeEvent as PointerEvent;
-      const events = typeof nativeEv.getCoalescedEvents === "function"
-        ? nativeEv.getCoalescedEvents()
-        : [nativeEv];
+      const events =
+        typeof nativeEv.getCoalescedEvents === "function"
+          ? nativeEv.getCoalescedEvents()
+          : [nativeEv];
       const radiusWorld = 12 / stateRef.current.viewport.zoom;
       setCanvasState((prev) => {
         let next = prev.strokes;
@@ -1130,11 +1138,7 @@ export function CourseCanvasPage({ course }: { course: Course }) {
       const hitIds = new Set(
         stateRef.current.cards
           .filter(
-            (c) =>
-              c.x < wxMax &&
-              c.x + c.width > wxMin &&
-              c.y < wyMax &&
-              c.y + c.height > wyMin,
+            (c) => c.x < wxMax && c.x + c.width > wxMin && c.y < wyMax && c.y + c.height > wyMin,
           )
           .map((c) => c.id),
       );
@@ -1238,9 +1242,7 @@ export function CourseCanvasPage({ course }: { course: Course }) {
   const handleStartDragCard = (cardId: string, e: React.PointerEvent) => {
     if (e.button !== 0) return;
     const wp = screenToWorld(e.clientX, e.clientY);
-    const activeIds = selectedCardIds.has(cardId)
-      ? Array.from(selectedCardIds)
-      : [cardId];
+    const activeIds = selectedCardIds.has(cardId) ? Array.from(selectedCardIds) : [cardId];
 
     const positions = new Map<string, { x: number; y: number }>();
     for (const id of activeIds) {
@@ -1351,13 +1353,18 @@ export function CourseCanvasPage({ course }: { course: Course }) {
     [canvasState.cards, collapsedGroupIds],
   );
 
-  const stageCursor = isPanning || spacePressed || tool === "pan"
-    ? isPanning
-      ? "cursor-grabbing"
-      : "cursor-grab"
-    : tool === "pen" || tool === "highlighter" || tool === "eraser" || tool === "note" || tool === "text"
-      ? "cursor-crosshair"
-      : "cursor-default";
+  const stageCursor =
+    isPanning || spacePressed || tool === "pan"
+      ? isPanning
+        ? "cursor-grabbing"
+        : "cursor-grab"
+      : tool === "pen" ||
+          tool === "highlighter" ||
+          tool === "eraser" ||
+          tool === "note" ||
+          tool === "text"
+        ? "cursor-crosshair"
+        : "cursor-default";
 
   return (
     <div
@@ -1404,9 +1411,7 @@ export function CourseCanvasPage({ course }: { course: Course }) {
         multiple
         className="hidden"
         onChange={(e) => {
-          const files = Array.from(e.target.files || []).filter((f) =>
-            f.type.startsWith("image/"),
-          );
+          const files = Array.from(e.target.files || []).filter((f) => f.type.startsWith("image/"));
           if (files.length > 0) {
             const rect = containerRef.current?.getBoundingClientRect();
             const vp = stateRef.current.viewport;
@@ -1526,83 +1531,81 @@ export function CourseCanvasPage({ course }: { course: Course }) {
               : undefined;
 
             return (
-            <CanvasCardView
-              key={card.id}
-              courseId={courseId}
-              card={card}
-              lessonCode={lessonCode}
-              lessonTooltip={lessonTooltip}
-              selected={selectedCardIds.has(card.id)}
-              isEditing={editingCardId === card.id}
-              isConnectSource={connectingFrom?.cardId === card.id}
-              isConnectMode={tool === "connect" || Boolean(connectingFrom)}
-              pointerEventsDisabled={stageInterceptsCards}
-              onSelect={(ev) => {
-                if (ev.shiftKey) {
-                  setSelectedCardIds((prev) => {
-                    const next = new Set(prev);
-                    if (next.has(card.id)) next.delete(card.id);
-                    else next.add(card.id);
-                    return next;
-                  });
-                } else if (!selectedCardIds.has(card.id)) {
+              <CanvasCardView
+                key={card.id}
+                courseId={courseId}
+                card={card}
+                lessonCode={lessonCode}
+                lessonTooltip={lessonTooltip}
+                selected={selectedCardIds.has(card.id)}
+                isEditing={editingCardId === card.id}
+                isConnectSource={connectingFrom?.cardId === card.id}
+                isConnectMode={tool === "connect" || Boolean(connectingFrom)}
+                pointerEventsDisabled={stageInterceptsCards}
+                onSelect={(ev) => {
+                  if (ev.shiftKey) {
+                    setSelectedCardIds((prev) => {
+                      const next = new Set(prev);
+                      if (next.has(card.id)) next.delete(card.id);
+                      else next.add(card.id);
+                      return next;
+                    });
+                  } else if (!selectedCardIds.has(card.id)) {
+                    setSelectedCardIds(new Set([card.id]));
+                  }
+                  setSelectedGroupId(null);
+                  setSelectedEdgeId(null);
+                }}
+                onStartDrag={(ev) => handleStartDragCard(card.id, ev)}
+                onStartResize={(ev) => handleStartResize("card", card.id, ev)}
+                onStartEdit={() => {
+                  commitPendingEdit();
                   setSelectedCardIds(new Set([card.id]));
+                  setEditingCardId(card.id);
+                }}
+                onCancelEdit={() => handleCancelCardEdit(card.id)}
+                onDraftChange={(html) => {
+                  editingDraftRef.current = { cardId: card.id, html };
+                }}
+                onSaveContent={(html) => handleSaveCardContent(card.id, html)}
+                onMeasuredHeightGrow={(measuredHeight) => {
+                  setCanvasState((prev) => applyCardHeightUpdate(prev, card.id, measuredHeight));
+                }}
+                onUpdateAccent={(accentIndex) => {
+                  applyWithUndo((prev) => ({
+                    ...prev,
+                    cards: prev.cards.map((c) => (c.id === card.id ? { ...c, accentIndex } : c)),
+                  }));
+                }}
+                onReturnToOriginGroup={() => handleReturnCardToOrigin(card.id)}
+                onDelete={() => deleteCardsByIds(new Set([card.id]))}
+                onStartConnect={(ev, side) => {
+                  const wp = screenToWorld(ev.clientX, ev.clientY);
+                  setConnectingFrom({
+                    cardId: card.id,
+                    fromSide: side,
+                    startClient: { x: ev.clientX, y: ev.clientY },
+                    pointerWorld: wp,
+                  });
+                  setTool("connect");
+                }}
+                onCompleteConnect={(ev) => handleCompleteConnect(card.id, ev)}
+                onOpenLightbox={(src, c) =>
+                  setLightboxImage({
+                    src,
+                    label:
+                      c.originLessonIdx !== undefined
+                        ? `${formatCanvasLessonCode(lessons, c.originLessonIdx)} · ${formatTimestamp(c.timestamp ?? 0)}`
+                        : c.caption || "Image",
+                  })
                 }
-                setSelectedGroupId(null);
-                setSelectedEdgeId(null);
-              }}
-              onStartDrag={(ev) => handleStartDragCard(card.id, ev)}
-              onStartResize={(ev) => handleStartResize("card", card.id, ev)}
-              onStartEdit={() => {
-                commitPendingEdit();
-                setSelectedCardIds(new Set([card.id]));
-                setEditingCardId(card.id);
-              }}
-              onCancelEdit={() => handleCancelCardEdit(card.id)}
-              onDraftChange={(html) => {
-                editingDraftRef.current = { cardId: card.id, html };
-              }}
-              onSaveContent={(html) => handleSaveCardContent(card.id, html)}
-              onMeasuredHeightGrow={(measuredHeight) => {
-                setCanvasState((prev) => applyCardHeightUpdate(prev, card.id, measuredHeight));
-              }}
-              onUpdateAccent={(accentIndex) => {
-                applyWithUndo((prev) => ({
-                  ...prev,
-                  cards: prev.cards.map((c) =>
-                    c.id === card.id ? { ...c, accentIndex } : c,
-                  ),
-                }));
-              }}
-              onReturnToOriginGroup={() => handleReturnCardToOrigin(card.id)}
-              onDelete={() => deleteCardsByIds(new Set([card.id]))}
-              onStartConnect={(ev, side) => {
-                const wp = screenToWorld(ev.clientX, ev.clientY);
-                setConnectingFrom({
-                  cardId: card.id,
-                  fromSide: side,
-                  startClient: { x: ev.clientX, y: ev.clientY },
-                  pointerWorld: wp,
-                });
-                setTool("connect");
-              }}
-              onCompleteConnect={(ev) => handleCompleteConnect(card.id, ev)}
-              onOpenLightbox={(src, c) =>
-                setLightboxImage({
-                  src,
-                  label:
-                    c.originLessonIdx !== undefined
-                      ? `${formatCanvasLessonCode(lessons, c.originLessonIdx)} · ${formatTimestamp(c.timestamp ?? 0)}`
-                      : c.caption || "Image",
-                })
-              }
-              onUpdateImageCaption={(caption) => {
-                applyWithUndo((prev) => ({
-                  ...prev,
-                  cards: prev.cards.map((c) => (c.id === card.id ? { ...c, caption } : c)),
-                }));
-              }}
-            />
+                onUpdateImageCaption={(caption) => {
+                  applyWithUndo((prev) => ({
+                    ...prev,
+                    cards: prev.cards.map((c) => (c.id === card.id ? { ...c, caption } : c)),
+                  }));
+                }}
+              />
             );
           })}
         </div>

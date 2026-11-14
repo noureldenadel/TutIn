@@ -202,7 +202,9 @@ export async function importScannedLocalCourse(params: {
   for (const mod of flattened) {
     const moduleId = generateId("mod_");
     tempToRealModId.set(mod.tempId, moduleId);
-    const parentModuleId = mod.parentTempId ? (tempToRealModId.get(mod.parentTempId) ?? null) : null;
+    const parentModuleId = mod.parentTempId
+      ? (tempToRealModId.get(mod.parentTempId) ?? null)
+      : null;
 
     await createCourseModule({
       id: moduleId,
@@ -331,7 +333,13 @@ export interface SyncPreviewData {
   removed: SyncRemovedVideo[];
   moved: SyncMovedVideo[];
   updated: SyncUpdatedVideo[];
-  newModules: Array<{ title: string; parentTempId: string | null; tempId: string; order: number; folderPath?: string }>;
+  newModules: Array<{
+    title: string;
+    parentTempId: string | null;
+    tempId: string;
+    order: number;
+    folderPath?: string;
+  }>;
   removedModules: Array<{ id: string; title: string }>;
   assetUpdates: SyncAssetUpdate[];
   repairedDurationsCount: number;
@@ -520,8 +528,7 @@ export async function computeSyncPreview(course: Course): Promise<SyncPreviewDat
           });
         }
 
-        const missingDurationFix =
-          (dbMatch.duration || 0) === 0 && sv.duration > 0;
+        const missingDurationFix = (dbMatch.duration || 0) === 0 && sv.duration > 0;
         const sizeChanged = sv.fileSize > 0 && sv.fileSize !== dbMatch.fileSize;
         const durationChanged =
           sv.duration > 0 && Math.abs(sv.duration - (dbMatch.duration || 0)) > 2;
@@ -530,12 +537,21 @@ export async function computeSyncPreview(course: Course): Promise<SyncPreviewDat
 
         if (missingDurationFix) repairedDurationsCount++;
 
-        if (missingDurationFix || sizeChanged || durationChanged || subCountChanged || summaryDiscovered) {
+        if (
+          missingDurationFix ||
+          sizeChanged ||
+          durationChanged ||
+          subCountChanged ||
+          summaryDiscovered
+        ) {
           const reasons: string[] = [];
           if (missingDurationFix) reasons.push(`Backfilled duration (${sv.duration}s)`);
           else if (durationChanged) reasons.push(`Duration updated (${sv.duration}s)`);
           if (sizeChanged) reasons.push("File modified");
-          if (subCountChanged) reasons.push(`+${nextSubs.length - (dbMatch.subtitleSources?.length ?? 0)} subtitle track(s)`);
+          if (subCountChanged)
+            reasons.push(
+              `+${nextSubs.length - (dbMatch.subtitleSources?.length ?? 0)} subtitle track(s)`,
+            );
           if (summaryDiscovered) reasons.push("Vault summary detected");
 
           updated.push({
@@ -832,7 +848,11 @@ export async function fetchYoutubeCourseData(
         snippet?: {
           title?: string;
           channelTitle?: string;
-          thumbnails?: { maxres?: { url: string }; high?: { url: string }; medium?: { url: string } };
+          thumbnails?: {
+            maxres?: { url: string };
+            high?: { url: string };
+            medium?: { url: string };
+          };
         };
       }>;
     };
@@ -938,7 +958,9 @@ export async function fetchYoutubeCourseData(
     };
   }
 
-  throw new Error("Enter a YouTube Data API key to import full playlists, or paste a single video URL.");
+  throw new Error(
+    "Enter a YouTube Data API key to import full playlists, or paste a single video URL.",
+  );
 }
 
 export async function importYoutubeCourse(params: {
@@ -1057,7 +1079,12 @@ function isDriveVideoFile(file: { mimeType: string; name: string }): boolean {
 }
 
 function cleanDriveVideoTitle(name: string): string {
-  return name.replace(/\.[^/.]+$/, "").replace(/^\d+[\s._-]+/, "").trim() || name;
+  return (
+    name
+      .replace(/\.[^/.]+$/, "")
+      .replace(/^\d+[\s._-]+/, "")
+      .trim() || name
+  );
 }
 
 export async function scanGoogleDriveCourseFolder(
@@ -1199,9 +1226,7 @@ export interface ExternalPageMetadata {
   author?: string;
 }
 
-export async function fetchExternalPageMetadata(
-  url: string,
-): Promise<ExternalPageMetadata> {
+export async function fetchExternalPageMetadata(url: string): Promise<ExternalPageMetadata> {
   return apiJson<ExternalPageMetadata>("/api/data/fetch-page-metadata", {
     method: "POST",
     headers: { "Content-Type": "application/json" },

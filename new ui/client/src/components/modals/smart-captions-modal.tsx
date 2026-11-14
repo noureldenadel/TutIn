@@ -90,10 +90,10 @@ export function SmartCaptionsModal({
         }),
       );
       onBatchImported?.(matches.length);
-      toast.success(`Imported ${matches.length} ${displayLang} caption files`);
+      toast.success(`Imported ${matches.length} ${displayLang} subtitle files`);
       onOpenChange(false);
     } catch {
-      toast.error("Failed to import matching captions");
+      toast.error("Failed to import matching subtitles");
     } finally {
       setIsSubmitting(false);
     }
@@ -111,7 +111,7 @@ export function SmartCaptionsModal({
         <DialogHeader className="shrink-0 border-b border-border/50 px-6 py-4 pr-12 text-left">
           <div className="flex items-center gap-2">
             <Captions className="size-4 shrink-0 text-muted-foreground" />
-            <DialogTitle className="text-base font-semibold">Smart caption import</DialogTitle>
+            <DialogTitle className="text-base font-semibold">Smart subtitle import</DialogTitle>
             <span className="rounded bg-secondary px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
               {displayLang}
             </span>
@@ -182,4 +182,3 @@ export function SmartCaptionsModal({
     </Dialog>
   );
 }
-

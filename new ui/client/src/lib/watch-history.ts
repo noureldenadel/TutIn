@@ -19,8 +19,7 @@ const ALLOWED_YOUTUBE_ORIGINS = new Set([
  * - Unknown duration (0s, Drive embeds, unsized streams): 10s fallback.
  */
 export function getHistoryThresholdSeconds(durationSec: number): number {
-  const safeDuration =
-    Number.isFinite(durationSec) && durationSec > 0 ? durationSec : 0;
+  const safeDuration = Number.isFinite(durationSec) && durationSec > 0 ? durationSec : 0;
   if (safeDuration <= 0) return 10;
   const floor = Math.min(3, safeDuration * 0.7);
   return Math.min(15, Math.max(floor, safeDuration * 0.25));

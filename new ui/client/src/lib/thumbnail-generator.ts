@@ -125,8 +125,7 @@ export function getInstructorPalette(
     savedCourses.find((c) => {
       const inst = (c.instructor || "").toLowerCase().trim();
       return (
-        Boolean(inst) &&
-        (inst === normName || inst.includes(normName) || normName.includes(inst))
+        Boolean(inst) && (inst === normName || inst.includes(normName) || normName.includes(inst))
       );
     }) ?? fallbackCourse;
 

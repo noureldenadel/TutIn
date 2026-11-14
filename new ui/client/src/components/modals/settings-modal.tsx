@@ -5,6 +5,7 @@ import {
   Database,
   Download,
   Eye,
+  EyeOff,
   FolderOpen,
   Info,
   KeyRound,
@@ -60,6 +61,7 @@ import {
   type AppSettings,
   type ComputeDevice,
   type ThemeMode,
+  type WhisperModelPreset,
 } from "@/lib/app-settings";
 
 export type { ThemeMode };
@@ -199,6 +201,7 @@ export function SettingsModal({
 
   const [confirmResetAll, setConfirmResetAll] = useState(false);
   const [dataBusy, setDataBusy] = useState(false);
+  const [showApiKey, setShowApiKey] = useState(false);
   const importInputRef = useRef<HTMLInputElement>(null);
 
   const loadDataStats = useCallback(
@@ -210,10 +213,7 @@ export function SettingsModal({
       if (signal?.aborted) return;
       setDataStats({
         coursesCount: courses.length,
-        notesCount:
-          res.ok && typeof res.data?.totalNotes === "number"
-            ? res.data.totalNotes
-            : null,
+        notesCount: res.ok && typeof res.data?.totalNotes === "number" ? res.data.totalNotes : null,
       });
     },
     [courses.length],
@@ -222,6 +222,7 @@ export function SettingsModal({
   useEffect(() => {
     if (!open) return;
     setSettings(readAppSettings());
+    void hydrateAppSettingsFromServer().then(setSettings);
   }, [open]);
 
   useEffect(() => {
@@ -236,11 +237,9 @@ export function SettingsModal({
   }, [open, activeTab, loadDataStats]);
 
   const updateSetting = <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => {
-    setSettings((prev) => {
-      const next = { ...prev, [key]: value };
-      writeAppSettings(next);
-      return next;
-    });
+    const next = { ...settings, [key]: value };
+    setSettings(next);
+    writeAppSettings(next);
 
     if (key === "progressCalculationMode") {
       void apiRequest("/api/courses/recalculate-progress", {
@@ -373,10 +372,7 @@ export function SettingsModal({
       setSettings(DEFAULT_APP_SETTINGS);
       onThemeChange("system");
 
-      await Promise.all([
-        hydrateInstructorAvatars(true),
-        fetchCourses(true),
-      ]);
+      await Promise.all([hydrateInstructorAvatars(true), fetchCourses(true)]);
       window.dispatchEvent(new CustomEvent(COURSES_CHANGED_EVENT));
       window.dispatchEvent(new CustomEvent(COURSE_UPDATED_EVENT));
       setDataStats({ coursesCount: 0, notesCount: 0 });
@@ -598,73 +594,90 @@ export function SettingsModal({
               )}
 
               {activeTab === "ai" && (
-                <div className="space-y-5">
-                  <p className="rounded-lg bg-secondary/60 px-3.5 py-2.5 text-xs text-muted-foreground">
-                    AI transcription and translation are temporarily disabled during rebuild.
-                  </p>
-
-                  <div className="pointer-events-none divide-y divide-border/50 opacity-50 select-none">
-                    <div className="flex items-center justify-between gap-4 pb-5">
-                      <div className="space-y-0.5">
-                        <Label className="text-sm font-medium">Transcription device</Label>
-                        <p className="text-xs text-muted-foreground">
-                          Hardware used for Whisper transcription
-                        </p>
-                      </div>
-                      <SegmentedControl<ComputeDevice>
-                        disabled
-                        value={settings.computeDevice}
-                        onChange={() => {}}
-                        options={[
-                          { value: "auto", label: "Auto" },
-                          { value: "gpu", label: "GPU" },
-                          { value: "cpu", label: "CPU" },
-                        ]}
-                      />
-                    </div>
-
-                    <div className="space-y-2 py-5">
-                      <Label htmlFor="openrouter-model" className="text-sm font-medium">
-                        OpenRouter model
-                      </Label>
-                      <div className="flex gap-2">
-                        <Input
-                          id="openrouter-model"
-                          disabled
-                          value={settings.openRouterModel}
-                          readOnly
-                          placeholder={DEFAULT_OPENROUTER_MODEL}
-                          className="font-mono text-xs"
-                        />
-                        <Button type="button" variant="secondary" size="sm" disabled>
-                          Reset
-                        </Button>
-                      </div>
-                    </div>
-
-                    <div className="space-y-2 py-5">
-                      <Label htmlFor="openrouter-key" className="text-sm font-medium">
-                        OpenRouter API key
-                      </Label>
-                      <div className="relative">
-                        <Input
-                          id="openrouter-key"
-                          disabled
-                          type="password"
-                          value={settings.openRouterApiKey}
-                          readOnly
-                          placeholder="sk-or-v1-..."
-                          className="pr-9 font-mono text-xs"
-                        />
-                        <Eye className="absolute right-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-                      </div>
-                    </div>
-
-                    <div className="space-y-2 pt-5">
-                      <Label className="text-sm font-medium">Offline punctuation models</Label>
-                      <p className="rounded-lg bg-secondary/45 px-3.5 py-2.5 text-xs text-muted-foreground">
-                        Model management disabled during rebuild.
+                <div className="divide-y divide-border/50">
+                  <div className="flex items-center justify-between gap-4 pb-5">
+                    <div className="space-y-0.5">
+                      <Label className="text-sm font-medium">Transcription device</Label>
+                      <p className="text-xs text-muted-foreground">
+                        Hardware used for Whisper speech recognition
                       </p>
+                    </div>
+                    <SegmentedControl<ComputeDevice>
+                      value={settings.computeDevice}
+                      onChange={(v) => updateSetting("computeDevice", v)}
+                      options={[
+                        { value: "auto", label: "Auto" },
+                        { value: "gpu", label: "GPU" },
+                        { value: "cpu", label: "CPU" },
+                      ]}
+                    />
+                  </div>
+
+                  <div className="flex items-center justify-between gap-4 py-5">
+                    <div className="space-y-0.5">
+                      <Label className="text-sm font-medium">Whisper model</Label>
+                      <p className="text-xs text-muted-foreground">
+                        Balance transcription speed and accuracy
+                      </p>
+                    </div>
+                    <SegmentedControl<WhisperModelPreset>
+                      value={settings.whisperModel}
+                      onChange={(v) => updateSetting("whisperModel", v)}
+                      options={[
+                        { value: "whisper-base", label: "Balanced" },
+                        { value: "whisper-small", label: "Enhanced" },
+                        { value: "faster-whisper-large-v3-turbo", label: "Studio" },
+                      ]}
+                    />
+                  </div>
+
+                  <div className="space-y-2 py-5">
+                    <Label htmlFor="openrouter-model" className="text-sm font-medium">
+                      OpenRouter model
+                    </Label>
+                    <p className="text-xs text-muted-foreground">
+                      Used for regional Arabic dialect translations (Egyptian &amp; Saudi)
+                    </p>
+                    <div className="flex gap-2">
+                      <Input
+                        id="openrouter-model"
+                        value={settings.openRouterModel}
+                        onChange={(e) => updateSetting("openRouterModel", e.target.value)}
+                        placeholder={DEFAULT_OPENROUTER_MODEL}
+                        className="font-mono text-xs"
+                      />
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        size="sm"
+                        onClick={() => updateSetting("openRouterModel", DEFAULT_OPENROUTER_MODEL)}
+                      >
+                        Reset
+                      </Button>
+                    </div>
+                  </div>
+
+                  <div className="space-y-2 pt-5">
+                    <Label htmlFor="openrouter-key" className="text-sm font-medium">
+                      OpenRouter API key
+                    </Label>
+                    <div className="relative">
+                      <Input
+                        id="openrouter-key"
+                        type={showApiKey ? "text" : "password"}
+                        value={settings.openRouterApiKey}
+                        onChange={(e) => updateSetting("openRouterApiKey", e.target.value)}
+                        placeholder="sk-or-v1-..."
+                        className="pr-9 font-mono text-xs"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowApiKey((s) => !s)}
+                        aria-label={showApiKey ? "Hide API key" : "Show API key"}
+                        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                      >
+                        {showApiKey ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+                      </button>
                     </div>
                   </div>
                 </div>

@@ -2,6 +2,7 @@ import { apiRequest } from "@/lib/api";
 
 export type ThemeMode = "light" | "dark" | "system";
 export type ComputeDevice = "auto" | "gpu" | "cpu";
+export type WhisperModelPreset = "whisper-base" | "whisper-small" | "faster-whisper-large-v3-turbo";
 
 export interface AppSettings {
   theme: ThemeMode;
@@ -17,12 +18,13 @@ export interface AppSettings {
   openRouterApiKey: string;
   openRouterModel: string;
   computeDevice: ComputeDevice;
+  whisperModel: WhisperModelPreset;
 }
 
 export const SETTINGS_STORAGE_KEY = "tutin_settings";
 export const SETTINGS_CHANGED_EVENT = "tutin:settings_changed";
 export const WELCOME_SEEN_KEY = "tutin_welcome_seen";
-export const DEFAULT_OPENROUTER_MODEL = "google/gemini-2.0-flash-001";
+export const DEFAULT_OPENROUTER_MODEL = "openai/gpt-4o-mini";
 
 export const DEFAULT_APP_SETTINGS: AppSettings = {
   theme: "system",
@@ -38,6 +40,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   openRouterApiKey: "",
   openRouterModel: DEFAULT_OPENROUTER_MODEL,
   computeDevice: "auto",
+  whisperModel: "whisper-base",
 };
 
 let pendingSyncTimer: number | null = null;
@@ -55,6 +58,13 @@ function sanitizeSettings(raw: Partial<AppSettings> | null | undefined): AppSett
     raw.computeDevice === "auto" || raw.computeDevice === "gpu" || raw.computeDevice === "cpu"
       ? raw.computeDevice
       : DEFAULT_APP_SETTINGS.computeDevice;
+
+  const whisperModel: WhisperModelPreset =
+    raw.whisperModel === "whisper-base" ||
+    raw.whisperModel === "whisper-small" ||
+    raw.whisperModel === "faster-whisper-large-v3-turbo"
+      ? raw.whisperModel
+      : DEFAULT_APP_SETTINGS.whisperModel;
 
   const autoMarkCompleteAt: 90 | 95 | 100 =
     raw.autoMarkCompleteAt === 90 || raw.autoMarkCompleteAt === 95 || raw.autoMarkCompleteAt === 100
@@ -87,9 +97,7 @@ function sanitizeSettings(raw: Partial<AppSettings> | null | undefined): AppSett
         ? speed
         : DEFAULT_APP_SETTINGS.playbackSpeed,
     skipDuration:
-      Number.isFinite(skip) && skip >= 1 && skip <= 120
-        ? skip
-        : DEFAULT_APP_SETTINGS.skipDuration,
+      Number.isFinite(skip) && skip >= 1 && skip <= 120 ? skip : DEFAULT_APP_SETTINGS.skipDuration,
     autoPauseOnNotes:
       typeof raw.autoPauseOnNotes === "boolean"
         ? raw.autoPauseOnNotes
@@ -107,6 +115,7 @@ function sanitizeSettings(raw: Partial<AppSettings> | null | undefined): AppSett
         ? raw.openRouterModel
         : DEFAULT_APP_SETTINGS.openRouterModel,
     computeDevice,
+    whisperModel,
   };
 }
 
@@ -144,6 +153,10 @@ function scheduleServerSettingsSync(next: AppSettings): void {
         skipDuration: next.skipDuration,
         autoPauseOnNotes: next.autoPauseOnNotes,
         playerShortcutsEnabled: next.playerShortcutsEnabled,
+        openRouterApiKey: next.openRouterApiKey,
+        openRouterModel: next.openRouterModel,
+        computeDevice: next.computeDevice,
+        whisperModel: next.whisperModel,
       }),
     });
   }, 180);
@@ -200,8 +213,7 @@ export async function hydrateAppSettingsFromServer(force = false): Promise<AppSe
         serverData["progressCalculationMode"] === "duration"
           ? {
               progressCalculationMode: serverData["progressCalculationMode"] as
-                | "videos"
-                | "duration",
+                "videos" | "duration",
             }
           : {}),
         ...(typeof serverData["autoDetectThumbnails"] === "boolean"

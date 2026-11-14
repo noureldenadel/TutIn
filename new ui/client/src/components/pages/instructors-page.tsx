@@ -251,7 +251,9 @@ export function InstructorsPage({
             {query ? "No matching instructors" : "No instructors yet"}
           </p>
           <p className="mt-1.5 max-w-sm text-sm text-muted-foreground">
-            {query ? "Clear your search to see all instructors." : "Add a course with an instructor."}
+            {query
+              ? "Clear your search to see all instructors."
+              : "Add a course with an instructor."}
           </p>
           {query && (
             <Button

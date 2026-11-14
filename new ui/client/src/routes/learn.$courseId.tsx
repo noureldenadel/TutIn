@@ -21,9 +21,7 @@ export const Route = createFileRoute("/learn/$courseId")({
       videoId: typeof rawVideoId === "string" && rawVideoId.trim() ? rawVideoId.trim() : undefined,
       t: Number.isFinite(rawTime) && rawTime >= 0 ? rawTime : undefined,
       tab:
-        rawTab === "playlist" || rawTab === "notes" || rawTab === "transcript"
-          ? rawTab
-          : undefined,
+        rawTab === "playlist" || rawTab === "notes" || rawTab === "transcript" ? rawTab : undefined,
     };
   },
   component: LearnPage,

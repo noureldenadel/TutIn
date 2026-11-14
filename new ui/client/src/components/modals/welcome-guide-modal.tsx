@@ -171,7 +171,9 @@ export function WelcomeGuideModal({
           </div>
 
           <DialogHeader className="text-left">
-            <DialogTitle className="text-xl font-semibold tracking-tight">{slide.title}</DialogTitle>
+            <DialogTitle className="text-xl font-semibold tracking-tight">
+              {slide.title}
+            </DialogTitle>
             <DialogDescription className="pt-1 text-sm leading-relaxed text-muted-foreground">
               {slide.description}
             </DialogDescription>

@@ -155,10 +155,7 @@ function getNodeEdgePoint(fromNode: RoadmapNode, toNode: RoadmapNode) {
   };
 }
 
-function getBezierControlPoints(
-  from: { x: number; y: number },
-  to: { x: number; y: number },
-) {
+function getBezierControlPoints(from: { x: number; y: number }, to: { x: number; y: number }) {
   const dx = Math.abs(to.x - from.x);
   const dy = Math.abs(to.y - from.y);
   const offset = Math.max(50, Math.min(dx * 0.5, 160), dy * 0.25);
@@ -230,8 +227,7 @@ export function RoadmapPage() {
       }
       const timerId = window.setTimeout(() => {
         saveTimersRef.current.delete(roadmap.id);
-        const latest =
-          roadmapsRef.current.find((r) => r.id === roadmap.id) ?? roadmap;
+        const latest = roadmapsRef.current.find((r) => r.id === roadmap.id) ?? roadmap;
         void flushPersistRoadmap(latest);
       }, delayMs);
       saveTimersRef.current.set(roadmap.id, timerId);
@@ -285,9 +281,7 @@ export function RoadmapPage() {
         ...updater(currentRoadmap),
         updatedAt: new Date().toISOString(),
       };
-      setRoadmaps((prevList) =>
-        prevList.map((r) => (r.id === next.id ? next : r)),
-      );
+      setRoadmaps((prevList) => prevList.map((r) => (r.id === next.id ? next : r)));
       schedulePersistRoadmap(next, delayMs);
     },
     [currentRoadmap, schedulePersistRoadmap],
@@ -333,9 +327,7 @@ export function RoadmapPage() {
     setConnectingFrom(null);
     setSelectedNodeId(null);
 
-    setRoadmaps((prev) =>
-      prev.map((r) => ({ ...r, isActive: r.id === id })),
-    );
+    setRoadmaps((prev) => prev.map((r) => ({ ...r, isActive: r.id === id })));
 
     if (prevActive && prevActive.id !== id && prevActive.isActive) {
       void apiRequest(`/api/roadmaps/${encodeURIComponent(prevActive.id)}`, {
@@ -389,10 +381,7 @@ export function RoadmapPage() {
     }
 
     const previousActive = roadmaps.filter((r) => r.isActive);
-    setRoadmaps((prev) => [
-      newRoadmap,
-      ...prev.map((r) => ({ ...r, isActive: false })),
-    ]);
+    setRoadmaps((prev) => [newRoadmap, ...prev.map((r) => ({ ...r, isActive: false }))]);
     setCurrentId(newRoadmap.id);
     setConnectingFrom(null);
     setSelectedNodeId(null);
@@ -434,18 +423,14 @@ export function RoadmapPage() {
 
   const handleAddCourse = (course: Course) => {
     if (!currentRoadmap) return;
-    const isAlreadyOnCanvas = currentRoadmap.nodes.some(
-      (n) => n.courseId === course.id,
-    );
+    const isAlreadyOnCanvas = currentRoadmap.nodes.some((n) => n.courseId === course.id);
     if (isAlreadyOnCanvas) return;
 
     const container = containerRef.current;
     const rect = container?.getBoundingClientRect() || { width: 900, height: 600 };
 
-    const centerX =
-      (rect.width / 2 - currentRoadmap.pan.x) / currentRoadmap.zoom;
-    const centerY =
-      (rect.height / 2 - currentRoadmap.pan.y) / currentRoadmap.zoom;
+    const centerX = (rect.width / 2 - currentRoadmap.pan.x) / currentRoadmap.zoom;
+    const centerY = (rect.height / 2 - currentRoadmap.pan.y) / currentRoadmap.zoom;
     const offset = (currentRoadmap.nodes.length % 5) * 30;
 
     const newNode: RoadmapNode = {
@@ -525,10 +510,7 @@ export function RoadmapPage() {
   const handleZoom = (delta: number) => {
     updateCurrentRoadmap((prev) => ({
       ...prev,
-      zoom: Math.min(
-        2.0,
-        Math.max(0.35, Math.round((prev.zoom + delta) * 100) / 100),
-      ),
+      zoom: Math.min(2.0, Math.max(0.35, Math.round((prev.zoom + delta) * 100) / 100)),
     }));
   };
 
@@ -568,12 +550,8 @@ export function RoadmapPage() {
     (e: MouseEvent) => {
       if (!currentRoadmap) return;
       if (draggedNodeId) {
-        const newX = Math.round(
-          (e.clientX - dragOffset.x) / currentRoadmap.zoom,
-        );
-        const newY = Math.round(
-          (e.clientY - dragOffset.y) / currentRoadmap.zoom,
-        );
+        const newX = Math.round((e.clientX - dragOffset.x) / currentRoadmap.zoom);
+        const newY = Math.round((e.clientY - dragOffset.y) / currentRoadmap.zoom);
         setRoadmaps((prevList) =>
           prevList.map((r) =>
             r.id === currentRoadmap.id
@@ -592,9 +570,7 @@ export function RoadmapPage() {
           y: Math.round(e.clientY - panStart.y),
         };
         setRoadmaps((prevList) =>
-          prevList.map((r) =>
-            r.id === currentRoadmap.id ? { ...r, pan: nextPan } : r,
-          ),
+          prevList.map((r) => (r.id === currentRoadmap.id ? { ...r, pan: nextPan } : r)),
         );
       }
     },
@@ -673,9 +649,7 @@ export function RoadmapPage() {
     const q = courseQuery.trim().toLowerCase();
     if (!q) return courses;
     return courses.filter(
-      (c) =>
-        c.title.toLowerCase().includes(q) ||
-        c.instructor.toLowerCase().includes(q),
+      (c) => c.title.toLowerCase().includes(q) || c.instructor.toLowerCase().includes(q),
     );
   }, [courses, courseQuery]);
 
@@ -692,9 +666,7 @@ export function RoadmapPage() {
       <DialogContent className="max-w-md rounded-xl border-0 bg-card p-6 shadow-workspace">
         <DialogHeader>
           <DialogTitle className="text-lg font-semibold">New roadmap</DialogTitle>
-          <DialogDescription className="text-sm">
-            Name your learning pathway.
-          </DialogDescription>
+          <DialogDescription className="text-sm">Name your learning pathway.</DialogDescription>
         </DialogHeader>
         <div className="mt-4">
           <input
@@ -709,11 +681,7 @@ export function RoadmapPage() {
           />
         </div>
         <DialogFooter className="mt-6 gap-2">
-          <Button
-            variant="ghost"
-            onClick={() => setCreateModalOpen(false)}
-            className="rounded-md"
-          >
+          <Button variant="ghost" onClick={() => setCreateModalOpen(false)} className="rounded-md">
             Cancel
           </Button>
           <Button
@@ -806,16 +774,11 @@ export function RoadmapPage() {
                       className="rounded-md"
                     >
                       <span className="truncate">{r.title}</span>
-                      {r.id === currentRoadmap.id && (
-                        <Check className="ml-auto size-4" />
-                      )}
+                      {r.id === currentRoadmap.id && <Check className="ml-auto size-4" />}
                     </DropdownMenuItem>
                   ))}
                   <DropdownMenuSeparator />
-                  <DropdownMenuItem
-                    onClick={startEditingTitle}
-                    className="gap-2 rounded-md"
-                  >
+                  <DropdownMenuItem onClick={startEditingTitle} className="gap-2 rounded-md">
                     <Pencil className="size-4" /> Rename
                   </DropdownMenuItem>
                   <DropdownMenuItem
@@ -888,9 +851,7 @@ export function RoadmapPage() {
 
             <div className="flex-1 space-y-1.5 overflow-y-auto p-2.5 custom-scrollbar-sm">
               {filteredDrawerCourses.map((course) => {
-                const isOnCanvas = currentRoadmap.nodes.some(
-                  (n) => n.courseId === course.id,
-                );
+                const isOnCanvas = currentRoadmap.nodes.some((n) => n.courseId === course.id);
                 return (
                   <button
                     key={course.id}
@@ -936,8 +897,7 @@ export function RoadmapPage() {
           onMouseDown={handleCanvasMouseDown}
           className="relative flex-1 cursor-grab select-none overflow-hidden active:cursor-grabbing"
           style={{
-            backgroundImage:
-              "radial-gradient(circle, var(--border) 1px, transparent 1px)",
+            backgroundImage: "radial-gradient(circle, var(--border) 1px, transparent 1px)",
             backgroundSize: `${22 * currentRoadmap.zoom}px ${22 * currentRoadmap.zoom}px`,
             backgroundPosition: `${currentRoadmap.pan.x}px ${currentRoadmap.pan.y}px`,
           }}
@@ -1006,35 +966,21 @@ export function RoadmapPage() {
                 markerHeight="6"
                 orient="auto-start-reverse"
               >
-                <path
-                  d="M 0 1 L 10 5 L 0 9 z"
-                  fill="var(--foreground)"
-                  opacity="0.65"
-                />
+                <path d="M 0 1 L 10 5 L 0 9 z" fill="var(--foreground)" opacity="0.65" />
               </marker>
             </defs>
             {currentRoadmap.connections.map((conn) => {
-              const fromNode = currentRoadmap.nodes.find(
-                (n) => n.id === conn.fromNodeId,
-              );
-              const toNode = currentRoadmap.nodes.find(
-                (n) => n.id === conn.toNodeId,
-              );
+              const fromNode = currentRoadmap.nodes.find((n) => n.id === conn.fromNodeId);
+              const toNode = currentRoadmap.nodes.find((n) => n.id === conn.toNodeId);
               if (!fromNode || !toNode) return null;
 
               const points = getNodeEdgePoint(fromNode, toNode);
-              const { cp1, cp2 } = getBezierControlPoints(
-                points.from,
-                points.to,
-              );
+              const { cp1, cp2 } = getBezierControlPoints(points.from, points.to);
               const midX = (points.from.x + points.to.x) / 2;
               const midY = (points.from.y + points.to.y) / 2;
 
               return (
-                <g
-                  key={conn.id}
-                  className="group pointer-events-auto cursor-pointer"
-                >
+                <g key={conn.id} className="group pointer-events-auto cursor-pointer">
                   <path
                     d={`M ${points.from.x} ${points.from.y} C ${cp1.x} ${cp1.y}, ${cp2.x} ${cp2.y}, ${points.to.x} ${points.to.y}`}
                     fill="none"
@@ -1159,9 +1105,7 @@ export function RoadmapPage() {
                       <span>
                         {completed}/{course.lessons} lessons
                       </span>
-                      <span className="font-semibold text-foreground/75">
-                        {course.progress}%
-                      </span>
+                      <span className="font-semibold text-foreground/75">{course.progress}%</span>
                     </div>
 
                     <div className="mt-3.5 flex items-center gap-2 border-t border-border/50 pt-3">
@@ -1171,10 +1115,7 @@ export function RoadmapPage() {
                         size="sm"
                         className="h-8 flex-1 rounded-md text-xs font-medium"
                       >
-                        <Link
-                          to="/learn/$courseId"
-                          params={{ courseId: course.id }}
-                        >
+                        <Link to="/learn/$courseId" params={{ courseId: course.id }}>
                           <Play className="mr-1 size-3.5 fill-current" />
                           Study
                         </Link>
@@ -1190,8 +1131,7 @@ export function RoadmapPage() {
                         }}
                         className={cn(
                           "size-8 rounded-md",
-                          isConnectingSource &&
-                            "bg-primary text-primary-foreground",
+                          isConnectingSource && "bg-primary text-primary-foreground",
                         )}
                         title={
                           isConnectingSource
@@ -1211,12 +1151,8 @@ export function RoadmapPage() {
           {currentRoadmap.nodes.length === 0 && (
             <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center p-6 text-center text-muted-foreground">
               <Compass className="size-12 opacity-30" strokeWidth={1.5} />
-              <p className="mt-3 text-sm font-medium text-foreground">
-                Canvas is ready
-              </p>
-              <p className="mt-1 text-xs">
-                Open the course drawer on the left to add courses.
-              </p>
+              <p className="mt-3 text-sm font-medium text-foreground">Canvas is ready</p>
+              <p className="mt-1 text-xs">Open the course drawer on the left to add courses.</p>
             </div>
           )}
         </div>

@@ -19,12 +19,7 @@ import {
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogTitle,
-} from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import type { Course } from "@/lib/courses";
 import {
   applyCourseSync,
@@ -96,19 +91,19 @@ export function SyncPreviewModal({
   const vaultStats = preview?.vaultStats;
   const hasVideoChanges = Boolean(
     preview &&
-      (preview.added.length > 0 ||
-        preview.removed.length > 0 ||
-        preview.moved.length > 0 ||
-        preview.updated.length > 0 ||
-        preview.newModules.length > 0 ||
-        preview.removedModules.length > 0 ||
-        preview.thumbnailChanged),
+    (preview.added.length > 0 ||
+      preview.removed.length > 0 ||
+      preview.moved.length > 0 ||
+      preview.updated.length > 0 ||
+      preview.newModules.length > 0 ||
+      preview.removedModules.length > 0 ||
+      preview.thumbnailChanged),
   );
   const hasAssetChanges = Boolean(
     preview &&
-      (preview.assetUpdates.length > 0 ||
-        (vaultStats?.transcripts.newCount ?? 0) > 0 ||
-        (vaultStats?.summaries.newCount ?? 0) > 0),
+    (preview.assetUpdates.length > 0 ||
+      (vaultStats?.transcripts.newCount ?? 0) > 0 ||
+      (vaultStats?.summaries.newCount ?? 0) > 0),
   );
   const hasChanges = hasVideoChanges || hasAssetChanges;
 
@@ -117,8 +112,8 @@ export function SyncPreviewModal({
   const afterPct = Math.round(progressRecalc?.after.completionPercentage ?? 0);
   const countsChanged = Boolean(
     progressRecalc &&
-      (progressRecalc.before.completedVideos !== progressRecalc.after.completedVideos ||
-        progressRecalc.before.totalVideos !== progressRecalc.after.totalVideos),
+    (progressRecalc.before.completedVideos !== progressRecalc.after.completedVideos ||
+      progressRecalc.before.totalVideos !== progressRecalc.after.totalVideos),
   );
   const progressDisplayChanged = Boolean(
     progressRecalc && (beforePct !== afterPct || countsChanged),
@@ -184,7 +179,7 @@ export function SyncPreviewModal({
             Course &amp; Vault Sync
           </DialogTitle>
           <DialogDescription className="sr-only">
-            Synchronize disk folder, missing durations, captions, and vault assets
+            Synchronize disk folder, missing durations, subtitles, and vault assets
           </DialogDescription>
         </div>
 
@@ -209,7 +204,7 @@ export function SyncPreviewModal({
               </>
             ) : (
               <span className="text-muted-foreground">
-                .tutin Vault initializes when captions or canvas notes are saved
+                .tutin Vault initializes when subtitles or canvas notes are saved
               </span>
             )}
           </div>
@@ -312,7 +307,8 @@ export function SyncPreviewModal({
                   {preview.repairedDurationsCount > 0 && (
                     <div className="flex items-center justify-between rounded-xl bg-amber-500/10 px-4 py-3 text-xs text-amber-700 dark:text-amber-300">
                       <span className="font-medium">
-                        Detected {preview.repairedDurationsCount} video(s) with missing durations ready to repair
+                        Detected {preview.repairedDurationsCount} video(s) with missing durations
+                        ready to repair
                       </span>
                       <button
                         type="button"
@@ -334,7 +330,7 @@ export function SyncPreviewModal({
                           <div className="mb-1 flex items-center justify-between text-xs text-muted-foreground">
                             <span className="flex items-center gap-1.5">
                               <FileText className="size-3.5 text-sky-500" />
-                              Captions
+                              Subtitles
                             </span>
                             {vaultStats.transcripts.newCount > 0 && (
                               <span className="text-[11px] font-semibold text-chart-4">
@@ -378,7 +374,8 @@ export function SyncPreviewModal({
                             <span className="text-xs font-normal text-muted-foreground">cards</span>
                           </div>
                           <div className="mt-0.5 text-[11px] text-muted-foreground">
-                            {vaultStats.canvas.artboardCount} artboards · {vaultStats.canvas.edgeCount} links
+                            {vaultStats.canvas.artboardCount} artboards ·{" "}
+                            {vaultStats.canvas.edgeCount} links
                           </div>
                         </div>
 
@@ -468,7 +465,9 @@ export function SyncPreviewModal({
                     <div key={v.id} className="rounded-xl bg-chart-4/10 p-3.5 text-xs">
                       <div className="flex items-center justify-between gap-2">
                         <span className="font-semibold text-foreground truncate">{v.title}</span>
-                        <span className="font-mono text-muted-foreground">{formatClockShort(v.duration)}</span>
+                        <span className="font-mono text-muted-foreground">
+                          {formatClockShort(v.duration)}
+                        </span>
                       </div>
                       <p className="mt-1 text-muted-foreground">{v.moduleTitle}</p>
                     </div>
@@ -490,7 +489,10 @@ export function SyncPreviewModal({
               {activeTab === "moved" && (
                 <div className="space-y-2">
                   {preview.moved.map((v) => (
-                    <div key={v.videoId} className="rounded-xl bg-sky-500/10 p-3.5 text-xs space-y-1">
+                    <div
+                      key={v.videoId}
+                      className="rounded-xl bg-sky-500/10 p-3.5 text-xs space-y-1"
+                    >
                       <p className="font-semibold text-foreground truncate">{v.title}</p>
                       <p className="text-muted-foreground">Moved to {v.newModuleTitle}</p>
                     </div>
@@ -501,7 +503,10 @@ export function SyncPreviewModal({
               {activeTab === "updated" && (
                 <div className="space-y-2">
                   {preview.updated.map((v) => (
-                    <div key={v.videoId} className="rounded-xl bg-amber-500/10 p-3.5 text-xs space-y-1">
+                    <div
+                      key={v.videoId}
+                      className="rounded-xl bg-amber-500/10 p-3.5 text-xs space-y-1"
+                    >
                       <p className="font-semibold text-foreground truncate">{v.title}</p>
                       <p className="text-muted-foreground">{v.reason}</p>
                     </div>
@@ -594,7 +599,9 @@ function SummaryRow({
         <span className="truncate text-xs font-semibold text-foreground">{label}</span>
       </div>
       <div className="flex shrink-0 items-center gap-2">
-        <span className={cn("rounded-md px-1.5 py-0.5 text-xs font-bold", color, "bg-background/60")}>
+        <span
+          className={cn("rounded-md px-1.5 py-0.5 text-xs font-bold", color, "bg-background/60")}
+        >
           {count}
         </span>
         <ChevronRight className="size-3 text-muted-foreground/60" />

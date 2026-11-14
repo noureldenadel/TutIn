@@ -1556,6 +1556,7 @@ def unload_punctuation_model(lang: str):
 
 WHISPER_MODELS: Dict[str, Any] = {}
 WHISPER_MODELS_DIR = os.path.join(DEFAULT_MODELS_DIR, "whisper")
+WHISPER_LOCK = __import__("threading").Lock()
 os.makedirs(WHISPER_MODELS_DIR, exist_ok=True)
 
 class TranscribeRequest(BaseModel):
@@ -1612,23 +1613,26 @@ def transcribe_media(req: TranscribeRequest):
         is_video = source.lower().endswith(('.mp4', '.mkv', '.mov', '.avi', '.webm', '.flv', '.m4v', '.ts'))
         if is_video or not source.lower().endswith('.wav'):
             audio_target = os.path.join(temp_dir, "extracted_16k.wav")
+            ffmpeg_bin = get_ffmpeg_bin()
             cmd = [
-                "ffmpeg", "-y", "-i", source,
+                ffmpeg_bin, "-y", "-i", source,
                 "-vn", "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1",
                 audio_target
             ]
             subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, check=True)
 
-        model = get_faster_whisper_model(model_name)
-        word_ts = req.wordTimestamps if req.wordTimestamps is not None else (req.word_timestamps or True)
+        with WHISPER_LOCK:
+            model = get_faster_whisper_model(model_name)
+            word_ts = req.wordTimestamps if req.wordTimestamps is not None else (req.word_timestamps or True)
 
-        segments, info = model.transcribe(
-            audio_target,
-            language=lang,
-            word_timestamps=word_ts,
-            vad_filter=True,
-            vad_parameters=dict(min_silence_duration_ms=500)
-        )
+            segments, info = model.transcribe(
+                audio_target,
+                language=lang,
+                word_timestamps=word_ts,
+                vad_filter=True,
+                vad_parameters=dict(min_silence_duration_ms=500)
+            )
+            segments = list(segments)
 
         chunks = []
         full_text_list = []

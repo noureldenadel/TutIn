@@ -2,10 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import { apiJson, apiRequest } from "@/lib/api";
 import type { Course } from "@/lib/courses";
-import {
-  DEFAULT_GENERATOR_SETTINGS,
-  getInstructorPalette,
-} from "@/lib/thumbnail-generator";
+import { DEFAULT_GENERATOR_SETTINGS, getInstructorPalette } from "@/lib/thumbnail-generator";
 import { cn } from "@/lib/utils";
 
 export const INSTRUCTOR_AVATAR_CHANGED_EVENT = "tutin:instructor_avatar_changed";
@@ -26,7 +23,13 @@ export function normalizeInstructorDbId(name: string): string {
 }
 
 export function normalizeInstructorSlug(name: string): string {
-  return name.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "instructor";
+  return (
+    name
+      .toLowerCase()
+      .trim()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-|-$/g, "") || "instructor"
+  );
 }
 
 function getCachedAvatarForName(name: string): string | undefined {
@@ -200,7 +203,8 @@ export function InstructorAvatar({
           <img
             src={effectiveImageUrl}
             alt={name}
-            className="size-full rounded-full object-cover"
+            draggable={false}
+            className="size-full select-none rounded-full object-cover"
           />
         ) : (
           <svg viewBox="0 0 24 24" className="block size-full" aria-hidden="true">
