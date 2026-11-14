@@ -23,6 +23,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { readAppSettings } from "@/lib/app-settings";
 import { parseDurationToSeconds } from "@/lib/course-lessons";
 import {
   createCourse,
@@ -59,8 +60,7 @@ const SOURCES: { id: AddCourseSource; label: string }[] = [
   { id: "link", label: "Direct Link" },
 ];
 
-const YT_KEY_STORAGE = "tutin_yt_api_key";
-const DRIVE_KEY_STORAGE = "tutin_gdrive_api_key";
+
 
 export interface AddCourseModalProps {
   open: boolean;
@@ -97,12 +97,6 @@ export function AddCourseModal({
   const [expandedModules, setExpandedModules] = useState<Record<string, boolean>>({});
 
   // YouTube & Google Drive scan state
-  const [ytApiKey, setYtApiKey] = useState(() =>
-    typeof window !== "undefined" ? window.localStorage.getItem(YT_KEY_STORAGE) || "" : "",
-  );
-  const [driveApiKey, setDriveApiKey] = useState(() =>
-    typeof window !== "undefined" ? window.localStorage.getItem(DRIVE_KEY_STORAGE) || "" : "",
-  );
   const [youtubePreview, setYoutubePreview] = useState<YoutubeImportPreview | null>(null);
   const [drivePreview, setDrivePreview] = useState<GoogleDriveImportPreview | null>(null);
   const [isFetchingMeta, setIsFetchingMeta] = useState(false);
@@ -196,12 +190,10 @@ export function AddCourseModal({
       toast.error("Paste a YouTube video or playlist URL first");
       return;
     }
-    if (ytApiKey.trim() && typeof window !== "undefined") {
-      window.localStorage.setItem(YT_KEY_STORAGE, ytApiKey.trim());
-    }
+    const googleApiKey = readAppSettings().googleApiKey.trim();
     setIsFetchingMeta(true);
     try {
-      const preview = await fetchYoutubeCourseData(url.trim(), ytApiKey.trim());
+      const preview = await fetchYoutubeCourseData(url.trim(), googleApiKey);
       setYoutubePreview(preview);
       setTitle(preview.title);
       setInstructor(preview.instructor);
@@ -219,16 +211,18 @@ export function AddCourseModal({
   };
 
   const handleScanDrive = async () => {
-    if (!url.trim() || !driveApiKey.trim()) {
-      toast.error("Provide both a Google Drive folder URL and API key");
+    const googleApiKey = readAppSettings().googleApiKey.trim();
+    if (!url.trim()) {
+      toast.error("Enter a Google Drive folder URL");
       return;
     }
-    if (typeof window !== "undefined") {
-      window.localStorage.setItem(DRIVE_KEY_STORAGE, driveApiKey.trim());
+    if (!googleApiKey) {
+      toast.error("Set Google API key in Settings");
+      return;
     }
     setIsFetchingMeta(true);
     try {
-      const preview = await scanGoogleDriveCourseFolder(url.trim(), driveApiKey.trim());
+      const preview = await scanGoogleDriveCourseFolder(url.trim(), googleApiKey);
       setDrivePreview(preview);
       if (!title.trim()) setTitle("Google Drive Course");
       setLessons(preview.totalVideos);
@@ -763,41 +757,7 @@ export function AddCourseModal({
                 </div>
               </div>
 
-              {source === "youtube" && (
-                <div className="space-y-1.5">
-                  <Label htmlFor="yt-api-key" className="text-xs font-medium text-muted-foreground">
-                    YouTube Data API v3 Key (optional for single videos, required for full
-                    playlists)
-                  </Label>
-                  <Input
-                    id="yt-api-key"
-                    type="password"
-                    value={ytApiKey}
-                    onChange={(e) => setYtApiKey(e.target.value)}
-                    placeholder="AIza..."
-                    className="rounded-lg border-0 bg-secondary/75 font-mono text-xs"
-                  />
-                </div>
-              )}
 
-              {source === "drive" && (
-                <div className="space-y-1.5">
-                  <Label
-                    htmlFor="drive-api-key"
-                    className="text-xs font-medium text-muted-foreground"
-                  >
-                    Google Drive API Key
-                  </Label>
-                  <Input
-                    id="drive-api-key"
-                    type="password"
-                    value={driveApiKey}
-                    onChange={(e) => setDriveApiKey(e.target.value)}
-                    placeholder="AIza..."
-                    className="rounded-lg border-0 bg-secondary/75 font-mono text-xs"
-                  />
-                </div>
-              )}
 
               {/* Metadata Inputs */}
               <div className="space-y-1.5">

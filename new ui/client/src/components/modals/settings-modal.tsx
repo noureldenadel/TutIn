@@ -75,7 +75,7 @@ interface WorkspaceDataStats {
 const tabs = [
   { id: "general", label: "General", icon: Sliders },
   { id: "shortcuts", label: "Shortcuts", icon: Keyboard },
-  { id: "ai", label: "AI", icon: KeyRound },
+  { id: "ai", label: "AI & APIs", icon: KeyRound },
   { id: "voice", label: "Voice", icon: Mic },
   { id: "data", label: "Data", icon: Database },
   { id: "feedback", label: "Feedback", icon: MessageSquare },
@@ -202,6 +202,7 @@ export function SettingsModal({
   const [confirmResetAll, setConfirmResetAll] = useState(false);
   const [dataBusy, setDataBusy] = useState(false);
   const [showApiKey, setShowApiKey] = useState(false);
+  const [showGoogleApiKey, setShowGoogleApiKey] = useState(false);
   const importInputRef = useRef<HTMLInputElement>(null);
 
   const loadDataStats = useCallback(
@@ -657,7 +658,7 @@ export function SettingsModal({
                     </div>
                   </div>
 
-                  <div className="space-y-2 pt-5">
+                  <div className="space-y-2 py-5">
                     <Label htmlFor="openrouter-key" className="text-sm font-medium">
                       OpenRouter API key
                     </Label>
@@ -677,6 +678,33 @@ export function SettingsModal({
                         className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
                       >
                         {showApiKey ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="space-y-2 pt-5">
+                    <Label htmlFor="google-api-key" className="text-sm font-medium">
+                      Google API key
+                    </Label>
+                    <p className="text-xs text-muted-foreground">
+                      Used for YouTube playlists and Google Drive folder scans
+                    </p>
+                    <div className="relative">
+                      <Input
+                        id="google-api-key"
+                        type={showGoogleApiKey ? "text" : "password"}
+                        value={settings.googleApiKey}
+                        onChange={(e) => updateSetting("googleApiKey", e.target.value)}
+                        placeholder="AIza..."
+                        className="pr-9 font-mono text-xs"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowGoogleApiKey((s) => !s)}
+                        aria-label={showGoogleApiKey ? "Hide API key" : "Show API key"}
+                        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                      >
+                        {showGoogleApiKey ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
                       </button>
                     </div>
                   </div>

@@ -17,6 +17,7 @@ export interface AppSettings {
   playerShortcutsEnabled: boolean;
   openRouterApiKey: string;
   openRouterModel: string;
+  googleApiKey: string;
   computeDevice: ComputeDevice;
   whisperModel: WhisperModelPreset;
 }
@@ -24,6 +25,9 @@ export interface AppSettings {
 export const SETTINGS_STORAGE_KEY = "tutin_settings";
 export const SETTINGS_CHANGED_EVENT = "tutin:settings_changed";
 export const WELCOME_SEEN_KEY = "tutin_welcome_seen";
+export const GOOGLE_API_KEY_STORAGE = "tutin_google_api_key";
+export const YT_API_KEY_STORAGE = "tutin_yt_api_key";
+export const GDRIVE_API_KEY_STORAGE = "tutin_gdrive_api_key";
 export const DEFAULT_OPENROUTER_MODEL = "openai/gpt-4o-mini";
 
 export const DEFAULT_APP_SETTINGS: AppSettings = {
@@ -39,6 +43,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   playerShortcutsEnabled: true,
   openRouterApiKey: "",
   openRouterModel: DEFAULT_OPENROUTER_MODEL,
+  googleApiKey: "",
   computeDevice: "auto",
   whisperModel: "whisper-base",
 };
@@ -114,6 +119,17 @@ function sanitizeSettings(raw: Partial<AppSettings> | null | undefined): AppSett
       typeof raw.openRouterModel === "string" && raw.openRouterModel.trim()
         ? raw.openRouterModel
         : DEFAULT_APP_SETTINGS.openRouterModel,
+    googleApiKey: (() => {
+      const legacy = raw as Partial<{ youtubeApiKey?: string; googleDriveApiKey?: string }>;
+      if (typeof raw.googleApiKey === "string" && raw.googleApiKey) return raw.googleApiKey;
+      if (typeof legacy.youtubeApiKey === "string" && legacy.youtubeApiKey) {
+        return legacy.youtubeApiKey;
+      }
+      if (typeof legacy.googleDriveApiKey === "string" && legacy.googleDriveApiKey) {
+        return legacy.googleDriveApiKey;
+      }
+      return DEFAULT_APP_SETTINGS.googleApiKey;
+    })(),
     computeDevice,
     whisperModel,
   };
@@ -123,9 +139,17 @@ export function readAppSettings(): AppSettings {
   if (typeof window === "undefined") return { ...DEFAULT_APP_SETTINGS };
   try {
     const raw = window.localStorage.getItem(SETTINGS_STORAGE_KEY);
-    if (!raw) return { ...DEFAULT_APP_SETTINGS };
-    const parsed = JSON.parse(raw) as Partial<AppSettings>;
-    return sanitizeSettings(parsed);
+    const parsed = raw ? (JSON.parse(raw) as Partial<AppSettings>) : {};
+    const sanitized = sanitizeSettings(parsed);
+    // Migrate legacy standalone Google/YouTube/Drive keys written before consolidation
+    if (!sanitized.googleApiKey) {
+      const legacyKey =
+        window.localStorage.getItem(GOOGLE_API_KEY_STORAGE)?.trim() ||
+        window.localStorage.getItem(YT_API_KEY_STORAGE)?.trim() ||
+        window.localStorage.getItem(GDRIVE_API_KEY_STORAGE)?.trim();
+      if (legacyKey) sanitized.googleApiKey = legacyKey;
+    }
+    return sanitized;
   } catch {
     return { ...DEFAULT_APP_SETTINGS };
   }
@@ -155,6 +179,7 @@ function scheduleServerSettingsSync(next: AppSettings): void {
         playerShortcutsEnabled: next.playerShortcutsEnabled,
         openRouterApiKey: next.openRouterApiKey,
         openRouterModel: next.openRouterModel,
+        googleApiKey: next.googleApiKey,
         computeDevice: next.computeDevice,
         whisperModel: next.whisperModel,
       }),
@@ -167,6 +192,16 @@ export function writeAppSettings(next: AppSettings, options?: { skipServerSync?:
   if (typeof window === "undefined") return;
   try {
     window.localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(sanitized));
+    const trimmedGoogleKey = sanitized.googleApiKey.trim();
+    if (trimmedGoogleKey) {
+      window.localStorage.setItem(GOOGLE_API_KEY_STORAGE, trimmedGoogleKey);
+      window.localStorage.setItem(YT_API_KEY_STORAGE, trimmedGoogleKey);
+      window.localStorage.setItem(GDRIVE_API_KEY_STORAGE, trimmedGoogleKey);
+    } else {
+      window.localStorage.removeItem(GOOGLE_API_KEY_STORAGE);
+      window.localStorage.removeItem(YT_API_KEY_STORAGE);
+      window.localStorage.removeItem(GDRIVE_API_KEY_STORAGE);
+    }
     window.dispatchEvent(new CustomEvent(SETTINGS_CHANGED_EVENT, { detail: sanitized }));
   } catch {
     // ignore storage failures

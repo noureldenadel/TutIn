@@ -139,17 +139,30 @@ export function TranscriptTranslateModal({
     setSelectedSourceTrackId(resolvedId);
   }, [singleLessonTracks, spokenLang]);
 
+  const selectedSourceTrack = useMemo(() => {
+    if (!isSingleLesson || selectedSourceTrackId === "auto") return null;
+    return (
+      singleLessonTracks.find(
+        (t) => (t.id || `${t.lang ?? "en"}:${t.origin ?? "uploaded"}`) === selectedSourceTrackId,
+      ) ?? null
+    );
+  }, [isSingleLesson, selectedSourceTrackId, singleLessonTracks]);
+
+  const effectiveTranslateSourceLang = (
+    selectedSourceTrack?.lang || spokenLang
+  ).toLowerCase();
+
   const availableTargetLanguages = useMemo(
-    () => SUPPORTED_LANGUAGES.filter((l) => l.code !== spokenLang),
-    [spokenLang],
+    () => SUPPORTED_LANGUAGES.filter((l) => l.code !== effectiveTranslateSourceLang),
+    [effectiveTranslateSourceLang],
   );
 
   useEffect(() => {
     const firstLang = availableTargetLanguages[0];
-    if (targetLang === spokenLang && firstLang) {
+    if (targetLang === effectiveTranslateSourceLang && firstLang) {
       setTargetLang(firstLang.code);
     }
-  }, [spokenLang, targetLang, availableTargetLanguages]);
+  }, [effectiveTranslateSourceLang, targetLang, availableTargetLanguages]);
 
   const hasExistingSpokenAiTrack = useMemo(() => {
     if (!singleLesson) return false;

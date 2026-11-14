@@ -167,6 +167,28 @@ function isRtlLanguage(lang: string): boolean {
   return RTL_LANG_PREFIXES.some((p) => lower === p || lower.startsWith(`${p}-`));
 }
 
+/** Resolve a track ID, `'source'`, or bare language code to an exact track ID, preferring Master. */
+function resolveBestTrackId(
+  tracks: TranscriptTrack[],
+  candidate: string | null | undefined,
+): string | null {
+  if (!candidate || candidate === "off" || tracks.length === 0) return null;
+  if (candidate === "source") {
+    return (
+      tracks.find((t) => t.is_ai_source)?.id ??
+      tracks.find((t) => t.is_master)?.id ??
+      tracks[0]?.id ??
+      null
+    );
+  }
+  const exact = tracks.find((t) => t.id === candidate);
+  if (exact) return exact.id;
+  const norm = candidate.toLowerCase();
+  const byMaster = tracks.find((t) => t.lang.toLowerCase() === norm && t.is_master);
+  if (byMaster) return byMaster.id;
+  return tracks.find((t) => t.lang.toLowerCase() === norm)?.id ?? null;
+}
+
 function extractYoutubeVideoId(url?: string | null): string | null {
   if (!url) return null;
   const watchMatch = url.match(/[?&]v=([a-zA-Z0-9_-]{6,})/);
@@ -211,6 +233,27 @@ function normalizeTranscriptChunks(raw: unknown): TranscriptCue[] {
     cues.push({ start, end, text });
   }
   return cues;
+}
+
+function findActiveCueIndex(cues: TranscriptCue[], t: number, allowGapBridge: boolean): number {
+  // Reverse half-open [start, end) match gives precedence to newly starting cues on shared boundaries
+  for (let i = cues.length - 1; i >= 0; i--) {
+    const c = cues[i]!;
+    const isLast = i === cues.length - 1;
+    if (t >= c.start && (t < c.end || (isLast && t <= c.end))) {
+      return i;
+    }
+  }
+  if (allowGapBridge) {
+    for (let i = 0; i < cues.length - 1; i++) {
+      const curr = cues[i]!;
+      const next = cues[i + 1]!;
+      if (t > curr.end && t < next.start && next.start - curr.end <= 0.35) {
+        return i;
+      }
+    }
+  }
+  return -1;
 }
 
 type Tab = "playlist" | "notes" | "transcript";
@@ -276,6 +319,17 @@ export function CoursePlayer({
   const [transcriptRefreshTick, setTranscriptRefreshTick] = useState(0);
   const [isPiP, setIsPiP] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [tracksMenuOpen, setTracksMenuOpen] = useState(false);
+  const [settingsMenuOpen, setSettingsMenuOpen] = useState(false);
+  const [controlsActive, setControlsActive] = useState(false);
+  const anyPlayerMenuOpen = tracksMenuOpen || settingsMenuOpen;
+  const anyMenuOpenRef = useRef(false);
+  anyMenuOpenRef.current = anyPlayerMenuOpen;
+  const isPointerInsidePlayerRef = useRef(false);
+  const isPointerOverControlsRef = useRef(false);
+  const controlsHideTimerRef = useRef<number | null>(null);
+  const lastMenuDismissAtRef = useRef(0);
+  const seekGuardRef = useRef<{ floorTime: number; expiresAt: number } | null>(null);
   const [panelOpen, setPanelOpen] = useState(true);
   const [tab, setTab] = useState<Tab>(initialTab ?? "playlist");
   const [active, setActive] = useState(
@@ -719,30 +773,19 @@ export function CoursePlayer({
 
           setAvailableTracks(tracks);
 
-          const resolveTrackId = (candidate: string | null | undefined): string | null => {
-            if (!candidate) return null;
-            if (validIds.has(candidate)) return candidate;
-            const byMaster = tracks.find(
-              (t) => t.lang.toLowerCase() === candidate.toLowerCase() && t.is_master,
-            );
-            if (byMaster) return byMaster.id;
-            const byLang = tracks.find((t) => t.lang.toLowerCase() === candidate.toLowerCase());
-            return byLang ? byLang.id : null;
-          };
-
           const pendingTarget = pendingTrackSelectionRef.current;
-          const resolvedPending = pendingTarget ? resolveTrackId(pendingTarget) : null;
+          const resolvedPending = resolveBestTrackId(tracks, pendingTarget);
           if (resolvedPending) {
             pendingTrackSelectionRef.current = null;
           }
 
           setTranscriptLang((prev) => {
             if (resolvedPending) return resolvedPending;
-            const kept = resolveTrackId(prev);
+            const kept = resolveBestTrackId(tracks, prev);
             if (kept) return kept;
-            const fromPrimary = resolveTrackId(currentLesson.primaryTranscript);
+            const fromPrimary = resolveBestTrackId(tracks, currentLesson.primaryTranscript);
             if (fromPrimary) return fromPrimary;
-            const fromSpoken = resolveTrackId(course.language || "en");
+            const fromSpoken = resolveBestTrackId(tracks, course.language || "en");
             if (fromSpoken) return fromSpoken;
             return tracks[0]?.id ?? null;
           });
@@ -750,9 +793,9 @@ export function CoursePlayer({
           setSubtitleTrack((prev) => {
             if (resolvedPending) return resolvedPending;
             if (prev === "off") return tracks[0]?.id ?? "off";
-            const kept = resolveTrackId(prev);
+            const kept = resolveBestTrackId(tracks, prev);
             if (kept) return kept;
-            const fromPrimary = resolveTrackId(currentLesson.primaryTranscript);
+            const fromPrimary = resolveBestTrackId(tracks, currentLesson.primaryTranscript);
             if (fromPrimary) return fromPrimary;
             return tracks[0]?.id ?? "off";
           });
@@ -816,34 +859,117 @@ export function CoursePlayer({
     };
   }, [currentLesson?.lessonId, activeCueLang, transcriptRefreshTick]);
 
+  const activePlayerTrack = useMemo(() => {
+    if (subtitleTrack === "off") return null;
+    const id = resolveBestTrackId(availableTracks, subtitleTrack);
+    return (id ? availableTracks.find((t) => t.id === id) : null) ?? null;
+  }, [availableTracks, subtitleTrack]);
+
   const activeCaptionCue = useMemo(() => {
     if (subtitleTrack === "off" || isEmbeddedPlayer || transcriptCues.length === 0) return null;
-    const direct = transcriptCues.find((c) => time >= c.start && time <= c.end);
-    if (direct) return direct;
-    // Brief bridge across micro-gaps (< 0.35s) within the same spoken sentence, hiding on silence > 1.5s
-    for (let i = 0; i < transcriptCues.length - 1; i++) {
-      const curr = transcriptCues[i]!;
-      const next = transcriptCues[i + 1]!;
-      if (time > curr.end && time < next.start && next.start - curr.end <= 0.35) {
-        return curr;
-      }
-    }
-    return null;
+    const idx = findActiveCueIndex(transcriptCues, time, true);
+    return idx >= 0 ? transcriptCues[idx]! : null;
   }, [subtitleTrack, isEmbeddedPlayer, transcriptCues, time]);
 
+  const clearControlsHideTimer = useCallback(() => {
+    if (controlsHideTimerRef.current !== null) {
+      window.clearTimeout(controlsHideTimerRef.current);
+      controlsHideTimerRef.current = null;
+    }
+  }, []);
+
+  const scheduleControlsHide = useCallback(
+    (delay = 2400) => {
+      clearControlsHideTimer();
+      controlsHideTimerRef.current = window.setTimeout(() => {
+        controlsHideTimerRef.current = null;
+        if (!anyMenuOpenRef.current && !isPointerOverControlsRef.current) {
+          setControlsActive(false);
+        }
+      }, delay);
+    },
+    [clearControlsHideTimer],
+  );
+
+  const wakeControls = useCallback(() => {
+    setControlsActive(true);
+    if (!anyMenuOpenRef.current && !isPointerOverControlsRef.current) {
+      scheduleControlsHide(2400);
+    } else {
+      clearControlsHideTimer();
+    }
+  }, [clearControlsHideTimer, scheduleControlsHide]);
+
+  useEffect(() => {
+    if (!anyPlayerMenuOpen) {
+      lastMenuDismissAtRef.current = performance.now();
+      if (isPointerInsidePlayerRef.current) {
+        setControlsActive(true);
+        scheduleControlsHide(2400);
+      } else {
+        clearControlsHideTimer();
+        setControlsActive(false);
+      }
+      return;
+    }
+
+    clearControlsHideTimer();
+    setControlsActive(true);
+
+    const updatePointerBounds = (e: PointerEvent) => {
+      const rect = frameRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      isPointerInsidePlayerRef.current =
+        e.clientX >= rect.left &&
+        e.clientX <= rect.right &&
+        e.clientY >= rect.top &&
+        e.clientY <= rect.bottom;
+    };
+
+    window.addEventListener("pointermove", updatePointerBounds, { passive: true });
+    window.addEventListener("pointerdown", updatePointerBounds, { capture: true, passive: true });
+    return () => {
+      window.removeEventListener("pointermove", updatePointerBounds);
+      window.removeEventListener("pointerdown", updatePointerBounds, { capture: true });
+    };
+  }, [anyPlayerMenuOpen, clearControlsHideTimer, scheduleControlsHide]);
+
+  useEffect(() => {
+    if (playing && !anyMenuOpenRef.current && !isPointerOverControlsRef.current) {
+      if (isPointerInsidePlayerRef.current) {
+        scheduleControlsHide(2400);
+      } else {
+        clearControlsHideTimer();
+        setControlsActive(false);
+      }
+    }
+  }, [playing, clearControlsHideTimer, scheduleControlsHide]);
+
+  useEffect(() => () => clearControlsHideTimer(), [clearControlsHideTimer]);
+
   const seek = useCallback(
-    (t: number) => {
+    (t: number, options?: { minLockTime?: number }) => {
       const v = videoRef.current;
       if (!v) return;
-      const target = Math.max(0, Math.min(t, v.duration || effectiveDuration || t));
+      const maxDur = v.duration || effectiveDuration || t;
+      const target = Math.max(0, Math.min(t, maxDur));
+      const floorTime =
+        options?.minLockTime !== undefined
+          ? Math.max(0, Math.min(options.minLockTime, maxDur))
+          : undefined;
+      seekGuardRef.current =
+        floorTime !== undefined
+          ? { floorTime, expiresAt: performance.now() + 500 }
+          : null;
       v.currentTime = target;
       const dubEl = dubAudioRef.current;
       if (dubEl && selectedDubLang !== "original" && target < (dubEl.duration || Infinity)) {
         dubEl.currentTime = target;
       }
-      setTime(target);
+      const displayTime = floorTime !== undefined ? Math.max(target, floorTime) : target;
+      setTime(displayTime);
       if (studySessionRef.current) {
-        studySessionRef.current.latestPosition = target;
+        studySessionRef.current.latestPosition = displayTime;
       }
     },
     [effectiveDuration, selectedDubLang],
@@ -856,6 +982,12 @@ export function CoursePlayer({
     } else {
       v.pause();
     }
+  };
+  const handleVideoStageClick = () => {
+    if (anyMenuOpenRef.current || performance.now() - lastMenuDismissAtRef.current < 220) {
+      return;
+    }
+    togglePlay();
   };
   const playVideo = useCallback(() => {
     videoRef.current?.play().catch(() => {});
@@ -1428,13 +1560,19 @@ export function CoursePlayer({
       return;
     }
     if (!e.shiftKey && lower === "c") {
-      setSubtitleTrack((s) => {
-        if (s !== "off") return "off";
+      if (subtitleTrack !== "off") {
+        setSubtitleTrack("off");
+      } else {
         const candidate =
-          availableTracks.find((t) => t.lang === lastSubtitleRef.current)?.lang ??
-          availableTracks[0]?.lang;
-        return candidate ?? "off";
-      });
+          resolveBestTrackId(availableTracks, lastSubtitleRef.current) ??
+          resolveBestTrackId(availableTracks, spokenCourseLang) ??
+          availableTracks.find((t) => t.is_master)?.id ??
+          availableTracks[0]?.id;
+        if (candidate) {
+          setSubtitleTrack(candidate);
+          setTranscriptLang(candidate);
+        }
+      }
       return;
     }
     if (!e.shiftKey && lower === "p") {
@@ -1645,6 +1783,22 @@ export function CoursePlayer({
           <div
             ref={frameRef}
             onDragStart={(e) => e.preventDefault()}
+            onMouseEnter={() => {
+              isPointerInsidePlayerRef.current = true;
+              wakeControls();
+            }}
+            onMouseMove={() => {
+              isPointerInsidePlayerRef.current = true;
+              wakeControls();
+            }}
+            onMouseLeave={() => {
+              isPointerInsidePlayerRef.current = false;
+              isPointerOverControlsRef.current = false;
+              if (!anyMenuOpenRef.current) {
+                clearControlsHideTimer();
+                setControlsActive(false);
+              }
+            }}
             className="group relative z-10 min-h-0 w-full flex-1 select-none overflow-hidden rounded-xl bg-player shadow-workspace max-lg:aspect-video"
           >
             {curriculumLoading ? (
@@ -1721,7 +1875,7 @@ export function CoursePlayer({
                 draggable={false}
                 preload="metadata"
                 className="size-full select-none object-contain"
-                onClick={togglePlay}
+                onClick={handleVideoStageClick}
                 onPlay={() => {
                   setPlaying(true);
                   if (studySessionRef.current && studySessionRef.current.lastResumedAt === null) {
@@ -1740,8 +1894,19 @@ export function CoursePlayer({
                   pauseActiveSessionSlice(studySessionRef.current);
                 }}
                 onSeeked={(e) => {
+                  const media = e.currentTarget;
+                  const landed = media.currentTime;
+                  const guard = seekGuardRef.current;
+                  if (guard) {
+                    if (landed < guard.floorTime && guard.floorTime - landed <= 0.08) {
+                      setTime(guard.floorTime);
+                    } else {
+                      setTime(landed);
+                    }
+                    seekGuardRef.current = null;
+                  }
                   if (
-                    !e.currentTarget.paused &&
+                    !media.paused &&
                     studySessionRef.current &&
                     studySessionRef.current.lastResumedAt === null
                   ) {
@@ -1760,11 +1925,21 @@ export function CoursePlayer({
                 }}
                 onTimeUpdate={(e) => {
                   const media = e.currentTarget;
-                  const t = media.currentTime;
+                  if (media.seeking) return;
+                  const rawT = media.currentTime;
+                  const guard = seekGuardRef.current;
+                  let displayT = rawT;
+                  if (guard) {
+                    if (rawT >= guard.floorTime || performance.now() >= guard.expiresAt) {
+                      seekGuardRef.current = null;
+                    } else if (guard.floorTime - rawT <= 0.12) {
+                      displayT = guard.floorTime;
+                    }
+                  }
                   const dur = media.duration || effectiveDuration;
-                  setTime(t);
-                  recordPlaybackProgress(t, dur);
-                  maybeAutoCompleteLesson(t, dur);
+                  setTime(displayT);
+                  recordPlaybackProgress(rawT, dur);
+                  maybeAutoCompleteLesson(rawT, dur);
                 }}
                 onLoadedMetadata={(e) => {
                   const media = e.currentTarget;
@@ -1811,12 +1986,7 @@ export function CoursePlayer({
 
             {!isEmbeddedPlayer && !isExternalResourceOnly && activeCaptionCue && (
               <div
-                dir={
-                  availableTracks.find((t) => t.id === subtitleTrack || t.lang === subtitleTrack)
-                    ?.rtl
-                    ? "rtl"
-                    : "ltr"
-                }
+                dir={activePlayerTrack?.rtl ? "rtl" : "ltr"}
                 className="pointer-events-none absolute inset-x-6 bottom-20 flex justify-center"
               >
                 <span className="max-w-2xl rounded-md bg-black/75 px-3 py-1.5 text-center text-sm font-medium leading-snug text-white backdrop-blur-sm">
@@ -1828,7 +1998,7 @@ export function CoursePlayer({
             {!isEmbeddedPlayer && !isExternalResourceOnly && currentLesson && !playing && (
               <button
                 type="button"
-                onClick={togglePlay}
+                onClick={handleVideoStageClick}
                 aria-label="Play"
                 className="absolute left-1/2 top-1/2 flex size-16 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full bg-card/90 text-primary shadow-workspace backdrop-blur transition-transform hover:scale-105"
               >
@@ -1837,11 +2007,22 @@ export function CoursePlayer({
             )}
             {!isEmbeddedPlayer && !isExternalResourceOnly && currentLesson && (
               <div
+                onMouseEnter={() => {
+                  isPointerOverControlsRef.current = true;
+                  wakeControls();
+                }}
+                onMouseLeave={() => {
+                  isPointerOverControlsRef.current = false;
+                  if (playing && !anyMenuOpenRef.current) {
+                    scheduleControlsHide(2400);
+                  }
+                }}
+                onFocusCapture={wakeControls}
                 className={cn(
                   "absolute inset-x-0 bottom-0 flex flex-col justify-end bg-gradient-to-t from-black/80 via-black/40 to-transparent px-4 pb-4 pt-12 text-white transition-opacity duration-200",
-                  playing
-                    ? "opacity-0 group-hover:opacity-100 focus-within:opacity-100"
-                    : "opacity-100",
+                  !playing || anyPlayerMenuOpen || controlsActive
+                    ? "opacity-100"
+                    : "pointer-events-none opacity-0",
                 )}
               >
                 {/* Timeline Progress Bar */}
@@ -1941,7 +2122,7 @@ export function CoursePlayer({
 
                   {/* Right Side Pill */}
                   <div className="flex h-10 shrink-0 items-center gap-1 rounded-full bg-white/[0.08] px-3 py-1 text-white backdrop-blur-sm transition-all hover:bg-white/[0.12]">
-                    <Popover>
+                    <Popover open={tracksMenuOpen} onOpenChange={setTracksMenuOpen}>
                       <PopoverTrigger asChild>
                         <button
                           type="button"
@@ -1956,6 +2137,7 @@ export function CoursePlayer({
                         side="top"
                         sideOffset={10}
                         align="end"
+                        onCloseAutoFocus={(e) => e.preventDefault()}
                         className="w-[340px] max-w-[calc(100vw-1rem)] sm:w-[390px] overflow-hidden rounded-lg border border-border/50 p-0"
                       >
                         <div className="grid grid-cols-2 divide-x divide-border/50">
@@ -2047,8 +2229,7 @@ export function CoursePlayer({
                                 )}
                               </button>
                               {availableTracks.map((tr) => {
-                                const isSelected =
-                                  subtitleTrack === tr.id || subtitleTrack === tr.lang;
+                                const isSelected = activePlayerTrack?.id === tr.id;
                                 return (
                                   <button
                                     key={tr.id}
@@ -2077,7 +2258,11 @@ export function CoursePlayer({
                       </PopoverContent>
                     </Popover>
 
-                    <DropdownMenu>
+                    <DropdownMenu
+                      modal={false}
+                      open={settingsMenuOpen}
+                      onOpenChange={setSettingsMenuOpen}
+                    >
                       <DropdownMenuTrigger asChild>
                         <button
                           type="button"
@@ -2092,6 +2277,7 @@ export function CoursePlayer({
                         side="top"
                         sideOffset={10}
                         align="end"
+                        onCloseAutoFocus={(e) => e.preventDefault()}
                         className="w-52 rounded-lg p-1.5"
                       >
                         <p className="px-2 py-1.5 text-xs font-semibold text-muted-foreground">
@@ -3616,7 +3802,7 @@ function TranscriptTab({
   cues: TranscriptCue[];
   cuesLoading: boolean;
   time: number;
-  seek: (t: number) => void;
+  seek: (t: number, options?: { minLockTime?: number }) => void;
   onImportSubtitles: () => void;
   onOpenAiModal: (mode: "transcribe" | "translate", targetLang?: string) => void;
   onSetMaster: (trackId: string) => void;
@@ -3629,8 +3815,9 @@ function TranscriptTab({
   const listRef = useRef<HTMLOListElement>(null);
   const activeJob = useVideoTranscriptJob(videoId);
 
+  const resolvedSelectedId = resolveBestTrackId(availableTracks, selectedLang);
   const currentTrack =
-    availableTracks.find((t) => t.id === selectedLang || t.lang === selectedLang) ??
+    (resolvedSelectedId ? availableTracks.find((t) => t.id === resolvedSelectedId) : null) ??
     availableTracks[0] ??
     null;
 
@@ -3645,7 +3832,7 @@ function TranscriptTab({
 
   const activeIdx = useMemo(() => {
     if (cues.length === 0) return -1;
-    const exact = cues.findIndex((c) => time >= c.start && time <= c.end);
+    const exact = findActiveCueIndex(cues, time, false);
     if (exact >= 0) return exact;
     let lastBefore = -1;
     for (let i = 0; i < cues.length; i++) {
@@ -4051,7 +4238,11 @@ function TranscriptTab({
             <li key={`${cue.start}-${i}`}>
               <button
                 type="button"
-                onClick={() => seek(cue.start)}
+                onClick={() => {
+                  const span = Math.max(0, cue.end - cue.start);
+                  const nudge = span > 0 ? Math.min(0.035, span * 0.2) : 0.025;
+                  seek(cue.start + nudge, { minLockTime: cue.start });
+                }}
                 className={cn(
                   "flex w-full gap-3 rounded-lg px-3 py-2.5 text-start transition-colors duration-300 hover:bg-secondary/60",
                   i === activeIdx && "bg-primary-soft hover:bg-primary-soft",
