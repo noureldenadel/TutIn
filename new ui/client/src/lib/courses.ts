@@ -169,6 +169,16 @@ function notifyCoursesChanged(nextCourses: Course[]): void {
   }
 }
 
+export function touchCourseLastAccessed(courseId: string, isoTimestamp: string): void {
+  const idx = coursesCache.findIndex((c) => String(c.id) === String(courseId));
+  if (idx < 0) return;
+  const updated = [...coursesCache];
+  const existing = updated[idx];
+  if (!existing) return;
+  updated[idx] = { ...existing, lastAccessedAt: isoTimestamp };
+  notifyCoursesChanged(updated);
+}
+
 export function getSavedCourses(): Course[] {
   return coursesCache;
 }

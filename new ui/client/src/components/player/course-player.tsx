@@ -97,6 +97,36 @@ import {
   SETTINGS_CHANGED_EVENT,
 } from "@/lib/app-settings";
 import { getLanguageLabel } from "@/lib/languages";
+import {
+  getHistoryThresholdSeconds,
+  parseYoutubeIframeMessage,
+  sendYoutubeListeningHandshake,
+  trackExternalCourseOpen,
+} from "@/lib/watch-history";
+
+interface StudySessionState {
+  videoId: string;
+  startedAt: string;
+  lastResumedAt: number | null;
+  accumulatedSecs: number;
+  startPosition: number;
+  latestPosition: number;
+  latestDuration: number;
+  historyQualified: boolean;
+}
+
+function pauseActiveSessionSlice(sess: StudySessionState | null): void {
+  if (!sess || sess.lastResumedAt === null) return;
+  sess.accumulatedSecs += Math.max(0, (Date.now() - sess.lastResumedAt) / 1000);
+  sess.lastResumedAt = null;
+}
+
+function getActiveSessionSeconds(sess: StudySessionState | null): number {
+  if (!sess) return 0;
+  const live =
+    sess.lastResumedAt !== null ? Math.max(0, (Date.now() - sess.lastResumedAt) / 1000) : 0;
+  return sess.accumulatedSecs + live;
+}
 
 interface TranscriptCue {
   start: number;
@@ -388,50 +418,122 @@ export function CoursePlayer({
   }, [isTsVideo, resolvedVideoSrc, currentLesson?.lessonId]);
 
   // Watch progress & study session tracking refs
-  const progressSaveTimerRef = useRef<number>(0);
-  const studySessionRef = useRef<{
-    videoId: string;
-    startedAt: string;
-    lastResumedAt: number | null;
-    accumulatedSecs: number;
-    startPosition: number;
-    latestPosition: number;
-    latestDuration: number;
-  } | null>(null);
+  const progressSaveTimerRef = useRef<number>(Date.now());
+  const studySessionRef = useRef<StudySessionState | null>(null);
+  const ytIframeRef = useRef<HTMLIFrameElement | null>(null);
+  const ytStartCacheRef = useRef<{ lessonId: string; startSec: number }>({
+    lessonId: "",
+    startSec: 0,
+  });
 
-  const flushStudySession = useCallback(() => {
-    const sess = studySessionRef.current;
-    if (!sess) return;
-    if (sess.lastResumedAt !== null) {
-      sess.accumulatedSecs += Math.max(0, (Date.now() - sess.lastResumedAt) / 1000);
-      sess.lastResumedAt = null;
+  if (currentLesson && ytStartCacheRef.current.lessonId !== currentLesson.lessonId) {
+    const appSettings = readAppSettings();
+    let startSec = 0;
+    if (
+      !consumedInitialTimeRef.current &&
+      typeof initialTime === "number" &&
+      Number.isFinite(initialTime) &&
+      initialTime >= 0
+    ) {
+      startSec = Math.floor(initialTime);
+    } else if (
+      appSettings.resumePlayback &&
+      currentLesson.lastWatchedPosition > 0 &&
+      (!currentLesson.durationSec ||
+        currentLesson.lastWatchedPosition < currentLesson.durationSec - 3)
+    ) {
+      startSec = Math.floor(currentLesson.lastWatchedPosition);
     }
-    const secs = Math.round(sess.accumulatedSecs);
-    const vid = sess.videoId;
-    const endPos = sess.latestPosition;
-    const dur = sess.latestDuration;
-    studySessionRef.current = null;
+    ytStartCacheRef.current = {
+      lessonId: currentLesson.lessonId,
+      startSec: Math.max(0, startSec),
+    };
+  }
 
-    if (vid && endPos > 0) {
-      void updateVideoProgress(vid, endPos, dur, course.id);
-    }
-    if (vid && secs >= 5) {
-      void apiRequest("/api/analytics/session", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          id: generateId("sess"),
-          videoId: vid,
-          courseId: course.id,
-          startedAt: sess.startedAt,
-          endedAt: new Date().toISOString(),
-          durationSeconds: secs,
-          startPosition: Math.round(sess.startPosition),
-          endPosition: Math.round(endPos),
-        }),
-      }).catch(() => {});
-    }
-  }, [course.id]);
+  const recordPlaybackProgress = useCallback(
+    (
+      pos: number,
+      dur: number,
+      options: {
+        forceSave?: boolean;
+        recordPosition?: boolean;
+        keepalive?: boolean;
+      } = {},
+    ) => {
+      const sess = studySessionRef.current;
+      if (!sess) return;
+      sess.latestPosition = pos;
+      if (dur > 0) sess.latestDuration = dur;
+
+      const effectiveDur = dur > 0 ? dur : sess.latestDuration;
+      const elapsed = getActiveSessionSeconds(sess);
+      const justQualified =
+        !sess.historyQualified && elapsed >= getHistoryThresholdSeconds(effectiveDur);
+      if (justQualified) {
+        sess.historyQualified = true;
+      }
+
+      const now = Date.now();
+      const canSavePosition = options.recordPosition ?? pendingSeekRef.current === null;
+      if (
+        justQualified ||
+        options.forceSave ||
+        (canSavePosition && now - progressSaveTimerRef.current >= 5000)
+      ) {
+        progressSaveTimerRef.current = now;
+        void updateVideoProgress(sess.videoId, pos, effectiveDur, course.id, {
+          recordHistory: sess.historyQualified,
+          recordPosition: canSavePosition,
+          keepalive: options.keepalive ?? false,
+        });
+      }
+    },
+    [course.id],
+  );
+
+  const flushStudySession = useCallback(
+    (keepalive = false) => {
+      const sess = studySessionRef.current;
+      if (!sess) return;
+      pauseActiveSessionSlice(sess);
+
+      const secs = Math.round(sess.accumulatedSecs);
+      const vid = sess.videoId;
+      const endPos = sess.latestPosition;
+      const dur = sess.latestDuration;
+      const qualified =
+        sess.historyQualified ||
+        sess.accumulatedSecs >= getHistoryThresholdSeconds(dur);
+      const shouldSavePos = endPos > 0 && pendingSeekRef.current === null;
+      studySessionRef.current = null;
+
+      if (vid && (qualified || shouldSavePos)) {
+        void updateVideoProgress(vid, endPos, dur, course.id, {
+          recordHistory: qualified,
+          recordPosition: shouldSavePos,
+          keepalive,
+        });
+      }
+      if (vid && secs >= 5) {
+        void apiRequest("/api/analytics/session", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          keepalive,
+          body: JSON.stringify({
+            id: generateId("sess"),
+            videoId: vid,
+            courseId: course.id,
+            startedAt: sess.startedAt,
+            endedAt: new Date().toISOString(),
+            durationSeconds: secs,
+            startPosition: Math.round(sess.startPosition),
+            endPosition: Math.round(endPos),
+          }),
+        }).catch(() => {});
+      }
+    },
+    [course.id],
+  );
 
   // Reset per-lesson playback & resume state when lesson changes
   useEffect(() => {
@@ -440,6 +542,7 @@ export function CoursePlayer({
 
     setDuration(currentLesson.durationSec || 0);
     setPlaying(false);
+    progressSaveTimerRef.current = Date.now();
 
     const appSettings = readAppSettings();
     if (
@@ -471,6 +574,7 @@ export function CoursePlayer({
       startPosition: pendingSeekRef.current ?? 0,
       latestPosition: pendingSeekRef.current ?? 0,
       latestDuration: currentLesson.durationSec || 0,
+      historyQualified: false,
     };
 
     return () => {
@@ -774,6 +878,174 @@ export function CoursePlayer({
     [allLessons, course.id],
   );
 
+  const maybeAutoCompleteLesson = useCallback(
+    (pos: number, dur: number) => {
+      if (!currentLesson || dur <= 0 || currentLesson.isCompleted) return;
+      const threshold = readAppSettings().autoMarkCompleteAt;
+      if (
+        threshold < 100 &&
+        !autoCompletedIdsRef.current.has(currentLesson.lessonId) &&
+        (pos / dur) * 100 >= threshold
+      ) {
+        autoCompletedIdsRef.current.add(currentLesson.lessonId);
+        handleToggleLessonDone(active, true);
+      }
+    },
+    [active, currentLesson, handleToggleLessonDone],
+  );
+
+  // Save checkpoint on tab background and flush reliably on page unload
+  useEffect(() => {
+    const onVisibilityChange = () => {
+      if (document.visibilityState !== "hidden") return;
+      const sess = studySessionRef.current;
+      if (!sess) return;
+      const elapsed = getActiveSessionSeconds(sess);
+      const qualified =
+        sess.historyQualified || elapsed >= getHistoryThresholdSeconds(sess.latestDuration);
+      if (qualified) sess.historyQualified = true;
+      const canSavePosition = sess.latestPosition > 0 && pendingSeekRef.current === null;
+      if (canSavePosition || qualified) {
+        void updateVideoProgress(sess.videoId, sess.latestPosition, sess.latestDuration, course.id, {
+          recordHistory: qualified,
+          recordPosition: canSavePosition,
+          keepalive: true,
+        });
+      }
+    };
+
+    const onPageHide = () => {
+      flushStudySession(true);
+    };
+
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    window.addEventListener("pagehide", onPageHide);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      window.removeEventListener("pagehide", onPageHide);
+    };
+  }, [course.id, flushStudySession]);
+
+  // YouTube embed active playback tracking via postMessage (`enablejsapi=1`)
+  useEffect(() => {
+    const vid = currentLesson?.lessonId;
+    if (!youtubeId || !vid) return;
+
+    let handshakeReceived = false;
+    let attempts = 0;
+    const playerDomId = `yt-player-${vid}`;
+
+    const tryHandshake = () => {
+      sendYoutubeListeningHandshake(ytIframeRef.current, playerDomId);
+    };
+
+    tryHandshake();
+    const retryInterval = setInterval(() => {
+      attempts += 1;
+      if (handshakeReceived || attempts >= 12) {
+        clearInterval(retryInterval);
+        return;
+      }
+      tryHandshake();
+    }, 500);
+
+    const onMessage = (event: MessageEvent) => {
+      const update = parseYoutubeIframeMessage(event, ytIframeRef.current?.contentWindow);
+      if (!update) return;
+      handshakeReceived = true;
+
+      const sess = studySessionRef.current;
+      if (!sess || sess.videoId !== vid) return;
+
+      if (typeof update.duration === "number" && update.duration > 0) {
+        sess.latestDuration = update.duration;
+        setDuration(update.duration);
+      }
+      if (typeof update.currentTime === "number" && update.currentTime >= 0) {
+        setTime(update.currentTime);
+        sess.latestPosition = update.currentTime;
+      }
+
+      if (update.playerState === 1) {
+        setPlaying(true);
+        pendingSeekRef.current = null;
+        if (sess.lastResumedAt === null) {
+          sess.lastResumedAt = Date.now();
+        }
+      } else if (update.playerState === 2) {
+        setPlaying(false);
+        pendingSeekRef.current = null;
+        pauseActiveSessionSlice(sess);
+        recordPlaybackProgress(sess.latestPosition, sess.latestDuration, {
+          forceSave: true,
+          recordPosition: sess.latestPosition > 0,
+        });
+      } else if (update.playerState === 3) {
+        pauseActiveSessionSlice(sess);
+      } else if (update.playerState === 0) {
+        setPlaying(false);
+        pendingSeekRef.current = null;
+        if (sess.latestDuration > 0) {
+          sess.latestPosition = sess.latestDuration;
+          setTime(sess.latestDuration);
+        }
+        flushStudySession();
+        if (!currentLesson.isCompleted && !autoCompletedIdsRef.current.has(vid)) {
+          autoCompletedIdsRef.current.add(vid);
+          handleToggleLessonDone(active, true);
+        }
+        return;
+      }
+
+      if (update.playerState === 1 || sess.lastResumedAt !== null) {
+        const pos = update.currentTime ?? sess.latestPosition;
+        const dur = update.duration ?? sess.latestDuration;
+        recordPlaybackProgress(pos, dur, { recordPosition: true });
+        maybeAutoCompleteLesson(pos, dur);
+      }
+    };
+
+    window.addEventListener("message", onMessage);
+    return () => {
+      clearInterval(retryInterval);
+      window.removeEventListener("message", onMessage);
+    };
+  }, [
+    active,
+    currentLesson,
+    flushStudySession,
+    handleToggleLessonDone,
+    maybeAutoCompleteLesson,
+    recordPlaybackProgress,
+    youtubeId,
+  ]);
+
+  // Google Drive embed active visibility dwell tracking (no postMessage API available)
+  useEffect(() => {
+    const vid = currentLesson?.lessonId;
+    if (youtubeId || !driveFileId || !vid) return;
+
+    const interval = setInterval(() => {
+      if (document.visibilityState !== "visible") return;
+      const sess = studySessionRef.current;
+      if (!sess || sess.videoId !== vid) return;
+
+      sess.accumulatedSecs += 1;
+      if (
+        !sess.historyQualified &&
+        sess.accumulatedSecs >= getHistoryThresholdSeconds(sess.latestDuration)
+      ) {
+        sess.historyQualified = true;
+        void updateVideoProgress(vid, 0, sess.latestDuration, course.id, {
+          recordHistory: true,
+          recordPosition: false,
+        });
+      }
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [course.id, currentLesson?.lessonId, driveFileId, youtubeId]);
+
   const handleCommitBulkDone = useCallback(
     (updates: Array<{ idx: number; done: boolean }>) => {
       if (updates.length === 0) return;
@@ -1004,18 +1276,18 @@ export function CoursePlayer({
               </div>
             ) : youtubeId ? (
               <iframe
-                key={youtubeId}
-                src={`https://www.youtube.com/embed/${encodeURIComponent(youtubeId)}?enablejsapi=1&controls=1&modestbranding=1&rel=0&origin=${typeof window !== "undefined" ? encodeURIComponent(window.location.origin) : ""}`}
+                ref={ytIframeRef}
+                id={`yt-player-${currentLesson.lessonId}`}
+                key={currentLesson.lessonId}
+                src={`https://www.youtube.com/embed/${encodeURIComponent(youtubeId)}?enablejsapi=1&controls=1&modestbranding=1&rel=0${ytStartCacheRef.current.startSec > 2 ? `&start=${ytStartCacheRef.current.startSec}` : ""}&origin=${typeof window !== "undefined" ? encodeURIComponent(window.location.origin) : ""}`}
                 title={currentLesson.title}
                 className="size-full border-0"
                 allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
                 allowFullScreen
                 onLoad={() => {
-                  void updateVideoProgress(
-                    currentLesson.lessonId,
-                    currentLesson.lastWatchedPosition || 0,
-                    currentLesson.durationSec || 0,
-                    course.id,
+                  sendYoutubeListeningHandshake(
+                    ytIframeRef.current,
+                    `yt-player-${currentLesson.lessonId}`,
                   );
                 }}
               />
@@ -1027,20 +1299,29 @@ export function CoursePlayer({
                 className="size-full border-0"
                 allow="autoplay; encrypted-media; picture-in-picture"
                 allowFullScreen
-                onLoad={() => {
-                  void updateVideoProgress(
-                    currentLesson.lessonId,
-                    currentLesson.lastWatchedPosition || 0,
-                    currentLesson.durationSec || 0,
-                    course.id,
-                  );
-                }}
               />
             ) : isExternalResourceOnly ? (
               <div className="flex size-full flex-col items-center justify-center gap-3 p-6 text-center text-white">
                 <p className="max-w-md text-base font-semibold">{currentLesson.title}</p>
                 <Button asChild size="sm" variant="secondary">
-                  <a href={externalDirectUrl} target="_blank" rel="noopener noreferrer">
+                  <a
+                    href={externalDirectUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={() => {
+                      const lid = currentLesson.lessonId;
+                      const ldur = currentLesson.durationSec || 0;
+                      trackExternalCourseOpen(course.id, {
+                        accessType: "player",
+                        onCommitted: () => {
+                          void updateVideoProgress(lid, 0, ldur, course.id, {
+                            recordHistory: true,
+                            recordPosition: false,
+                          });
+                        },
+                      });
+                    }}
+                  >
                     Open link
                   </a>
                 </Button>
@@ -1060,48 +1341,43 @@ export function CoursePlayer({
                     studySessionRef.current.lastResumedAt = Date.now();
                   }
                 }}
+                onPlaying={() => {
+                  if (studySessionRef.current && studySessionRef.current.lastResumedAt === null) {
+                    studySessionRef.current.lastResumedAt = Date.now();
+                  }
+                }}
+                onWaiting={() => {
+                  pauseActiveSessionSlice(studySessionRef.current);
+                }}
+                onSeeking={() => {
+                  pauseActiveSessionSlice(studySessionRef.current);
+                }}
+                onSeeked={(e) => {
+                  if (
+                    !e.currentTarget.paused &&
+                    studySessionRef.current &&
+                    studySessionRef.current.lastResumedAt === null
+                  ) {
+                    studySessionRef.current.lastResumedAt = Date.now();
+                  }
+                }}
                 onPause={(e) => {
                   setPlaying(false);
-                  if (studySessionRef.current) {
-                    if (studySessionRef.current.lastResumedAt !== null) {
-                      studySessionRef.current.accumulatedSecs += Math.max(
-                        0,
-                        (Date.now() - studySessionRef.current.lastResumedAt) / 1000,
-                      );
-                      studySessionRef.current.lastResumedAt = null;
-                    }
-                    const pos = e.currentTarget.currentTime;
-                    const dur = e.currentTarget.duration || effectiveDuration;
-                    studySessionRef.current.latestPosition = pos;
-                    studySessionRef.current.latestDuration = dur;
-                    void updateVideoProgress(currentLesson.lessonId, pos, dur, course.id);
-                  }
+                  pauseActiveSessionSlice(studySessionRef.current);
+                  const pos = e.currentTarget.currentTime;
+                  const dur = e.currentTarget.duration || effectiveDuration;
+                  recordPlaybackProgress(pos, dur, {
+                    forceSave: true,
+                    recordPosition: pendingSeekRef.current === null,
+                  });
                 }}
                 onTimeUpdate={(e) => {
                   const media = e.currentTarget;
                   const t = media.currentTime;
                   const dur = media.duration || effectiveDuration;
                   setTime(t);
-                  if (studySessionRef.current) {
-                    studySessionRef.current.latestPosition = t;
-                    studySessionRef.current.latestDuration = dur;
-                  }
-                  const now = Date.now();
-                  if (now - progressSaveTimerRef.current >= 5000) {
-                    progressSaveTimerRef.current = now;
-                    void updateVideoProgress(currentLesson.lessonId, t, dur, course.id);
-                  }
-                  const threshold = readAppSettings().autoMarkCompleteAt;
-                  if (
-                    dur > 0 &&
-                    threshold < 100 &&
-                    !currentLesson.isCompleted &&
-                    !autoCompletedIdsRef.current.has(currentLesson.lessonId) &&
-                    (t / dur) * 100 >= threshold
-                  ) {
-                    autoCompletedIdsRef.current.add(currentLesson.lessonId);
-                    handleToggleLessonDone(active, true);
-                  }
+                  recordPlaybackProgress(t, dur);
+                  maybeAutoCompleteLesson(t, dur);
                 }}
                 onLoadedMetadata={(e) => {
                   const media = e.currentTarget;
@@ -1125,7 +1401,11 @@ export function CoursePlayer({
                     });
                   }
                 }}
-                onEnded={() => {
+                onEnded={(e) => {
+                  const endDur = e.currentTarget.duration || effectiveDuration;
+                  if (studySessionRef.current && endDur > 0) {
+                    studySessionRef.current.latestPosition = endDur;
+                  }
                   flushStudySession();
                   if (!currentLesson.isCompleted) {
                     handleToggleLessonDone(active, true);

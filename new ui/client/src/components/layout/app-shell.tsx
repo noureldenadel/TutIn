@@ -81,6 +81,7 @@ import { DotLogo } from "@/components/layout/dot-logo";
 import { CourseThumbnail } from "@/components/layout/course-thumbnail";
 import { InstructorAvatar } from "@/components/layout/instructor-avatar";
 import { Toaster, toast } from "sonner";
+import { trackExternalCourseOpen } from "@/lib/watch-history";
 
 type StatusFilter = "All" | "In Progress" | "Completed";
 const STATUS_FILTERS: readonly StatusFilter[] = ["All", "In Progress", "Completed"];
@@ -346,7 +347,12 @@ function CourseMenu({
             <>
               {course.courseUrl && (
                 <DropdownMenuItem asChild className="rounded-md">
-                  <a href={course.courseUrl} target="_blank" rel="noopener noreferrer">
+                  <a
+                    href={course.courseUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={() => trackExternalCourseOpen(String(course.id))}
+                  >
                     <ExternalLink className="size-4" /> Open link
                   </a>
                 </DropdownMenuItem>
@@ -465,6 +471,7 @@ export function CourseCard({
            href={course.courseUrl}
            target="_blank"
            rel="noopener noreferrer"
+           onClick={() => trackExternalCourseOpen(String(course.id))}
            className="absolute inset-0 z-10 rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
            aria-label={`Open ${course.title} in new tab`}
            title={course.title}

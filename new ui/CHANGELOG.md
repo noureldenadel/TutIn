@@ -4,15 +4,24 @@ All notable changes to **TutIn v6 (`new ui`)** are documented in this file.
 
 ## [Unreleased]
 
+### Added & Fixed
+- **Qualified Watch History Across Local, YouTube, Google Drive & External Courses (`client/src/lib/watch-history.ts`, `client/src/components/player/course-player.tsx`, `client/src/components/layout/app-shell.tsx`, `client/src/components/pages/history-page.tsx`, `client/src/lib/course-lessons.ts`, `client/src/lib/courses.ts`, `server/routes/videos.js`, `server/routes/courses.js`, `server/routes/analytics.js`):**
+  - Decoupled playback resume saving (`watch_progress` / `last_watched_position`) from watch history registration (`last_watched_at` / `courses.last_accessed`) via `recordHistory` and added `POST /api/courses/:id/access` for explicit engagement timestamps, while initializing `last_accessed_click_time` to `NULL` on new course creation and excluding YouTube/Drive courses with URLs from bogus `_ext_mock` entries.
+  - Added duration-aware active threshold helper `getHistoryThresholdSeconds` (up to `15s`, scaling `3s`–`15s` for shorter clips, `10s` unknown fallback) and fixed `progressSaveTimerRef` initialization (`Date.now()`) plus buffering/seeking guards on `<video>` alongside `visibilitychange` + `pagehide` `keepalive` flushes so accidental 1-second plays or opens no longer enter History.
+  - Replaced unconditional YouTube/Drive `iframe onLoad` history logging with verified YouTube `enablejsapi=1` `postMessage` playback state/progress tracking (`?start=` resume, `autoMarkCompleteAt`, `>= 5s` study sessions) and visibility-aware active dwell tracking for Google Drive embeds.
+  - Wired shared `8s` external-tab bounce filtering (`trackExternalCourseOpen` using `blur`/`focus`/`visibilitychange`/`pagehide`) across `CourseCard`, `CourseMenu`, `HistoryRow`, and `CoursePlayer` external resource links.
+
+### Fixed & Changed
+- **Side-by-Side Canvas `Reset arrangement` & Freeform Zone Coexistence (`client/src/lib/course-canvas.ts`, `%APPDATA%/TutIn/tutin.db`, `Domestika/.tutin/canvas.json`):**
+  - Fixed a stale group-reference bug in `tidyAllCanvasArtboards` where calling `next = tidyVideoArtboard(next, g.id)` inside the `ordered` loop cloned `next.groups` on the first iteration, causing all subsequent Artboards (`M1L4`–`M1L7`) to mutate detached group objects and remain at their old/scattered coordinates.
+  - Reflowed all Artboards (`reflowAutoVideoGroup`) in-place before invoking `fitArtboardsToChildren`, preventing un-tidied Video Artboards (`vgroup-...-5`) from stretching (`width: 754, y: -201`) to wrap pre-reset card coordinates and overlapping neighbor columns.
+  - Replaced per-column obstacle hopping with a contiguous two-zone spatial layout: Video Artboards (`M1L1 → M1L2 → ...`) always arrange strictly side-by-side at `y = 96` (`52px` gap), followed by populated Custom Artboards; non-colliding loose user cards and unparented strokes remain untouched in place, while any loose cards or unparented strokes that would be buried under the Artboard row shift into a clean Freeform Zone immediately to the right of the last Artboard (`x = cursorX, y = 96`).
+  - Pruned empty legacy v1 `cnode_group_*` shells whose lecture cards were recalled into Video Artboards, and repaired *Design Your Own Creative Process* (`5` side-by-side Video Artboards `M1L3`–`M1L7` at `x = 80, 472, 864, 1256, 1648, y = 96, width = 340`, plus the user's standalone note and image at `x = 2040`).
+
 ### Changed & Fixed
 - **Course Card Top-Right Frosted 3-Dots Menu & Hover Continuity (`client/src/components/layout/app-shell.tsx`):**
   - Returned `CourseMenu` (`MoreVertical`) to the top-right corner of the thumbnail (`top-3 right-3 z-20`) so card titles regain full width, using a lightweight translucent frosted glass trigger (`size-8 rounded-lg bg-card/85 dark:bg-white/15 backdrop-blur-md`) matching the center action button instead of a heavy dark patch over artwork.
   - Set `<DropdownMenu modal={false}>` alongside `data-menu-open` exit-grace tracking (`handleMenuOpenChange`) so Radix never sets `pointer-events: none` on `<body>` when opened—preventing hover drop on click and re-hover flicker on `Escape` across both Home and Instructor pages.
-
-### Fixed
-- **Persistent Root `AppShell` & Continuous Nav Rail Transitions (`client/src/routes/__root.tsx`, `client/src/routes/*.tsx`, `client/src/components/layout/app-shell.tsx`):**
-  - Moved `<AppShell>` from individual route files into `RootLayout` (`routes/__root.tsx`) wrapping `<Outlet />` so `IconDock`, modals, and theme/settings state remain mounted across every route navigation instead of unmounting and remounting on each click.
-  - Removed `lastSettledNavIndex` and the single-`requestAnimationFrame` mount workaround in `IconDock` (whose CSS transition was coalesced away on cached route transitions after the first navigation per reload); the persistent `bg-accent` capsule and left indicator pill now slide smoothly on every route switch, while `<main>` resets scroll on `pathname` changes and applies directional `navMotion` entry transitions keyed by `pathname`.
 
 ### Fixed
 - **Persistent Root `AppShell` & Continuous Nav Rail Transitions (`client/src/routes/__root.tsx`, `client/src/routes/*.tsx`, `client/src/components/layout/app-shell.tsx`):**

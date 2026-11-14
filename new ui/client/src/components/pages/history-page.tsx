@@ -25,6 +25,7 @@ import {
 } from "@/lib/courses";
 import { formatClockShort } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { trackExternalCourseOpen } from "@/lib/watch-history";
 
 interface HistoryApiItem {
   video: {
@@ -427,6 +428,7 @@ function HistoryRow({
         href={entry.courseUrl}
         target="_blank"
         rel="noopener noreferrer"
+        onClick={() => trackExternalCourseOpen(entry.courseId)}
         className={rowClassName}
       >
         {content}

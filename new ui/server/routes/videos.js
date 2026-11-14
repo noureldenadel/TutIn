@@ -270,19 +270,57 @@ router.put('/:id', (req, res) => {
 })
 
 // PUT /api/videos/:id/progress
-// Optimized: Update video progress without triggering full course recalculation/DB flush on every 5s tick
+// Update playback resume position and conditionally commit watch history + course last_accessed
 router.put('/:id/progress', (req, res) => {
-    const { watchProgress, lastWatchedPosition } = req.body
+    const { watchProgress, lastWatchedPosition, recordHistory, recordPosition } = req.body ?? {}
     const safeProgress = Math.min(1, Math.max(0, Number(watchProgress) || 0))
     const safePosition = Math.max(0, Number(lastWatchedPosition) || 0)
     try {
-        run(`
-            UPDATE videos 
-            SET watch_progress = ?, last_watched_position = ?, last_watched_at = ?
-            WHERE id = ?
-        `, [safeProgress, safePosition, new Date().toISOString(), req.params.id])
-        
-        res.json({ success: true })
+        const existing = getOne(
+            'SELECT course_id, last_watched_at FROM videos WHERE id = ?',
+            [req.params.id]
+        )
+        if (!existing) {
+            return res.status(404).json({ error: 'Video not found' })
+        }
+
+        const shouldUpdatePosition = recordPosition !== false
+        const shouldRecordHistory =
+            recordHistory === true || (recordHistory === undefined && Boolean(existing.last_watched_at))
+        const now = new Date().toISOString()
+
+        if (shouldUpdatePosition && shouldRecordHistory) {
+            run(`
+                UPDATE videos 
+                SET watch_progress = ?, last_watched_position = ?, last_watched_at = ?
+                WHERE id = ?
+            `, [safeProgress, safePosition, now, req.params.id])
+        } else if (shouldUpdatePosition) {
+            run(`
+                UPDATE videos 
+                SET watch_progress = ?, last_watched_position = ?
+                WHERE id = ?
+            `, [safeProgress, safePosition, req.params.id])
+        } else if (shouldRecordHistory) {
+            run(`
+                UPDATE videos 
+                SET last_watched_at = ?
+                WHERE id = ?
+            `, [now, req.params.id])
+        }
+
+        if (shouldRecordHistory && existing.course_id) {
+            run(
+                'UPDATE courses SET last_accessed = ? WHERE id = ?',
+                [now, existing.course_id]
+            )
+        }
+
+        res.json({
+            success: true,
+            recordedHistory: shouldRecordHistory,
+            lastWatchedAt: shouldRecordHistory ? now : existing.last_watched_at,
+        })
     } catch (err) {
         res.status(500).json({ error: err.message })
     }

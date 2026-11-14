@@ -100,7 +100,13 @@ router.get('/history', (req, res) => {
                 instructor as course_instructor, source_type as course_source_type, course_url,
                 last_accessed_click_time
             FROM courses
-            WHERE (source_type = 'external-link' OR course_url IS NOT NULL) 
+            WHERE (
+                source_type IN ('external-link', 'link')
+                OR (
+                    course_url IS NOT NULL
+                    AND COALESCE(source_type, '') NOT IN ('youtube', 'google-drive', 'drive')
+                )
+            )
             AND last_accessed_click_time IS NOT NULL
         `)
 

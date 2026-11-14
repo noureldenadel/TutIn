@@ -1,5 +1,9 @@
 import { apiJson, apiRequest } from "@/lib/api";
-import { COURSES_CHANGED_EVENT, fetchCourses } from "@/lib/courses";
+import {
+  COURSES_CHANGED_EVENT,
+  fetchCourses,
+  touchCourseLastAccessed,
+} from "@/lib/courses";
 import { formatTimestamp, parseTimestampToSeconds } from "@/lib/format";
 
 export { formatTimestamp, parseTimestampToSeconds as parseDurationToSeconds };
@@ -101,6 +105,7 @@ export interface CourseLessonItem {
   isFavorite: boolean;
   watchProgress: number;
   lastWatchedPosition: number;
+  lastWatchedAt?: string | null | undefined;
   youtubeId?: string | null | undefined;
   url?: string | null | undefined;
   description?: string | undefined;
@@ -209,6 +214,7 @@ export function buildCourseCurriculum(
         isFavorite: v.isFavorite,
         watchProgress: v.watchProgress ?? 0,
         lastWatchedPosition: v.lastWatchedPosition ?? 0,
+        lastWatchedAt: v.lastWatchedAt ?? null,
         youtubeId: v.youtubeId,
         url: v.url,
         description: v.description,
@@ -258,6 +264,7 @@ export function buildCourseCurriculum(
         isFavorite: v.isFavorite,
         watchProgress: v.watchProgress ?? 0,
         lastWatchedPosition: v.lastWatchedPosition ?? 0,
+        lastWatchedAt: v.lastWatchedAt ?? null,
         youtubeId: v.youtubeId,
         url: v.url,
         description: v.description,
@@ -430,38 +437,65 @@ export async function updateCourseVideo(
   return res;
 }
 
+export interface UpdateVideoProgressOptions {
+  recordHistory?: boolean;
+  recordPosition?: boolean;
+  keepalive?: boolean;
+}
+
 export async function updateVideoProgress(
   videoId: string,
   currentTime: number,
   duration: number,
   courseId?: string,
+  options: UpdateVideoProgressOptions = {},
 ): Promise<void> {
   const safePosition = Math.max(0, Number(currentTime) || 0);
   const safeDuration = Number(duration) || 0;
   const watchProgress =
     safeDuration > 0 ? Math.min(1, Math.max(0, safePosition / safeDuration)) : 0;
+  const recordPosition = options.recordPosition ?? true;
+  const shouldMarkHistory = options.recordHistory === true;
+  const nowIso = shouldMarkHistory ? new Date().toISOString() : undefined;
 
   // Update cached lesson state optimistically so revisiting lesson resumes accurately
   if (courseId && curriculumCache.has(courseId)) {
     const cached = curriculumCache.get(courseId)!;
     const lesson = cached.lessons.find((l) => l.lessonId === videoId);
     if (lesson) {
-      lesson.lastWatchedPosition = safePosition;
-      lesson.watchProgress = watchProgress;
+      if (recordPosition) {
+        lesson.lastWatchedPosition = safePosition;
+        lesson.watchProgress = watchProgress;
+      }
+      if (nowIso) {
+        lesson.lastWatchedAt = nowIso;
+      }
     }
     const raw = cached.rawVideos.find((v) => v.id === videoId);
     if (raw) {
-      raw.lastWatchedPosition = safePosition;
-      raw.watchProgress = watchProgress;
+      if (recordPosition) {
+        raw.lastWatchedPosition = safePosition;
+        raw.watchProgress = watchProgress;
+      }
+      if (nowIso) {
+        raw.lastWatchedAt = nowIso;
+      }
     }
+  }
+
+  if (nowIso && courseId) {
+    touchCourseLastAccessed(courseId, nowIso);
   }
 
   await apiRequest(`/api/videos/${encodeURIComponent(videoId)}/progress`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
+    keepalive: options.keepalive ?? false,
     body: JSON.stringify({
       watchProgress,
       lastWatchedPosition: safePosition,
+      recordHistory: options.recordHistory,
+      recordPosition,
     }),
   });
 }

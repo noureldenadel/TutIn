@@ -786,14 +786,13 @@ function reflowAutoVideoGroup(
   }
 
   // Keep any canvas-only cards pinned below auto cards if they overlap cleanly
-  const extras = inGroup.filter((c) => !autoVideoCards.includes(c));
+  const extras = inGroup
+    .filter((c) => !autoVideoCards.includes(c))
+    .sort((a, b) => (a.y !== b.y ? a.y - b.y : a.x - b.x));
   for (const extra of extras) {
-    if (extra.y < cursorY) {
-      extra.y = cursorY;
-      cursorY += extra.height + CANVAS_CARD_GAP;
-    } else {
-      cursorY = Math.max(cursorY, extra.y + extra.height + CANVAS_CARD_GAP);
-    }
+    extra.x = group.x + CANVAS_PADDING_X;
+    extra.y = cursorY;
+    cursorY += extra.height + CANVAS_CARD_GAP;
   }
 
   group.height = Math.max(
@@ -889,6 +888,16 @@ export function reconcileCanvasWithNotes(
       }
     }
   }
+
+  // Prune empty legacy v1 `cnode_group_*` shells whose cards have already migrated into `vgroup-*`
+  base.groups = base.groups.filter((g) => {
+    if (g.type === "custom-artboard" && g.id.startsWith("cnode_group_")) {
+      const hasChildren = base.cards.some((c) => c.groupId === g.id);
+      const hasStrokes = base.strokes.some((s) => s.parentGroupId === g.id);
+      return hasChildren || hasStrokes;
+    }
+    return true;
+  });
 
   // Detect untouched legacy v1 flat `cnode_*` piles (left-gutter x≈60, no lesson Artboard yet)
   const legacyFlatCandidates = base.cards.filter(
@@ -1425,68 +1434,202 @@ export function restoreNoteCardToCanvas(
   };
 }
 
-export function tidyAllCanvasArtboards(state: CourseCanvasState): CourseCanvasState {
-  let next: CourseCanvasState = {
-    ...state,
-    groups: state.groups.map((g) => ({ ...g })),
-    cards: state.cards.map((c) => ({ ...c })),
-    edges: state.edges.map((e) => ({ ...e })),
-    strokes: state.strokes.map((s) => ({
-      ...s,
-      points: s.points.map((pt) => [...pt] as [number, number, number]),
-    })),
+function getStrokeBounds(stroke: CanvasStroke): {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+} | null {
+  if (stroke.points.length === 0) return null;
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const [px, py] of stroke.points) {
+    if (px < minX) minX = px;
+    if (py < minY) minY = py;
+    if (px > maxX) maxX = px;
+    if (py > maxY) maxY = py;
+  }
+  const pad = Math.max(4, stroke.size * 0.5);
+  return {
+    x: minX - pad,
+    y: minY - pad,
+    width: Math.max(8, maxX - minX + pad * 2),
+    height: Math.max(8, maxY - minY + pad * 2),
   };
+}
 
-  const ordered = [...next.groups].sort((a, b) => {
-    const ai = a.lessonIdx ?? 9999;
-    const bi = b.lessonIdx ?? 9999;
-    return ai !== bi ? ai - bi : a.x - b.x;
+function rectsOverlap(
+  a: { x: number; y: number; width: number; height: number },
+  b: { x: number; y: number; width: number; height: number },
+  margin = 16,
+): boolean {
+  return (
+    a.x < b.x + b.width + margin &&
+    a.x + a.width > b.x - margin &&
+    a.y < b.y + b.height + margin &&
+    a.y + a.height > b.y - margin
+  );
+}
+
+export function tidyAllCanvasArtboards(state: CourseCanvasState): CourseCanvasState {
+  const nextGroups = state.groups.map((g) => ({ ...g }));
+  const nextCards = state.cards.map((c) => ({ ...c }));
+  const nextStrokes = state.strokes.map((s) => ({
+    ...s,
+    points: s.points.map((pt) => [...pt] as [number, number, number]),
+  }));
+
+  // 1. Sort artboards so Video Artboards appear in strict chronological lessonIdx order (M1L1 -> M1L2 -> ...),
+  // followed by any user-created Custom Artboards.
+  nextGroups.sort((a, b) => {
+    const aIsVideo = a.type === "video-artboard" && a.lessonIdx !== undefined;
+    const bIsVideo = b.type === "video-artboard" && b.lessonIdx !== undefined;
+    if (aIsVideo && bIsVideo) return a.lessonIdx! - b.lessonIdx!;
+    if (aIsVideo !== bIsVideo) return aIsVideo ? -1 : 1;
+    return a.x !== b.x ? a.x - b.x : a.y - b.y;
   });
 
+  // 2. Arrange all Artboards strictly side-by-side along a single top-aligned row (y = CANVAS_START_Y)
+  // and reflow each Artboard's cards and parented strokes in-place before running any bounds fit.
   let cursorX = CANVAS_START_X;
-  for (const g of ordered) {
-    const estimatedHeight =
-      g.type === "video-artboard"
-        ? next.cards
-            .filter((c) => c.groupId === g.id)
-            .reduce(
-              (sum, c) => sum + c.height + CANVAS_CARD_GAP,
-              CANVAS_GROUP_HEADER_HEIGHT + 14 + CANVAS_PADDING_BOTTOM,
-            )
-        : g.height;
-    cursorX = advancePastOverlappingCards(
-      cursorX,
-      CANVAS_START_Y,
-      next.cards,
-      Math.max(560, g.height, estimatedHeight),
-    );
+  for (const g of nextGroups) {
     const dx = cursorX - g.x;
     const dy = CANVAS_START_Y - g.y;
     g.x = cursorX;
     g.y = CANVAS_START_Y;
-    if (g.type === "video-artboard") {
-      const childMaxWidth = next.cards
-        .filter((c) => c.groupId === g.id)
-        .reduce((max, c) => Math.max(max, c.width + CANVAS_PADDING_X * 2), CANVAS_GROUP_WIDTH);
-      g.width = childMaxWidth;
-    }
-    for (const c of next.cards) {
-      if (c.groupId === g.id) {
-        c.x += dx;
-        c.y += dy;
-      }
-    }
-    for (const s of next.strokes) {
+    g.layoutMode = "auto";
+
+    for (const s of nextStrokes) {
       if (s.parentGroupId === g.id) {
         s.points = s.points.map(([px, py, pressure]) => [px + dx, py + dy, pressure]);
       }
     }
-    next = tidyVideoArtboard(next, g.id);
-    const updatedGroup = next.groups.find((gr) => gr.id === g.id);
-    cursorX += (updatedGroup?.width ?? CANVAS_GROUP_WIDTH) + CANVAS_COL_GAP;
+
+    if (g.type === "video-artboard") {
+      const inGroup = nextCards.filter((c) => c.groupId === g.id);
+      let maxChildWidth = CANVAS_CARD_WIDTH;
+      for (const c of inGroup) {
+        if (c.type === "video-note" && c.originLessonIdx === g.lessonIdx) {
+          c.membershipState = "auto";
+        }
+        if (c.width > maxChildWidth) maxChildWidth = c.width;
+      }
+      g.width = Math.max(CANVAS_GROUP_WIDTH, maxChildWidth + CANVAS_PADDING_X * 2);
+      reflowAutoVideoGroup(g, nextCards);
+    } else {
+      const inGroup = nextCards
+        .filter((c) => c.groupId === g.id)
+        .sort((a, b) => (a.y !== b.y ? a.y - b.y : a.x - b.x));
+      let cy = g.y + CANVAS_GROUP_HEADER_HEIGHT + 14;
+      let maxChildWidth = CANVAS_CARD_WIDTH;
+      for (const c of inGroup) {
+        c.x = g.x + CANVAS_PADDING_X;
+        c.y = cy;
+        cy += c.height + CANVAS_CARD_GAP;
+        if (c.width > maxChildWidth) maxChildWidth = c.width;
+      }
+      g.width = Math.max(g.width, maxChildWidth + CANVAS_PADDING_X * 2);
+      g.height = Math.max(
+        180,
+        inGroup.length > 0 ? cy - CANVAS_CARD_GAP + CANVAS_PADDING_BOTTOM - g.y : g.height,
+      );
+    }
+
+    cursorX = g.x + g.width + CANVAS_COL_GAP;
   }
 
-  return next;
+  fitArtboardsToChildren(nextGroups, nextCards);
+
+  // Re-verify horizontal non-overlap after fitArtboardsToChildren
+  let verifyX = CANVAS_START_X;
+  for (const g of nextGroups) {
+    if (g.x < verifyX) {
+      const shiftX = verifyX - g.x;
+      g.x = verifyX;
+      for (const c of nextCards) {
+        if (c.groupId === g.id) c.x += shiftX;
+      }
+      for (const s of nextStrokes) {
+        if (s.parentGroupId === g.id) {
+          s.points = s.points.map(([px, py, pressure]) => [px + shiftX, py, pressure]);
+        }
+      }
+    }
+    verifyX = g.x + g.width + CANVAS_COL_GAP;
+  }
+  cursorX = verifyX;
+
+  // 3. Coexistence with user-added freeform items (loose cards & unparented drawings):
+  // Non-colliding freeform items stay untouched where the user placed them; any loose cards or
+  // unparented strokes that would be buried underneath an Artboard are moved into a clean
+  // non-overlapping Freeform Zone immediately to the right of the Artboard row.
+  const ungroupedCards = nextCards
+    .filter((c) => !c.groupId)
+    .sort((a, b) => (a.y !== b.y ? a.y - b.y : a.x - b.x));
+
+  const collidingCards = ungroupedCards.filter((c) =>
+    nextGroups.some((g) => rectsOverlap(c, g, 16)),
+  );
+
+  const movedCardDeltas: {
+    oldBounds: { x: number; y: number; width: number; height: number };
+    dx: number;
+    dy: number;
+  }[] = [];
+
+  let freeformY = CANVAS_START_Y;
+  const freeformX = cursorX;
+
+  for (const card of collidingCards) {
+    const oldBounds = { x: card.x, y: card.y, width: card.width, height: card.height };
+    const dx = freeformX - card.x;
+    const dy = freeformY - card.y;
+    card.x = freeformX;
+    card.y = freeformY;
+    freeformY += card.height + CANVAS_CARD_GAP;
+    movedCardDeltas.push({ oldBounds, dx, dy });
+  }
+
+  for (const stroke of nextStrokes) {
+    if (stroke.parentGroupId) continue;
+    const bounds = getStrokeBounds(stroke);
+    if (!bounds) continue;
+
+    // If stroke was drawn over a loose card that just moved, keep it attached to that card
+    const attachedCardMove = movedCardDeltas.find((m) =>
+      rectsOverlap(bounds, m.oldBounds, 24),
+    );
+    if (attachedCardMove) {
+      stroke.points = stroke.points.map(([px, py, pressure]) => [
+        px + attachedCardMove.dx,
+        py + attachedCardMove.dy,
+        pressure,
+      ]);
+      continue;
+    }
+
+    // If an unparented stroke collides with an Artboard, shift it into the Freeform Zone
+    if (nextGroups.some((g) => rectsOverlap(bounds, g, 12))) {
+      const dx = Math.round(freeformX - bounds.x);
+      const dy = Math.round(freeformY - bounds.y);
+      stroke.points = stroke.points.map(([px, py, pressure]) => [
+        px + dx,
+        py + dy,
+        pressure,
+      ]);
+      freeformY += Math.ceil(bounds.height) + CANVAS_CARD_GAP;
+    }
+  }
+
+  return {
+    ...state,
+    groups: nextGroups,
+    cards: nextCards,
+    strokes: nextStrokes,
+    edges: rebuildAllAutoChronoEdges(nextGroups, nextCards, state.edges),
+  };
 }
 
 export function resetCanvasArrangement(
@@ -1500,14 +1643,28 @@ export function resetCanvasArrangement(
     points: s.points.map((pt) => [...pt] as [number, number, number]),
   }));
 
+  const lessonIdxByVideoId = new Map<string, number>();
+  lessons.forEach((l, idx) => {
+    if (l.lessonId) lessonIdxByVideoId.set(l.lessonId, idx);
+  });
+
   for (const card of nextCards) {
-    if (card.type !== "video-note" || card.isCanvasOnly || card.originLessonIdx === undefined) {
-      continue;
-    }
-    let originGroup = findVideoArtboardGroup(nextGroups, card.originLessonIdx, state.courseId);
+    const isLectureCard =
+      (card.type === "video-note" || Boolean(card.noteId)) && !card.isCanvasOnly;
+    if (!isLectureCard) continue;
+
+    const resolvedLessonIdx =
+      card.originLessonIdx ??
+      (card.originVideoId ? lessonIdxByVideoId.get(card.originVideoId) : undefined);
+    if (resolvedLessonIdx === undefined || resolvedLessonIdx < 0) continue;
+
+    card.type = "video-note";
+    card.originLessonIdx = resolvedLessonIdx;
+
+    let originGroup = findVideoArtboardGroup(nextGroups, resolvedLessonIdx, state.courseId);
     if (!originGroup) {
       originGroup = createVideoArtboardGroup(
-        card.originLessonIdx,
+        resolvedLessonIdx,
         lessons,
         nextGroups,
         nextCards,
@@ -1526,15 +1683,25 @@ export function resetCanvasArrangement(
       g.layoutMode = "auto";
       g.collapsed = false;
       g.width = CANVAS_GROUP_WIDTH;
+      if (g.lessonIdx !== undefined && lessons[g.lessonIdx]) {
+        const lesson = lessons[g.lessonIdx]!;
+        g.title = formatCanvasArtboardTitle(lessons, g.lessonIdx);
+        g.subtitle = lesson.moduleTitle || lesson.duration;
+      }
     }
   }
 
   const populatedGroups = nextGroups.filter((g) => {
-    if (g.type !== "video-artboard") return true;
-    return (
-      nextCards.some((c) => c.groupId === g.id) ||
-      nextStrokes.some((s) => s.parentGroupId === g.id)
-    );
+    const hasCards = nextCards.some((c) => c.groupId === g.id);
+    const hasStrokes = nextStrokes.some((s) => s.parentGroupId === g.id);
+    if (g.type === "video-artboard") {
+      return hasCards || hasStrokes;
+    }
+    // Remove empty legacy v1 `cnode_group_*` shells whose lecture cards were recalled into Video Artboards
+    if (g.id.startsWith("cnode_group_") && !hasCards && !hasStrokes) {
+      return false;
+    }
+    return true;
   });
 
   return tidyAllCanvasArtboards({

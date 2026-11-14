@@ -147,7 +147,7 @@ router.post('/', (req, res) => {
             data.id, data.title, data.originalTitle || null, data.description || '', data.instructor || '',
             JSON.stringify(data.tags || []), data.thumbnailData || null, data.folderPath || null,
             data.sourceType || 'local', data.courseUrl || null, data.language || 'en', data.dateAdded || now, data.dateModified || now,
-            data.lastAccessed || now, data.lastAccessedClickTime || now, data.totalDuration || 0,
+            data.lastAccessed || now, data.lastAccessedClickTime || null, data.totalDuration || 0,
             data.totalVideos || 0, data.completedVideos || 0, data.completionPercentage || 0,
             JSON.stringify(data.customMetadata || {}), data.order || 0
         ])
@@ -615,6 +615,39 @@ router.put('/:id', (req, res) => {
         }
 
         res.json({ success: true })
+    } catch (err) {
+        res.status(500).json({ error: err.message })
+    }
+})
+
+// POST /api/courses/:id/access
+// Record qualified course engagement (player playback threshold or sustained external link visit)
+router.post('/:id/access', (req, res) => {
+    const { type = 'player', timestamp } = req.body ?? {}
+    try {
+        const existing = getOne('SELECT id FROM courses WHERE id = ?', [req.params.id])
+        if (!existing) {
+            return res.status(404).json({ error: 'Course not found' })
+        }
+
+        const parsedTime =
+            typeof timestamp === 'string' && !Number.isNaN(Date.parse(timestamp))
+                ? new Date(timestamp).toISOString()
+                : new Date().toISOString()
+
+        if (type === 'external') {
+            run(
+                'UPDATE courses SET last_accessed = ?, last_accessed_click_time = ? WHERE id = ?',
+                [parsedTime, parsedTime, req.params.id]
+            )
+        } else {
+            run(
+                'UPDATE courses SET last_accessed = ? WHERE id = ?',
+                [parsedTime, req.params.id]
+            )
+        }
+
+        res.json({ success: true, lastAccessed: parsedTime })
     } catch (err) {
         res.status(500).json({ error: err.message })
     }

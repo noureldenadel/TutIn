@@ -2,14 +2,22 @@
 
 ## [Unreleased]
 
+### Added & Fixed
+- **Qualified Watch History Across Local, YouTube, Google Drive & External Courses (`new ui/client/src/lib/watch-history.ts`, `course-player.tsx`, `app-shell.tsx`, `history-page.tsx`, `course-lessons.ts`, `courses.ts`, `new ui/server/routes/videos.js`, `courses.js`, `analytics.js`):**
+  - Decoupled resume position updates from watch history stamps (`recordHistory` gate in `PUT /api/videos/:id/progress`) and added `POST /api/courses/:id/access`, stopped setting `last_accessed_click_time` when creating new courses, and scoped `/api/analytics/history` `_ext_mock` entries strictly to external-link courses.
+  - Fixed `progressSaveTimerRef` initial zero bug, excluded pause/buffer/seek time from active playback accumulation, enforced `getHistoryThresholdSeconds(duration)` (`3s`–`15s` scaled, `10s` fallback), and flushed progress reliably with `visibilitychange` + `pagehide` `keepalive`.
+  - Replaced YouTube & Google Drive `iframe onLoad` writes with YouTube `enablejsapi=1` `postMessage` playback tracking (`?start=` resume + `autoMarkCompleteAt`) and visibility-aware Drive dwell tracking, plus `8s` external-link bounce filtering (`trackExternalCourseOpen`) across `CourseCard`, `CourseMenu`, `HistoryRow`, and `CoursePlayer`.
+
+### Fixed & Changed
+- **Side-by-Side Canvas `Reset arrangement` & Freeform Zone Coexistence (`new ui/client/src/lib/course-canvas.ts`, `%APPDATA%/TutIn/tutin.db`, `Domestika/.tutin/canvas.json`):**
+  - Fixed the stale group-reference mutation bug in `tidyAllCanvasArtboards` (where calling `tidyVideoArtboard` inside the `ordered` loop cloned `next.groups` after the first Artboard, leaving subsequent Artboards at their old positions) and reflowed all Artboards before running `fitArtboardsToChildren` so un-reflowed columns never stretch (`width: 754, y: -201`) to wrap stale card coordinates.
+  - Arranged all Video Artboards strictly side-by-side (`y = 96`, `52px` gap) in chronological `lessonIdx` order without mid-row gaps, pruned empty legacy `cnode_group_*` shells, kept non-colliding loose user cards/strokes in place, and shifted any colliding loose cards or unparented strokes into a clean Freeform Zone immediately to the right of the Artboards.
+  - Repaired *Design Your Own Creative Process* (`M1L3`–`M1L7` aligned side-by-side at `x = 80, 472, 864, 1256, 1648, y = 96`, with the user's standalone note and image placed cleanly at `x = 2040`).
+
 ### Changed & Fixed
 - **Course Card Top-Right Frosted 3-Dots Menu (`new ui/client/src/components/layout/app-shell.tsx`):**
   - Returned `CourseCard`'s `CourseMenu` trigger (`MoreVertical`) to the top-right thumbnail corner (`top-3 right-3`) styled as translucent frosted glass (`bg-card/85 dark:bg-white/15 backdrop-blur-md`, visible on hover/focus/open) so thumbnails avoid dark black corner blocks and card titles use full width.
   - Configured `<DropdownMenu modal={false}>` with `data-menu-open` continuity so clicking the menu never drops `:hover` via `body` pointer-lock and `Escape` never re-triggers card hover transitions.
-
-### Fixed
-- **Persistent Root `AppShell` & Continuous Nav Rail Transitions (`new ui/client/src/routes/__root.tsx`, `new ui/client/src/routes/*.tsx`, `new ui/client/src/components/layout/app-shell.tsx`):**
-  - Lifted `<AppShell>` into `routes/__root.tsx` around `<Outlet />` and exported `HomePage` for `routes/index.tsx`, keeping `IconDock` persistently mounted across route transitions and removing the `lastSettledNavIndex` + `requestAnimationFrame` remount workaround that caused nav slide animations to stop after the first cached route transition per reload.
 
 ### Fixed
 - **Persistent Root `AppShell` & Continuous Nav Rail Transitions (`new ui/client/src/routes/__root.tsx`, `new ui/client/src/routes/*.tsx`, `new ui/client/src/components/layout/app-shell.tsx`):**
