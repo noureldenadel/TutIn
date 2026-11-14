@@ -1,0 +1,73 @@
+# TutIn v6 User Guide
+
+> Practical guide for organizing courses, studying lectures, annotating video timelines, mapping ideas on Canvas, and backing up your local TutIn library.
+
+---
+
+## 1. Starting TutIn v6
+
+- **Windows Launcher:** Double-click [`start-dev.bat`](../start-dev.bat) inside `new ui/`. It verifies Node.js/npm, installs missing workspace/server/client packages automatically, opens `http://127.0.0.1:5173`, and runs both the backend (`127.0.0.1:9474`) and client dev server.
+- **Terminal:** Run `npm start` inside `new ui/`.
+- **Data Storage:** Your library, watch history, roadmaps, settings, and canvas boards live in `%APPDATA%/TutIn/tutin.db` (or `TUTIN_DATA_DIR/tutin.db`). Local folder courses also sync portable artifacts inside `<courseFolder>/.tutin/`.
+
+> [!NOTE]
+> AI transcription, neural subtitle translation, AI summarization, and XTTS voice dubbing are intentionally disabled in v6.0 while being rebuilt from scratch. Manual `.srt`/`.vtt` subtitles, Smart Captions batch matching, and viewing existing `.tutin/summaries/*.md` files remain active.
+
+---
+
+## 2. Course Library & Intake (`/`)
+
+- **Add Course (`+ Add Course`):**
+  - **Course folder:** Choose a local directory with the native OS folder picker (or browser folder fallback) to import modules, video durations, existing `.tutin/` vault assets, and folder thumbnails.
+  - **YouTube:** Import a playlist or video stream URL with metadata lookup.
+  - **Google Drive & Direct link:** Save external course links with manual lesson/duration tracking.
+- **Course Card Menu (`...`):**
+  - **Edit details:** Update title, instructor, spoken language, tags, custom cover artwork (or revert to generated vector art), and external link progress.
+  - **Curriculum / Manage (`/manage/$courseId`):** Reorder or rename lessons/modules, upload `.srt`/`.vtt` subtitle files per video, or run a folder rescan.
+  - **Rescan folder (`SyncPreviewModal`):** Compare disk contents against SQLite to repair moved file paths, detect missing durations, and review `.tutin/` vault notes/captions/summaries/canvas changes.
+  - **Show in Explorer:** Opens the local course folder directly in your OS file manager.
+  - **Open canvas (`/canvas/$courseId`):** Launches the course whiteboard directly.
+
+---
+
+## 3. Study Player (`/learn/$courseId`)
+
+- **Formats:** Plays standard HTML5 formats (`.mp4`, `.mkv`, `.webm`, `.mov`, `.m4v`) and streams MPEG-TS (`.ts`) lectures via `mpegts.js`.
+- **Player Controls:** Play/pause, previous/next lesson, hover volume slider, playback speed/settings, `.srt`/`.vtt` subtitles + `Import subtitles…` (`SmartCaptionsModal` auto-matches sibling files in bulk), native Browser Picture-in-Picture (`P`), fullscreen (`F`), and collapsible study sidebar (`Playlist`, `Notes`, `Transcript`, `Summary`).
+- **Keyboard Shortcuts** *(toggleable in Settings -> Shortcuts)*:
+  - **Playback:** `Space` / `K` play/pause, `Left` / `Right` or `J` / `L` seek, `Up` / `Down` adjust volume, `M` mute, `C` toggle captions, `P` toggle Picture-in-Picture, `F` toggle fullscreen, `Shift+N` / `Shift+P` next/previous lesson, `<` / `>` adjust playback speed, `0–9` jump across percentage intervals.
+
+---
+
+## 4. Timestamped Notes & Course Notes Canvas (`/canvas/$courseId`)
+
+### Rich Notes Tab (`Playlist | Notes | Transcript`)
+- **Timestamped Cards:** Click `Add note · {time}` to capture a note anchored to the current playback time; click any note's timestamp chip to seek immediately.
+- **Formatting & Media:** Supports Bold, Italic, Strikethrough, bullet lists, Markdown triggers (`#`, `-`, `>`), video frame capture, file upload, clipboard paste, drag-and-drop images, inline cropping, and block reordering (`Alt + ArrowUp`/`ArrowDown` or toolbar arrows). Screenshots save into `<courseFolder>/.tutin/notes/screenshots/`.
+- **Writing Options (`...` popover):** Export markdown notes, open Canvas, configure **While writing** (auto-pause video, `Resume after {delay}s`, rewind on resume), and toggle transcript autocomplete (`Tab` / `ArrowRight`).
+
+### Whiteboard Canvas (`/canvas/$courseId`)
+- **Video Artboards & Chronological Links:** Player notes organize into per-lesson columns (`M{m}L{l} · Title`) linked chronologically by dashed `auto-chrono` arrows. Dragging a note outside detaches it (`Detached` badge + 1-click `Return`) while bridging remaining sibling links.
+- **Whiteboard Tools:**
+  - `V` Select, `H` / `Space+Drag` Pan, `N` Canvas Note, `T` Text card, `A` Connect solid Bezier edges, `P` Pen / `M` Highlighter / `E` Eraser vector ink (`perfect-freehand`), `I` Image upload, `G` Custom Frame artboard.
+  - `Ctrl+Z` / `Ctrl+Shift+Z` Undo/Redo, `Del` / `Backspace` dismiss or remove selection, `Esc` cancel edit or reset tool.
+  - Use the right `Notes` drawer (`All`, `Detached`, `Off canvas`) to locate cards or restore dismissed Video Notes, `Tidy` to align artboards, the Reset button (`Reset arrangement`) to return all course video cards to their lesson artboards in chronological order, and click the zoom `%` readout to reset view.
+
+---
+
+## 5. Roadmaps, Instructors, History & Statistics
+
+- **Roadmap (`/roadmap`):** Build multi-course learning graphs with inline double-click renaming, mouse-wheel cursor zoom over the canvas, and draggable course prerequisite connectors.
+- **Instructors (`/instructors`):** Browse instructors, upload custom circular avatars (synced across all views), and filter courses by instructor (`?instructor=:id`).
+- **History (`/history`):** Calendar-grouped watch log (`Today`, `Yesterday`, formatted dates) with `All Time` / `This Week` / `This Month` filters, click-to-resume, single-item removal, and `Clear history`.
+- **Statistics (`/analytics`):** Watch time totals, streak counter, completed courses progress, activity heatmap, weekly velocity bars, and tag-weighted `Learning focus` breakdown (`Based on tags`).
+
+---
+
+## 6. Settings & Workspace Backups
+
+- **General:** Theme (`Light` / `Dark` / `System`), `Resume playback`, `Mark complete when watched` (`90%` / `95%` / `100%`), `Progress calculation` (`By Videos` / `By Duration` with server recalculation), and `Auto-detect covers`.
+- **Shortcuts:** Toggle playback shortcuts and inspect Player, Canvas, Notes Editor, and Global (`Ctrl+K` command search) keybindings.
+- **Data:** View SQLite note/course counts, **Export** full workspace JSON (`courses`, `modules`, `videos`, `notes`, `analytics`, `roadmaps`, `settings`, Canvas v2 boards), **Import** backups, or **Reset** local workspace data safely.
+- **About:** View current build (`TutIn v6.0`) and replay the 4-step **Welcome guide** anytime.
+

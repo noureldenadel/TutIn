@@ -1,0 +1,21 @@
+{
+  "name": "tutin-app",
+  "private": true,
+  "version": "6.0.0",
+  "type": "module",
+  "scripts": {
+    "server": "npm --prefix server start",
+    "server:dev": "npm --prefix server run dev",
+    "client": "npm --prefix client run dev",
+    "build": "npm --prefix client run build",
+    "start": "concurrently \"npm run server\" \"npm run client\"",
+    "start:prod": "cross-env NODE_ENV=production node server/index.js",
+    "typecheck": "npm --prefix client run typecheck",
+    "lint": "npm --prefix client run lint"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1",
+    "cross-env": "^10.1.0"
+  }
+}
+

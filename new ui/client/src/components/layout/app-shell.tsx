@@ -1,0 +1,879 @@
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  BarChart3,
+  Check,
+  ChevronDown,
+  Cloud,
+  Compass,
+  Edit3,
+  ExternalLink,
+  Folder,
+  FolderOpen,
+  GraduationCap,
+  HardDrive,
+  History,
+  Home,
+  Library,
+  Link2,
+  Moon,
+  MoreVertical,
+  Pencil,
+  Play,
+  Plus,
+  RefreshCw,
+  Search,
+  Settings,
+  Sun,
+  Trash2,
+  UploadCloud,
+  UsersRound,
+  X,
+  Youtube,
+} from "lucide-react";
+
+import { Button } from "@/components/ui/button";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import { cn } from "@/lib/utils";
+import { Link, useRouterState } from "@tanstack/react-router";
+import {
+  COURSE_SORT_OPTIONS,
+  deleteCourse,
+  isDirectLinkCourse,
+  openFolderInExplorer,
+  sortCourses,
+  useCoursesList,
+  type Course,
+  type CourseSortOption,
+} from "@/lib/courses";
+import { SettingsModal, type ThemeMode } from "@/components/modals/settings-modal";
+import { WelcomeGuideModal } from "@/components/modals/welcome-guide-modal";
+import {
+  hydrateAppSettingsFromServer,
+  isWelcomeGuideSeen,
+  readAppSettings,
+  writeAppSettings,
+} from "@/lib/app-settings";
+import { SyncPreviewModal } from "@/components/modals/sync-preview-modal";
+import { EditCourseModal } from "@/components/modals/edit-course-modal";
+import { AddCourseModal, type AddCourseSource } from "@/components/modals/add-course-modal";
+import { DotLogo } from "@/components/layout/dot-logo";
+import { CourseThumbnail } from "@/components/layout/course-thumbnail";
+import { InstructorAvatar } from "@/components/layout/instructor-avatar";
+import { Toaster, toast } from "sonner";
+
+type StatusFilter = "All" | "In Progress" | "Completed";
+const STATUS_FILTERS: readonly StatusFilter[] = ["All", "In Progress", "Completed"];
+
+const navItems = [
+  { label: "Home", icon: Home, to: "/" },
+  { label: "Instructors", icon: UsersRound, to: "/instructors" },
+  { label: "History", icon: History, to: "/history" },
+  { label: "Statistics", icon: BarChart3, to: "/analytics" },
+  { label: "Roadmap", icon: Compass, to: "/roadmap" },
+] as const;
+
+type AppNavRoute = (typeof navItems)[number]["to"];
+
+function getActiveNavIndex(pathname: string): number {
+  const idx = navItems.findIndex((item) =>
+    item.to === "/"
+      ? pathname === "/" ||
+        pathname.startsWith("/learn") ||
+        pathname.startsWith("/manage") ||
+        pathname.startsWith("/canvas")
+      : pathname.startsWith(item.to),
+  );
+  return idx >= 0 ? idx : 0;
+}
+
+function DockButton({
+  label,
+  active = false,
+  children,
+  onClick,
+  to,
+}: {
+  label: string;
+  active?: boolean;
+  children: ReactNode;
+  onClick?: () => void;
+  to?: AppNavRoute | undefined;
+}) {
+  const cls = cn(
+    "group/dock relative z-10 size-10 rounded-lg text-muted-foreground shadow-none transition-[color,background-color,transform] duration-150 active:scale-95 [&_svg]:transition-transform [&_svg]:duration-150 group-hover/dock:[&_svg]:scale-105",
+    active
+      ? "text-foreground hover:bg-transparent hover:text-foreground"
+      : "hover:bg-accent/60 hover:text-accent-foreground",
+  );
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        {to ? (
+          <Button asChild variant="ghost" size="icon" className={cls}><Link to={to} aria-label={label} aria-current={active ? "page" : undefined}>{children}</Link></Button>
+        ) : (
+          <Button type="button" variant="ghost" size="icon" aria-label={label} aria-pressed={active} onClick={onClick} className={cls}>{children}</Button>
+        )}
+      </TooltipTrigger>
+      <TooltipContent side="right" sideOffset={10}>{label}</TooltipContent>
+    </Tooltip>
+  );
+}
+
+function IconDock({
+  activeIndex,
+  dark,
+  onThemeToggle,
+  onSettings,
+}: {
+  activeIndex: number;
+  dark: boolean;
+  onThemeToggle: () => void;
+  onSettings: () => void;
+}) {
+  const pathname = useRouterState({ select: (s) => s.location.pathname });
+  const indicatorStyle = {
+    transform: `translate3d(0, calc(${activeIndex} * 3rem), 0)`,
+  };
+
+  return (
+    <aside className="sticky top-0 flex h-dvh w-16 shrink-0 flex-col items-center py-3 sm:py-4 select-none z-30" aria-label="Main navigation">
+      <Link to="/" className="flex size-10 items-center justify-center rounded-lg text-foreground transition-colors hover:text-foreground/70 shrink-0" aria-label="TutIn home"><DotLogo mode={pathname.startsWith("/learn") ? "playing" : "idle"} /></Link>
+      <nav className="relative mt-9 flex flex-col gap-2 shrink-0">
+        <span
+          aria-hidden="true"
+          style={indicatorStyle}
+          className="pointer-events-none absolute left-0 top-0 size-10 rounded-lg bg-accent transition-transform duration-250 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none"
+        />
+        <span
+          aria-hidden="true"
+          style={indicatorStyle}
+          className="pointer-events-none absolute -left-[13px] top-2.5 h-5 w-1 rounded-full bg-foreground/70 transition-transform duration-250 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none"
+        />
+        {navItems.map((item, idx) => {
+          const Icon = item.icon;
+          return (
+            <DockButton key={item.label} label={item.label} to={item.to} active={idx === activeIndex}>
+              <Icon />
+            </DockButton>
+          );
+        })}
+      </nav>
+      <div className="mt-auto flex flex-col items-center gap-2 shrink-0 pt-4">
+        <DockButton label={dark ? "Light theme" : "Dark theme"} onClick={onThemeToggle}>{dark ? <Sun /> : <Moon />}</DockButton>
+        <DockButton label="Settings" onClick={onSettings}><Settings /></DockButton>
+      </div>
+    </aside>
+  );
+}
+
+type CourseSource = "local" | "youtube" | "drive" | "link";
+
+const courseSources = {
+  youtube: { label: "YouTube", icon: Youtube, placeholder: "YouTube video or playlist URL" },
+  drive: { label: "Google Drive", icon: Cloud, placeholder: "Google Drive folder URL" },
+  link: { label: "External link", icon: Link2, placeholder: "Course or video URL" },
+} as const;
+
+function AddCourseControl() {
+  const [source, setSource] = useState<AddCourseSource | null>(null);
+
+  return (
+    <>
+      <div className="flex shrink-0 overflow-hidden rounded-lg shadow-card">
+        <Button size="lg" onClick={() => setSource("local")} className="rounded-none rounded-l-lg border-r border-primary-foreground/20 px-4">
+          <Plus /> Add Course
+        </Button>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button size="lg" aria-label="Course sources" className="rounded-none rounded-r-lg px-3">
+              <ChevronDown />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-48 rounded-lg p-1.5 shadow-workspace">
+            <DropdownMenuItem onSelect={() => setSource("local")} className="gap-2.5 rounded-md">
+              <svg className="size-4 shrink-0 fill-current text-foreground" viewBox="0 0 24 24">
+                <path d="M2 6a2 2 0 0 1 2-2h4.586a1 1 0 0 1 .707.293L11.414 6H20a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6z" />
+              </svg>
+              Course folder
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => setSource("youtube")} className="gap-2.5 rounded-md">
+              <svg className="size-4 shrink-0 fill-current text-foreground" viewBox="0 0 24 24">
+                <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z" fillRule="evenodd" />
+              </svg>
+              YouTube
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => setSource("drive")} className="gap-2.5 rounded-md">
+              <svg className="size-4 shrink-0 fill-current text-foreground" viewBox="0 0 192 192">
+                <mask id="a" width="168" height="154" x="12" y="18" maskUnits="userSpaceOnUse" style={{ maskType: "alpha" }}>
+                  <path fill="#fff" d="M63.09 37c14.626-25.333 51.193-25.334 65.819 0l45.033 78c14.626 25.334-3.657 57.001-32.91 57.001H50.967c-29.253 0-47.536-31.667-32.91-57.001z" />
+                </mask>
+                <g mask="url(#a)">
+                  <path fill="currentColor" opacity="0.9" d="M206.905 172.02h-91.888l-19.015-32.934 45.944-79.578z" />
+                  <path fill="currentColor" opacity="0.65" d="M-14.919 172.006 50.04 59.494v.002L31.032 92.422h38.02L115 172.004l-129.918.001z" />
+                  <path fill="currentColor" d="M96.007-20.085 141.954 59.5l-19.011 32.928H31.048z" />
+                </g>
+              </svg>
+              Google Drive
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => setSource("link")} className="gap-2.5 rounded-md">
+              <svg className="size-4 shrink-0 fill-current text-foreground" viewBox="0 0 24 24">
+                <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z" />
+              </svg>
+              Direct link
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
+
+      <AddCourseModal
+        open={source !== null}
+        initialSource={source ?? "local"}
+        onOpenChange={(isOpen) => {
+          if (!isOpen) setSource(null);
+        }}
+      />
+    </>
+  );
+}
+
+function CourseMenu({
+  course,
+  open,
+  onOpenChange,
+  onRescan,
+  onEdit,
+}: {
+  course: Course;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onRescan?: ((course: Course) => void) | undefined;
+  onEdit?: ((course: Course) => void) | undefined;
+}) {
+  const isDirectLink = isDirectLinkCourse(course);
+  const isLocal = course.sourceType === "local";
+  const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+
+  const handleRescan = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (onRescan) {
+      onRescan(course);
+    } else {
+      window.dispatchEvent(new CustomEvent("tutin:rescan_course", { detail: { course } }));
+    }
+  };
+
+  const handleEdit = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (onEdit) {
+      onEdit(course);
+    } else {
+      window.dispatchEvent(new CustomEvent("tutin:edit_course", { detail: { course } }));
+    }
+  };
+
+  const handleShowInExplorer = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!course.folderPath) {
+      toast.error("Course folder path is unavailable");
+      return;
+    }
+    const ok = await openFolderInExplorer(course.folderPath);
+    if (!ok) {
+      toast.error("Folder not found on disk");
+    }
+  };
+
+  const handleDeleteClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setConfirmDeleteOpen(true);
+  };
+
+  const handleConfirmDelete = async () => {
+    setIsDeleting(true);
+    try {
+      await deleteCourse(course.id);
+      toast.success("Course deleted");
+      setConfirmDeleteOpen(false);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to delete course");
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
+  return (
+    <>
+      <DropdownMenu open={open} onOpenChange={onOpenChange} modal={false}>
+        <DropdownMenuTrigger asChild>
+          <button
+            type="button"
+            aria-label="Course actions"
+            onClick={(e) => e.stopPropagation()}
+            className="inline-flex size-8 cursor-pointer items-center justify-center rounded-lg bg-card/85 text-foreground backdrop-blur-md opacity-0 transition-[opacity,background-color,transform] duration-200 hover:bg-card active:scale-95 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring group-hover:opacity-100 group-data-[menu-open=true]:opacity-100 data-[state=open]:bg-card data-[state=open]:opacity-100 [@media(hover:none)]:opacity-100 dark:bg-white/15 dark:text-white dark:hover:bg-white/25 dark:data-[state=open]:bg-white/25 [&_svg]:size-4"
+          >
+            <MoreVertical />
+          </button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent
+          align="end"
+          sideOffset={6}
+          onClick={(e) => e.stopPropagation()}
+          className="w-48 rounded-lg p-1.5 shadow-workspace"
+        >
+          {isDirectLink ? (
+            <>
+              {course.courseUrl && (
+                <DropdownMenuItem asChild className="rounded-md">
+                  <a href={course.courseUrl} target="_blank" rel="noopener noreferrer">
+                    <ExternalLink className="size-4" /> Open link
+                  </a>
+                </DropdownMenuItem>
+              )}
+              <DropdownMenuItem className="rounded-md cursor-pointer" onClick={handleEdit}>
+                <Pencil className="size-4" /> Edit details
+              </DropdownMenuItem>
+              <DropdownMenuItem className="rounded-md text-destructive focus:text-destructive cursor-pointer" onClick={handleDeleteClick}>
+                <Trash2 className="size-4" /> Delete
+              </DropdownMenuItem>
+            </>
+          ) : (
+            <>
+              <DropdownMenuItem asChild className="rounded-md">
+                <Link to="/manage/$courseId" params={{ courseId: String(course.id) }}>
+                  <Edit3 className="size-4" /> Curriculum
+                </Link>
+              </DropdownMenuItem>
+              <DropdownMenuItem className="rounded-md cursor-pointer" onClick={handleEdit}>
+                <Pencil className="size-4" /> Edit details
+              </DropdownMenuItem>
+              {isLocal && (
+                <DropdownMenuItem className="rounded-md cursor-pointer" onClick={handleRescan}>
+                  <RefreshCw className="size-4" /> Rescan folder
+                </DropdownMenuItem>
+              )}
+              {course.folderPath && (
+                <DropdownMenuItem className="rounded-md cursor-pointer" onClick={handleShowInExplorer}>
+                  <FolderOpen className="size-4" /> Show in Explorer
+                </DropdownMenuItem>
+              )}
+              <DropdownMenuItem className="rounded-md text-destructive focus:text-destructive cursor-pointer" onClick={handleDeleteClick}>
+                <Trash2 className="size-4" /> Delete
+              </DropdownMenuItem>
+            </>
+          )}
+        </DropdownMenuContent>
+      </DropdownMenu>
+
+      <AlertDialog open={confirmDeleteOpen} onOpenChange={setConfirmDeleteOpen}>
+        <AlertDialogContent onClick={(e) => e.stopPropagation()}>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete &ldquo;{course.title}&rdquo;?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Course and local study data will be removed.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isDeleting}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => {
+                e.preventDefault();
+                void handleConfirmDelete();
+              }}
+              disabled={isDeleting}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              {isDeleting ? "Deleting..." : "Delete"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
+  );
+}
+
+export function CourseCard({
+  course,
+  onRescan,
+  onEdit,
+}: {
+  course: Course;
+  onRescan?: ((course: Course) => void) | undefined;
+  onEdit?: ((course: Course) => void) | undefined;
+}) {
+  const completed =
+    course.completedVideos ?? Math.round((course.lessons * course.progress) / 100);
+  const isComplete = course.completionPercentage >= 100;
+  const isDirectLink = isDirectLinkCourse(course);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [menuGrace, setMenuGrace] = useState(false);
+  const menuTimerRef = useRef<number | null>(null);
+
+  const handleMenuOpenChange = (nextOpen: boolean) => {
+    if (menuTimerRef.current !== null) {
+      window.clearTimeout(menuTimerRef.current);
+      menuTimerRef.current = null;
+    }
+    setMenuOpen(nextOpen);
+    if (nextOpen) {
+      setMenuGrace(true);
+    } else {
+      // Keep hovered state through menu exit animation so Escape does not drop & re-hover
+      menuTimerRef.current = window.setTimeout(() => {
+        setMenuGrace(false);
+        menuTimerRef.current = null;
+      }, 170);
+    }
+  };
+
+  useEffect(() => {
+    return () => {
+      if (menuTimerRef.current !== null) {
+        window.clearTimeout(menuTimerRef.current);
+      }
+    };
+  }, []);
+
+  return (
+     <article
+       data-menu-open={menuGrace ? "true" : undefined}
+       className="group relative flex h-full min-w-0 flex-col overflow-hidden rounded-xl bg-card shadow-card transition-transform duration-300 hover:-translate-y-1 data-[menu-open=true]:-translate-y-1"
+     >
+       {isDirectLink ? (
+         <a
+           href={course.courseUrl}
+           target="_blank"
+           rel="noopener noreferrer"
+           className="absolute inset-0 z-10 rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+           aria-label={`Open ${course.title} in new tab`}
+           title={course.title}
+         />
+       ) : (
+         <Link
+           className="absolute inset-0 z-10 rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+           to="/learn/$courseId"
+           params={{ courseId: String(course.id) }}
+           aria-label={`Open ${course.title}`}
+           title={course.title}
+         />
+       )}
+      <div className="relative aspect-video overflow-hidden">
+        {/* Thumbnail with smooth 700ms hover zoom */}
+        <div className="size-full transition-transform duration-700 ease-out group-hover:scale-105 group-data-[menu-open=true]:scale-105">
+          <CourseThumbnail course={course} />
+        </div>
+
+        {/* Soft Dimming Overlay on Hover */}
+        <div className="pointer-events-none absolute inset-0 bg-black/30 opacity-0 transition-opacity duration-300 group-hover:opacity-100 group-data-[menu-open=true]:opacity-100" />
+
+        {/* Play/Open Floating Overlay (Clean glassmorphic button with zero hard shadows) */}
+        <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+          <div className="size-14 rounded-full flex items-center justify-center bg-card/85 dark:bg-white/10 opacity-0 scale-90 backdrop-blur-md transition-all duration-200 ease-out group-hover:scale-100 group-hover:opacity-100 group-data-[menu-open=true]:scale-100 group-data-[menu-open=true]:opacity-100">
+            {isDirectLink ? (
+              <Link2 className="size-6 text-foreground dark:text-white" />
+            ) : (
+              <svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="size-6 translate-x-[0.5px] text-foreground dark:text-white" aria-hidden="true">
+                <polygon points="6 3 20 12 6 21 6 3" />
+              </svg>
+            )}
+          </div>
+        </div>
+
+        <div className="absolute right-3 top-3 z-20">
+          <CourseMenu
+            course={course}
+            open={menuOpen}
+            onOpenChange={handleMenuOpenChange}
+            onRescan={onRescan}
+            onEdit={onEdit}
+          />
+        </div>
+
+        <span className="duration-badge-text pointer-events-none absolute bottom-3 right-3 z-20 inline-flex h-5 items-center justify-center rounded-sm bg-black/70 px-1.5 font-mono text-[10px] font-medium tabular-nums text-white backdrop-blur-md">
+          {course.duration}
+        </span>
+      </div>
+      <div className="flex flex-1 flex-col p-5">
+        <h2
+          className="truncate text-lg font-semibold leading-7 text-foreground transition-colors duration-200 group-hover:text-foreground/80 group-data-[menu-open=true]:text-foreground/80 dark:group-hover:text-white dark:group-data-[menu-open=true]:text-white"
+          title={course.title}
+        >
+          {course.title}
+        </h2>
+        {course.instructor.trim() ? (
+          <div className="mt-3 flex items-center gap-2.5">
+            <InstructorAvatar name={course.instructor} course={course} size="sm" />
+            <span className="truncate text-sm text-muted-foreground">{course.instructor}</span>
+          </div>
+        ) : null}
+        <div className="mt-auto pt-5">
+          <div className="h-1.5 overflow-hidden rounded-sm bg-secondary">
+            <div
+              className={cn("h-full transition-colors", isComplete ? "bg-chart-4" : "bg-foreground/55")}
+              style={{ width: `${course.progress}%` }}
+            />
+          </div>
+          <div className="mt-2.5 flex items-center justify-between text-xs">
+            <span className="text-muted-foreground">{completed} / {course.lessons} lessons</span>
+            <span
+              className={cn(
+                "font-semibold",
+                isComplete ? "text-chart-4" : "text-foreground/75",
+              )}
+            >
+              {course.progress}%
+            </span>
+          </div>
+        </div>
+      </div>
+    </article>
+  );
+}
+
+function EmptyState({ clear }: { clear: () => void }) {
+  return (
+     <div className="col-span-full flex min-h-96 flex-col items-center justify-center rounded-xl bg-secondary/40 px-6 py-14 text-center">
+      <Library className="size-10 text-muted-foreground" strokeWidth={1.5} />
+      <h2 className="mt-5 text-lg font-semibold">No courses found</h2>
+      <p className="mt-2 max-w-sm text-sm leading-6 text-muted-foreground">No courses match this view.</p>
+       <Button variant="secondary" className="mt-6 rounded-md" onClick={clear}>Clear filters</Button>
+    </div>
+  );
+}
+
+export function AppShell({
+  children,
+}: {
+  children: ReactNode;
+}) {
+  const pathname = useRouterState({ select: (s) => s.location.pathname });
+  const activeNavIndex = getActiveNavIndex(pathname);
+  const fixedViewport =
+    pathname === "/roadmap" ||
+    pathname.startsWith("/roadmap/") ||
+    pathname.startsWith("/canvas/");
+  const mainRef = useRef<HTMLElement>(null);
+  const [navMotion, setNavMotion] = useState({
+    pathname,
+    navIndex: activeNavIndex,
+    transitionClass: "",
+  });
+
+  if (navMotion.pathname !== pathname) {
+    const transitionClass = fixedViewport
+      ? "animate-page-fade"
+      : activeNavIndex > navMotion.navIndex
+        ? "animate-page-enter-down"
+        : activeNavIndex < navMotion.navIndex
+          ? "animate-page-enter-up"
+          : "animate-page-fade";
+    setNavMotion({ pathname, navIndex: activeNavIndex, transitionClass });
+  }
+
+  useEffect(() => {
+    mainRef.current?.scrollTo({ top: 0 });
+  }, [pathname]);
+
+  const [dark, setDark] = useState(false);
+  const [mode, setMode] = useState<ThemeMode>("system");
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [welcomeOpen, setWelcomeOpen] = useState(false);
+  const [rescanCourse, setRescanCourse] = useState<Course | null>(null);
+  const [editingCourse, setEditingCourse] = useState<Course | null>(null);
+
+  useEffect(() => {
+    const syncThemeDom = (themeMode: ThemeMode) => {
+      const isDark =
+        themeMode === "system"
+          ? window.matchMedia("(prefers-color-scheme: dark)").matches
+          : themeMode === "dark";
+      setMode(themeMode);
+      setDark(isDark);
+      document.documentElement.classList.toggle("dark", isDark);
+    };
+
+    const stored = window.localStorage.getItem("tutin-theme");
+    const initialMode: ThemeMode =
+      stored === "dark" || stored === "light" ? stored : readAppSettings().theme;
+    syncThemeDom(initialMode);
+
+    if (!isWelcomeGuideSeen()) {
+      setWelcomeOpen(true);
+    }
+
+    void hydrateAppSettingsFromServer().then((hydrated) => {
+      syncThemeDom(hydrated.theme);
+      setWelcomeOpen(!isWelcomeGuideSeen());
+    });
+  }, []);
+
+  useEffect(() => {
+    const onRescanEvent = (e: Event) => {
+      const custom = e as CustomEvent<{ course: Course }>;
+      if (custom.detail?.course) {
+        setRescanCourse(custom.detail.course);
+      }
+    };
+    const onEditEvent = (e: Event) => {
+      const custom = e as CustomEvent<{ course: Course }>;
+      if (custom.detail?.course) {
+        setEditingCourse(custom.detail.course);
+      }
+    };
+    window.addEventListener("tutin:rescan_course", onRescanEvent);
+    window.addEventListener("tutin:edit_course", onEditEvent);
+    return () => {
+      window.removeEventListener("tutin:rescan_course", onRescanEvent);
+      window.removeEventListener("tutin:edit_course", onEditEvent);
+    };
+  }, []);
+
+  const applyMode = (next: ThemeMode) => {
+    const isDark =
+      next === "system"
+        ? window.matchMedia("(prefers-color-scheme: dark)").matches
+        : next === "dark";
+    setMode(next);
+    setDark(isDark);
+    document.documentElement.classList.toggle("dark", isDark);
+    if (next === "system") window.localStorage.removeItem("tutin-theme");
+    else window.localStorage.setItem("tutin-theme", next);
+    writeAppSettings({ ...readAppSettings(), theme: next });
+  };
+  const toggleTheme = () => applyMode(dark ? "light" : "dark");
+
+  return (
+    <TooltipProvider delayDuration={250}>
+      <div className="flex h-dvh overflow-hidden bg-shell text-foreground">
+        <IconDock activeIndex={activeNavIndex} dark={dark} onThemeToggle={toggleTheme} onSettings={() => setSettingsOpen(true)} />
+        <SettingsModal
+          open={settingsOpen}
+          onOpenChange={setSettingsOpen}
+          theme={mode}
+          onThemeChange={applyMode}
+          onOpenWelcomeGuide={() => setWelcomeOpen(true)}
+        />
+        <WelcomeGuideModal open={welcomeOpen} onOpenChange={setWelcomeOpen} />
+        <SyncPreviewModal
+          open={Boolean(rescanCourse)}
+          onOpenChange={(isOpen) => !isOpen && setRescanCourse(null)}
+          course={rescanCourse}
+        />
+        <EditCourseModal
+          open={Boolean(editingCourse)}
+          onOpenChange={(isOpen) => !isOpen && setEditingCourse(null)}
+          course={editingCourse}
+        />
+        <main
+          ref={mainRef}
+          className={cn(
+            "h-dvh min-w-0 flex-1 border-l border-border/50 bg-background",
+            fixedViewport
+              ? "overflow-hidden"
+              : "overflow-y-auto overflow-x-hidden custom-scrollbar",
+          )}
+        >
+          <div key={pathname} className={cn(fixedViewport ? "h-full" : "min-h-full", navMotion.transitionClass)}>
+            {children}
+          </div>
+        </main>
+        <Toaster />
+      </div>
+    </TooltipProvider>
+  );
+}
+
+export function CourseSortDropdown({
+  sort,
+  onSortChange,
+}: {
+  sort: CourseSortOption;
+  onSortChange: (next: CourseSortOption) => void;
+}) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="ghost" size="sm" className="rounded-md text-muted-foreground hover:text-foreground">
+          {sort} <ChevronDown className="ml-1 size-4" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="rounded-lg p-1.5 shadow-workspace">
+        {COURSE_SORT_OPTIONS.map((item) => (
+          <DropdownMenuItem key={item} onClick={() => onSortChange(item)} className="rounded-md">
+            {item}
+            {sort === item && <Check className="ml-auto" />}
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+export function HomePage() {
+  const [filter, setFilter] = useState<string>("All");
+  const [sort, setSort] = useState<CourseSortOption>("Recent");
+  const [query, setQuery] = useState("");
+  const searchRef = useRef<HTMLInputElement>(null);
+  const { courses: allCourses, isLoading, error } = useCoursesList();
+
+  useEffect(() => {
+    const onShortcut = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        searchRef.current?.focus();
+      }
+    };
+    window.addEventListener("keydown", onShortcut);
+    return () => window.removeEventListener("keydown", onShortcut);
+  }, []);
+
+  const allTags = useMemo(() => {
+    const tagSet = new Set<string>();
+    for (const course of allCourses) {
+      for (const tag of course.tags ?? []) {
+        const trimmed = tag.trim();
+        if (trimmed) tagSet.add(trimmed);
+      }
+    }
+    return Array.from(tagSet).sort((a, b) => a.localeCompare(b));
+  }, [allCourses]);
+
+  const visibleCourses = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    const filtered = allCourses.filter((course) => {
+      const isCompleted = course.completionPercentage >= 100;
+      const isInProgress =
+        !isCompleted && (course.completionPercentage > 0 || course.completedVideos > 0);
+      const matchesFilter =
+        filter === "All"
+          ? true
+          : filter === "Completed"
+            ? isCompleted
+            : filter === "In Progress"
+              ? isInProgress
+              : Boolean(course.tags?.some((t) => t.trim() === filter));
+      const matchesQuery =
+        !q ||
+        `${course.title} ${course.instructor} ${(course.tags ?? []).join(" ")}`
+          .toLowerCase()
+          .includes(q);
+      return matchesFilter && matchesQuery;
+    });
+    return sortCourses(filtered, sort);
+  }, [allCourses, filter, query, sort]);
+
+  return (
+    <div className="mx-auto max-w-[1440px] px-5 pb-12 pt-6 sm:px-8 sm:pt-8 lg:px-10">
+      <header className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-end">
+        <div className="flex items-center gap-3">
+          <label className="flex h-11 min-w-0 flex-1 items-center gap-2 rounded-lg bg-secondary/75 px-3 transition-colors focus-within:bg-card focus-within:ring-2 focus-within:ring-ring/30 sm:w-64 lg:w-80">
+            <Search className="size-4 shrink-0 text-muted-foreground" />
+            <input
+              ref={searchRef}
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+              placeholder="Search courses"
+            />
+            {query && (
+              <button
+                type="button"
+                onClick={() => setQuery("")}
+                aria-label="Clear search"
+                className="rounded p-1 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+              >
+                <X className="size-3.5" />
+              </button>
+            )}
+          </label>
+          <AddCourseControl />
+        </div>
+      </header>
+
+      <div className="mt-5 flex flex-col gap-3 border-b border-border/50 pb-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="min-w-0 flex-1 overflow-x-auto custom-scrollbar-sm">
+          <div className="inline-flex h-11 items-center gap-1 rounded-lg bg-secondary/75 p-1">
+            {STATUS_FILTERS.map((item) => (
+              <Button
+                key={item}
+                type="button"
+                size="sm"
+                variant="ghost"
+                onClick={() => setFilter(item)}
+                className={cn(
+                  "h-9 shrink-0 rounded-sm px-3.5 text-xs font-normal text-muted-foreground shadow-none sm:px-4 sm:text-sm",
+                  filter === item && "bg-card font-medium text-foreground shadow-card hover:bg-card",
+                )}
+              >
+                {item}
+              </Button>
+            ))}
+            {allTags.length > 0 && (
+              <span className="mx-1 h-4 w-px shrink-0 bg-border/60" aria-hidden="true" />
+            )}
+            {allTags.map((tag) => (
+              <Button
+                key={tag}
+                type="button"
+                size="sm"
+                variant="ghost"
+                onClick={() => setFilter(filter === tag ? "All" : tag)}
+                className={cn(
+                  "h-9 shrink-0 rounded-sm px-3.5 text-xs font-normal text-muted-foreground shadow-none sm:px-4 sm:text-sm",
+                  filter === tag && "bg-card font-medium text-foreground shadow-card hover:bg-card",
+                )}
+              >
+                {tag}
+              </Button>
+            ))}
+          </div>
+        </div>
+
+        <div className="flex shrink-0 items-center justify-end">
+          <CourseSortDropdown sort={sort} onSortChange={setSort} />
+        </div>
+      </div>
+
+      {error ? (
+        <div className="mt-8 rounded-xl bg-destructive/10 p-6 text-sm text-destructive">
+          Failed to connect to TutIn server: {error}
+        </div>
+      ) : isLoading && allCourses.length === 0 ? (
+        <div className="mt-16 flex items-center justify-center text-sm text-muted-foreground">
+          Loading courses…
+        </div>
+      ) : (
+        <section className="mt-8 grid gap-5 md:grid-cols-2 xl:grid-cols-4" aria-label="Course library">
+          {visibleCourses.length ? (
+            visibleCourses.map((course) => (
+              <CourseCard key={course.id} course={course} />
+            ))
+          ) : (
+            <EmptyState clear={() => { setQuery(""); setFilter("All"); }} />
+          )}
+        </section>
+      )}
+    </div>
+  );
+}

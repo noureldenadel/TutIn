@@ -2,6 +2,182 @@
 
 ## [Unreleased]
 
+### Changed & Fixed
+- **Course Card Top-Right Frosted 3-Dots Menu (`new ui/client/src/components/layout/app-shell.tsx`):**
+  - Returned `CourseCard`'s `CourseMenu` trigger (`MoreVertical`) to the top-right thumbnail corner (`top-3 right-3`) styled as translucent frosted glass (`bg-card/85 dark:bg-white/15 backdrop-blur-md`, visible on hover/focus/open) so thumbnails avoid dark black corner blocks and card titles use full width.
+  - Configured `<DropdownMenu modal={false}>` with `data-menu-open` continuity so clicking the menu never drops `:hover` via `body` pointer-lock and `Escape` never re-triggers card hover transitions.
+
+### Fixed
+- **Persistent Root `AppShell` & Continuous Nav Rail Transitions (`new ui/client/src/routes/__root.tsx`, `new ui/client/src/routes/*.tsx`, `new ui/client/src/components/layout/app-shell.tsx`):**
+  - Lifted `<AppShell>` into `routes/__root.tsx` around `<Outlet />` and exported `HomePage` for `routes/index.tsx`, keeping `IconDock` persistently mounted across route transitions and removing the `lastSettledNavIndex` + `requestAnimationFrame` remount workaround that caused nav slide animations to stop after the first cached route transition per reload.
+
+### Fixed
+- **Persistent Root `AppShell` & Continuous Nav Rail Transitions (`new ui/client/src/routes/__root.tsx`, `new ui/client/src/routes/*.tsx`, `new ui/client/src/components/layout/app-shell.tsx`):**
+  - Lifted `<AppShell>` into `routes/__root.tsx` around `<Outlet />` and exported `HomePage` for `routes/index.tsx`, keeping `IconDock` persistently mounted across route transitions and removing the `lastSettledNavIndex` + `requestAnimationFrame` remount workaround that caused nav slide animations to stop after the first cached route transition per reload.
+
+### Changed
+- **Flat Thumbnails, Optional Instructors & Renamed Course Sort Options (`new ui/client/src/`):**
+  - Removed bottom dark gradient scrims from `CourseThumbnail` and `CourseCard`, leaving covers completely clean at rest with only hover `bg-black/30` dimming.
+  - Preserved blank `instructor: ""` in `mapApiCourse`, local folder import, and `AddCourseModal` instead of injecting `"Instructor"` / `"External"` / `"Self-paced"`, and omitted the instructor avatar/name row in `CourseCard`, `CoursePlayer`, `CurriculumManager`, and `RoadmapPage` when a course has no instructor (aligning card progress bars with `flex h-full flex-col` + `mt-auto pt-5`).
+  - Renamed course sorting choices (`COURSE_SORT_OPTIONS`) to `["Recent", "Progress", "A–Z"]`.
+
+### Changed & Fixed
+- **Animated Left Nav Transitions, `HH:MM:SS` Duration Tags & Course Card Menu (`new ui/client/src/`):**
+  - Animated `IconDock` route switching (`app-shell.tsx`, `styles.css`) using a shared `translate3d` sliding active pill + side bar across route mounts paired with directional `<main>` page transitions and reduced-motion support.
+  - Added `formatDurationClock` (`format.ts`, `courses.ts`) so course duration tags display `02:33:00` (`HH:MM:SS`) instead of `2h 33m`, and centered thumbnail time tags vertically (`inline-flex h-5 items-center justify-center` + `.duration-badge-text`) in `CourseCard`, `RoadmapPage`, and `HistoryPage`.
+  - Moved `CourseCard`'s 3-dot `CourseMenu` (`MoreVertical`) into the title row off the thumbnail and held `data-menu-open` across menu open/close animations to prevent hover drop and `Escape` re-hover flicker.
+
+### Changed
+- **Canvas Reset Arrangement Button (`new ui/client/src/lib/course-canvas.ts`, `new ui/client/src/components/canvas/canvas-hud.tsx`, `new ui/client/src/components/canvas/course-canvas-page.tsx`):**
+  - Repurposed the HUD `<RotateCcw />` button from duplicate `Reset view` (retained on clicking the `{zoom}%` readout) to `Reset arrangement` (`resetCanvasArrangement`), returning all on-canvas course video cards back to their origin Video Artboards sorted chronologically by timestamp and realigning Artboards (`tidyAllCanvasArtboards`, Undo-supported) while height-aware `advancePastOverlappingCards` keeps ungrouped canvas cards uncovered.
+
+### Fixed
+- **Chronological Canvas Artboards, Return/Restore Timestamp Reflow & Course-Scoped Group IDs (`new ui/client/src/lib/course-canvas.ts`, `new ui/client/src/components/canvas/course-canvas-page.tsx`, `new ui/server/routes/canvas.js`):**
+  - Scoped Video Artboard IDs by course (`vgroup-${courseId}-${lessonIdx}`) and migrated legacy unscoped `vgroup-<n>` IDs in `reconcileCanvasWithNotes` and `writeCanvasPayloadToDb` (`routes/canvas.js`) to eliminate SQLite `canvas_groups.id` primary-key collisions across courses.
+  - Updated `createVideoArtboardGroup`, `tidyAllCanvasArtboards`, `returnCardToOriginGroup`, and `restoreNoteCardToCanvas` so earlier-lesson Artboards insert chronologically left-to-right, returned/restored cards reflow `'auto'` Artboards by timestamp instead of appending out of order, ungrouped cards are never overlapped, and untouched legacy v1 `cnode_*` columns auto-seat into sorted Artboards.
+  - Repaired persisted SQLite + `.tutin/canvas.json` state for *MographPlus* (`11` Artboards `M1L2`–`M2L8`, all `30` cards seated) and *Domestika - Design Your Own Creative Process* (`1` preserved custom Artboard + `3` preserved user cards + `29` seated v1 cards across `5` Artboards `M1L3`–`M1L7`; pre-repair backup saved at `tutin.db.pre_canvas_order_bak`).
+
+### Fixed & Changed
+- **Canvas Pan Crash Fix & Minimal Notes Empty State (`new ui/client/src/components/canvas/course-canvas-page.tsx`, `new ui/client/src/components/player/course-player.tsx`):**
+  - Fixed `TypeError: Cannot read properties of null (reading 'origPanX')` in `CourseCanvasPage.handleStagePointerMove` by reading `panGestureRef.current` and calculating `nextPanX`/`nextPanY` outside the asynchronous `setCanvasState` updater so clearing `panGestureRef.current` on `pointerup` cannot trigger a crash.
+  - Removed the redundant `Add note` button from the `"No notes yet."` empty state in `CoursePlayer`'s `NotesTab`.
+
+### Fixed & Changed
+- **Canvas Image Serving (`dotfiles: allow`), `Â·` Mojibake, Artboard Auto-Containment & `M{m}L{l}` Module Labels (`new ui/server/routes/notes.js`, `new ui/client/src/lib/course-canvas.ts`, `new ui/client/src/components/canvas/`):**
+  - Fixed `GET /api/notes/media/:courseId/:filename` rejecting `.tutin` vault paths by passing `{ dotfiles: 'allow' }` to `res.sendFile`, and fixed double-encoded UTF-8 strings (`Â·`, `â€¦`) in `canvas-card.tsx`.
+  - Fixed Artboards failing to fit contained/edited/resized/image-loaded cards via shared `fitArtboardsToChildren`, `applyCardHeightUpdate`, and card `ResizeObserver`, enabled 1-click `Return` to auto-create missing lesson Artboards (`createVideoArtboardGroup`), and updated `findNextColumnX` so new Artboards don't spawn underneath detached cards.
+  - Replaced flat `L{n}` labels with module-scoped `M{m}L{l}` identifiers (`formatCanvasLessonCode`, `formatCanvasArtboardTitle`) across Canvas cards, Artboard headers, Notes Drawer, and image lightbox labels with module-name hover tooltips.
+
+### Fixed
+- **Legacy Note Compatibility, Height Estimation & Canvas v2 Vault Repair (`new ui/server/`, `new ui/client/src/lib/`):**
+  - Normalized `snake_case`/`camelCase` fields in `/api/notes` (`notes.js`) and `mapApiNoteRow` (`course-notes.ts`) with `appendMissingImagesToHtml` fallback so legacy notes always resolve to their true lesson index (`videoId` / `lessonIdx`) instead of `L1`.
+  - Fixed legacy video-linked card membership healing (`'auto'` / `'reassigned'` / `'detached'` in `canvas.js` & `course-canvas.ts`), upgraded `estimateVideoNoteCardHeight` for multi-image and block-rich notes (`172px/image`, `[128, 2200]` px), and triggered Artboard reflow on height growth.
+  - Migrated `tutin.db` (`48.46 MB` → `10.66 MB`, backup at `tutin.db.pre_note_upgrade_bak`) and all `10` active course `.tutin/` vaults by extracting `201` screenshots (`12.74 MB`) into `.tutin/notes/screenshots/` (`/api/notes/media/...`), updating `Cinema 4D Basecamp`'s renamed `folder_path`, and repairing `MographPlus` and `Domestika` Canvas v2 records and `.tutin/canvas.json` files.
+
+### Fixed
+- **Home Library `In Progress` & `Completed` Status Filters (`new ui/client/src/components/layout/app-shell.tsx`, `new ui/client/src/lib/courses.ts`):**
+  - Excluded `0%` unstarted courses from the `In Progress` tab by requiring `course.completionPercentage > 0 || course.completedVideos > 0` while remaining `< 100%`.
+  - Aligned `Completed` filtering, `CourseCard.isComplete`, and `mapApiCourse.progress` strictly with `course.completionPercentage >= 100` so float-capped incomplete courses (e.g., `99.9%`) do not falsely show as `100%` completed.
+
+### Changed
+- **Unified Desaturated Emerald (`chart-4`) & Player `Manage` Placement (`new ui/client/`):**
+  - Replaced all saturated Tailwind `emerald-*` classes across `AnalyticsDashboard`, `AppShell`, `CoursePlayer`, `AddCourseModal`, `SettingsModal`, and `SyncPreviewModal` with `chart-4` (`text-chart-4`, `bg-chart-4/*`) so the entire app matches the desaturated emerald checkmark color.
+  - Replaced `PlaylistTab`'s `Manage lessons` toggle (`Mark done` / `Reset`) in `course-player.tsx` with the `/manage/$courseId` `Manage` curriculum link (removing the duplicate course-header `Manage` button).
+
+### Removed
+- **Roadmap Toolbar `+ New` Button (`new ui/client/src/components/pages/roadmap-page.tsx`):**
+  - Removed the redundant `+ New` button from the top-right Roadmap header; roadmaps are created via `+ New roadmap` inside the title chevron dropdown menu.
+
+### Changed
+- **Sorter Labels, Statistics Rename & Roadmap Wheel Zoom (`new ui/client/`):**
+  - Removed the `"Sort: "` prefix from `CourseSortDropdown` (`app-shell.tsx`) and player note sort tooltips (`course-player.tsx`), leaving only the active sort mode label.
+  - Renamed visible `Analytics` UI copy (`IconDock` nav item, page `<h1>`, and Welcome Guide copy) to `Statistics` while keeping `/analytics` route URLs intact, and changed `Learning focus` sub-label `"From course tags"` to `"Based on tags"`.
+  - Enabled direct mouse-wheel zoom (`0.35x`–`2.0x`, cursor-centered) when scrolling anywhere over the `RoadmapPage` canvas without requiring `Ctrl`/`Cmd`.
+
+### Fixed
+- **Statistics `Learning focus` Ellipsis & Card Overflow (`new ui/client/src/components/pages/analytics-dashboard.tsx`):**
+  - Added `min-w-0` on `Card` and `min-w-0 w-full sm:w-auto sm:flex-1` on the legend `<ul>` (with `shrink-0` on `%`) so long tag labels and sub-text truncate cleanly with `...`.
+
+### Changed
+- **Instructor Detail Sorter & Shared Course Sorting (`new ui/client/src/lib/courses.ts`, `app-shell.tsx`, `instructors-page.tsx`):**
+  - Extracted shared `COURSE_SORT_OPTIONS` / `sortCourses` and `CourseSortDropdown` across Home and Instructor Detail pages, replacing the redundant `N courses` label in the Instructor Detail `Courses` header row with the `Sort:` dropdown.
+- **Home Page Filter/Tags Sub-Row & Classic TutIn Favicon (`new ui/client/src/components/layout/app-shell.tsx`, `new ui/client/public/tutin-icon.svg`, `new ui/client/index.html`):**
+  - Moved the status filter bar (`All`, `In Progress`, `Completed`) below onto the sorting row (`Sort:`) and rendered sorted unique SQLite course tags right after the status filters inside the scrollable segmented track; kept the `Search courses` input and `AddCourseControl` paired in the top-right header.
+  - Replaced `/favicon.ico` with the classic TutIn squircle `"T"` favicon (`public/tutin-icon.svg`) while keeping `DotLogo` in `IconDock`.
+
+### Removed
+- **Instructor Avatar Floating `X` Overlay (`new ui/client/src/components/pages/instructors-page.tsx`, `instructor-avatar.tsx`):**
+  - Removed the corner `X` remove button overlapping the Instructor Detail avatar and its unused removal helper code, keeping clean hover `Camera` photo replacement.
+- **Thumbnail Link Overlay, Search `Ctrl+K` Badge & Legacy Favicon (`new ui/client/`):**
+  - Removed the bottom-left `"Link"` badge over `CourseCard` thumbnails, removed the `<kbd>Ctrl+K</kbd>` hint badge from the Home search input, and replaced `public/favicon.ico` with `public/tutin-icon.svg`.
+- **Admin Page & Artwork Customization Controls (`new ui/client/`):**
+  - Removed `new ui/client/src/routes/admin.tsx`, `admin-dashboard.tsx`, the `Admin` sidebar navigation item in `app-shell.tsx`, and runtime thumbnail/avatar customization hooks (`useThumbnailSettings`, `localStorage` overrides, `thumbnailGeneratorSettings` server sync in `app-settings.ts`, `SETTINGS_DEFS`, `PATTERN_NAMES`, preview-only component props, and unused contrast branches).
+  - Preserved the exact `2f65126` saved artwork & avatar configuration as `DEFAULT_GENERATOR_SETTINGS` inside `thumbnail-generator.ts` (`hue: 150`, `drift: 25`, `density: 36`, `variance: 50`, `contrast: 60`, `spark: 20`, `bands: 3`, `pattern: "auto"`, `lockHue: false`, `avatarContrastMode: "manual"`, `avatarFontWeight: "500"`, `avatarFontFamily: "sans"`, `avatarFontSize: 8`, `avatarBgTone: 3`, `avatarFgTone: 1`) so course cards and instructor avatars keep their tuned appearance with zero runtime customization overhead.
+
+### Changed
+- **Restored `2f65126` Admin Saved Defaults & Tone 1–5 Avatar Swatches (`new ui/client/`):**
+  - Restored `DEFAULT_GENERATOR_SETTINGS` (`hue: 150`, `drift: 25`, `density: 36`, `variance: 50`, `contrast: 60`, `spark: 20`, `bands: 3`, `pattern: "auto"`, `lockHue: false`, `avatarContrastMode: "manual"`, `avatarFontWeight: "500"`, `avatarFontFamily: "sans"`, `avatarFontSize: 8`, `avatarBgTone: 3`, `avatarFgTone: 1`), the 5-tone artwork/avatar engine (`thumbnail-generator.ts`, `course-thumbnail.tsx`, `instructor-avatar.tsx`), and interactive Manual `Tone 1`–`Tone 5` swatches in `admin-dashboard.tsx` while preserving SQLite `/api/settings` persistence and live SQLite course previews without sample covers.
+  - Updated `sanitizeThumbnailSettings` and `hydrateAppSettingsFromServer` (`app-settings.ts`) to automatically reset incompatible `avatarSaturation`-without-`avatarBgTone` payloads back to the restored defaults.
+
+### Fixed
+- **Vite Dev Server `127.0.0.1:5173` Reachability (`new ui/client/vite.config.ts`):**
+  - Configured `server.host: "127.0.0.1"` alongside `port: 5173` so Vite binds IPv4 loopback cleanly instead of binding IPv6 `[::1]:5173` alone on Windows/Node, making both `http://127.0.0.1:5173/` and `http://localhost:5173/` accessible.
+
+### Added
+- **Unified Non-AI Backend Migration & `new ui` v6 Release (`new ui/server/`, `new ui/package.json`, `new ui/start-dev.bat`):**
+  - Migrated the non-AI Express 5 + SQLite (`sql.js`) backend into `new ui/server/` (`index.js` on default port `9474`, `database.js` reading `%APPDATA%/TutIn/tutin.db` or `TUTIN_DATA_DIR`), exposing REST endpoints across `courses`, `modules`, `videos`, `notes`, `analytics`, `instructors`, `roadmaps`, `settings`, `transcripts`, `summaries`, `search`, `data`, `fs`, `youtube`, and `canvas`, plus `/video/*` range streaming, `courseScanner.js`, `pathRepair.js`, and MP4/TS duration parsing.
+  - Upgraded `new ui/` packages, `/api/health`, startup banner, `User-Agent`, Settings `About`, and docs to **v6.0 (`6.0.0`)**.
+  - Added workspace root scripts in `new ui/package.json` (`server`, `client`, `start`, `build`, `start:prod`, `typecheck`, `lint`), `new ui/start-dev.bat` Windows launcher (auto-installing root/server/client dependencies and opening `http://127.0.0.1:5173`), updated `new ui/client/vite.config.ts` to proxy `/api` and `/video` to `http://127.0.0.1:9474`, and added standalone `new ui/README.md`, `new ui/CHANGELOG.md`, `new ui/docs/ARCHITECTURE.md`, and `new ui/docs/USER_GUIDE.md`.
+- **Canvas v2 SQLite Migration & Vault Sync (`new ui/server/database.js`, `new ui/server/routes/canvas.js`, `new ui/server/routes/data.js`, `new ui/client/src/lib/course-canvas.ts`):**
+  - Added `migration007` extending `canvas_nodes` / `canvas_edges` and creating `canvas_groups`, `canvas_strokes`, and `canvas_course_meta` (`dismissed_note_ids`, `last_sync_revision`).
+  - Wired `GET/PUT /api/canvas/:courseId` and `POST /api/canvas/:courseId/sync-notes` to persist Canvas v2 state in SQLite alongside `<courseFolder>/.tutin/canvas.json`, and included all Canvas v2 tables in `/api/data/export` and `/api/data/import`.
+- **Vault Screenshot Media Endpoint (`new ui/server/routes/notes.js`, `new ui/client/src/components/notes/rich-note-surface.tsx`):**
+  - Added `POST /api/notes/media` and `GET /api/notes/media/:courseId/:filename` storing pasted, dropped, cropped, and video-captured screenshots inside `<courseFolder>/.tutin/notes/screenshots/` (with `TUTIN_DATA_DIR/screenshots/` fallback for non-folder courses).
+- **MPEG-TS `.ts` Playback & Player Deep-Linking (`new ui/client/src/components/player/course-player.tsx`, `new ui/client/src/routes/learn.$courseId.tsx`):**
+  - Integrated `mpegts.js` for `.ts` stream playback while keeping native Browser Picture-in-Picture, added `?videoId=` deep-link support (guarded against resetting active lesson on progress updates), honored `resumePlayback` and `autoMarkCompleteAt` settings, and enabled real video/canvas `Show in Explorer` via `POST /api/fs/open-folder`.
+- **History Deletion & Real-Tag Analytics (`new ui/server/routes/analytics.js`, `new ui/client/src/components/pages/history-page.tsx`, `new ui/client/src/components/pages/analytics-dashboard.tsx`):**
+  - Added `DELETE /api/analytics/history` and `DELETE /api/analytics/history/:itemId` and wired `HistoryPage` to real `/api/analytics/history` feeds, external `courseUrl` links, and `/learn/$courseId?videoId=...` navigation.
+  - Replaced mock category breakdowns in `LearningFocus` (`AnalyticsDashboard`) with dynamic focus slices computed from real SQLite course tags (`--chart-1`..`--chart-4` + `Other`).
+
+### Changed
+- **Full SQLite Wiring Across Client Modals & Pages (`new ui/client/src/`):**
+  - Rewired `AddCourseModal`, `EditCourseModal`, `SyncPreviewModal`, `InstructorsPage`, `InstructorAvatar`, `RoadmapPage`, `SettingsModal`, `WelcomeGuideModal`, and `AppSettings` (`new ui/client/src/lib/app-settings.ts`) to persist against SQLite `/api/*` and native `/api/fs/*` pickers, removing `localStorage` primary data mocks (`tutin_roadmaps`, `tutin_instructor_avatars`, `tutin_media_db` primary backup paths) and syncing `CoursePlayer` (`recalculate-progress` + `COURSE_UPDATED_EVENT`).
+  - Intentionally greyed out / disabled non-AI-migrated controls in `SettingsModal` (`AI` and `Voice` tabs), `CurriculumManager` (Transcribe/Dub buttons), and `CoursePlayer` (dubbed language & missing summary states) with zero requests to removed AI/dubbing endpoints, while preserving `.srt`/`.vtt` upload, `SmartCaptionsModal`, and reading saved `.tutin/summaries/*.md` files.
+  - Updated `new ui/client/README.md` and `new ui/docs/UI_UX_SYSTEM.md` to reflect port `9474`, SQLite + `.tutin/` vault persistence, tag-driven analytics, disabled AI/Voice surfaces, and manual Admin contrast controls.
+
+### Removed
+- **Sample Cover Fixtures & Legacy AI/Dubbing Routes (`new ui/client/src/components/pages/admin-dashboard.tsx`, `new ui/server/`):**
+  - Removed `SAMPLE_COVERS`, `SAMPLE_COVER_DETAILS`, `coverMode`, `previewImageIndex`, mock `initialCourses`, and unused avatar tone swatches from `AdminDashboard`, replacing `manual` mode controls with active `avatarSaturation`, `avatarLightness`, and `avatarTextContrast` sliders persisted in SQLite `settings`.
+  - Excluded legacy Whisper/NLLB/OpenRouter/punctuation/XTTS routes, Python workers, and Settings `Data Maintenance` buttons (covered by `SyncPreviewModal`).
+
+### Fixed
+- **Type Safety, Event Payloads & Component Prop Signatures (`new ui/client/src/`):**
+  - Fixed `exactOptionalPropertyTypes` spreads in `api.ts` and `file-system.ts`, fixed `ThumbnailGenerator` / `InstructorAvatar` / `CourseThumbnail` helper signatures and SVG `<viewBox="0 0 400 225">` wrapping, fixed `compressImageFileToBlob` argument order in `instructors-page.tsx`, fixed `subscribeCourseCurriculumChanged` callback signatures across `curriculum-manager.tsx`, `course-player.tsx`, and `course-canvas-page.tsx`, fixed `courseId` dependency in `insertImageCard` (`course-canvas-page.tsx`), fixed `mpegts.LoggingControl.applyConfig` invocation, and fixed `Ã—` mojibake in `roadmap-page.tsx`.
+
+### Added
+- **Shared Formatting & Backend API Modules (`new ui/client/src/lib/format.ts`, `new ui/client/src/lib/api.ts`, `new ui/client/src/lib/courses.ts`):**
+  - Consolidated duplicated timestamp/duration helpers (`parseTimestampToSeconds`, `formatTimestamp`, `formatClockShort`, `formatDurationLabel`, `formatMinutesLabel`) into `src/lib/format.ts` and re-exported compatible helpers from `src/lib/course-lessons.ts`.
+  - Added `src/lib/api.ts` (`API_BASE_URL`, `apiUrl`, `apiRequest`, `apiJson`) reading `VITE_API_BASE_URL` and normalizing `/api/*` requests across `SettingsModal`, `SmartCaptionsModal`, and `CoursePlayer`.
+3  - Added `useSavedCourse(courseId)` reactive hook in `src/lib/courses.ts` subscribing to `tutin:course_updated`, `tutin:course_added`, and `tutin:course_deleted`.
+- **Standard Vite SPA Entry (`new ui/client/index.html`, `new ui/client/src/main.tsx`):**
+  - Added client entry point and root HTML shell replacing SSR server entry points.
+
+### Changed
+- **Workspace Flattening & Feature Folder Organization (`new ui/client/`, `new ui/docs/`):**
+  - Flattened doubly-nested `new ui/masterclass-study-companion-main/masterclass-study-companion-main/` into `new ui/client/` and moved documentation to `new ui/docs/UI_UX_SYSTEM.md`.
+  - Organized `new ui/client/src/components/` into feature folders (`layout/`, `modals/`, `player/`, `notes/`, `canvas/`, `pages/`, `ui/`) and updated all `@/components/...` imports and doc references.
+- **Pure Vite + React + TanStack Router SPA Conversion (`new ui/client/vite.config.ts`, `package.json`, `src/router.tsx`, `src/routes/`):**
+  - Replaced `@lovable.dev/vite-tanstack-config`, `@tanstack/react-start`, and `nitro` with `@tanstack/router-plugin/vite` (`autoCodeSplitting: true`), `@vitejs/plugin-react`, `@tailwindcss/vite`, native `resolve.tsconfigPaths: true`, isolated `css.postcss.plugins: []` (avoiding parent legacy Tailwind v3 config lookup), and `/api` dev proxy (`VITE_API_TARGET || "http://127.0.0.1:3001"`).
+  - Simplified `src/routes/__root.tsx`, `src/routes/learn.$courseId.tsx`, `src/routes/canvas.$courseId.tsx`, `src/routes/manage.$courseId.tsx`, and static routes to pure client SPA routing powered by `useSavedCourse`.
+- **UI Consistency & Type-Safety Cleanup (`app-shell.tsx`, `curriculum-manager.tsx`, `admin-dashboard.tsx`, `analytics-dashboard.tsx`, `sync-preview-modal.tsx`, `instructors.tsx`):**
+  - Replaced `window.confirm` in `CourseMenu` (`app-shell.tsx`) with `<AlertDialog>` and replaced `window.prompt` in `CurriculumManager` with inline `<input>` renaming matching module rename UX.
+  - Eliminated all explicit `any` types (`to?: AppNavRoute` in `app-shell.tsx`, typed pattern/avatar selectors in `admin-dashboard.tsx`) and added unmount `clearTimeout` cleanup refs in `admin-dashboard.tsx`, `curriculum-manager.tsx`, `course-player.tsx`, `sync-preview-modal.tsx`, `add-course-modal.tsx`, `edit-course-modal.tsx`, and `welcome-guide-modal.tsx`.
+
+### Removed
+- **Lovable, SSR/Cloudflare & Prototype Clutter:**
+  - Deleted `.lovable/`, `.output/`, `.wrangler/`, `.tanstack/`, `AGENTS.md`, `roadmap.md`, `bun.lock`, `bunfig.toml`, `src/server.ts`, `src/start.ts`, `src/lib/error-capture.ts`, `src/lib/error-page.ts`, `src/lib/lovable-error-reporting.ts`, `src/routes/README.md`, `vite-tsconfig-paths`, loose prototype `thumbnail*.{jpg,png,webp}` & `TutIn thumbnail generator.html` in `new ui/`, and 33 unused `src/components/ui/*` + `src/hooks/use-mobile.tsx` files.
+
+### Fixed
+- **ESLint & PostCSS Build Errors:**
+  - Fixed empty `catch {}` block in `src/lib/thumbnail-generator.ts`, all `@typescript-eslint/no-explicit-any` errors across components, `react-hooks/exhaustive-deps` in `src/components/layout/course-thumbnail.tsx`, and Vite v8 production build conflict against parent root Tailwind v3 PostCSS config.
+
+### Added
+- **Smart Captions Batch Import Modal (`new ui/masterclass-study-companion-main/masterclass-study-companion-main/src/components/smart-captions-modal.tsx`, `src/components/course-player.tsx`):**
+  - Ported `SmartCaptionsModal` using the `Dialog` visual system (`max-w-lg`, flat monochrome header/tags, matched lesson rows with `SRT`/`VTT` format chips, `Skip` and `Import all (N)` actions).
+  - Wired `Import subtitles…` into `CoursePlayer` (Audio & Subtitles dropdown and `TranscriptTab` language menu) supporting both `/api/transcripts/:id/upload` + `/api/transcripts/batch-apply` backend flows and client multi-file `.srt`/`.vtt` sibling matching, dispatching `tutin:transcript-updated`.
+- **Welcome Guide Modal (`new ui/masterclass-study-companion-main/masterclass-study-companion-main/src/components/welcome-guide-modal.tsx`, `src/lib/app-settings.ts`, `src/components/app-shell.tsx`):**
+  - Implemented `WelcomeGuideModal` as a calm, 4-step interactive product tour (`Welcome to TutIn`, `Import & Organize`, `Notes & Whiteboard`, `Track & Back Up`) adapted to new-UI features including Course Notes Canvas, rich image-cropper notes, roadmaps, and local JSON backups.
+  - Hydrated first-launch display client-side in `AppShell` using `tutin_welcome_seen` and exposed a replay trigger from Settings -> `About` -> `Open guide`.
+- **Complete Settings Workspace & Adapted Keybindings (`new ui/masterclass-study-companion-main/masterclass-study-companion-main/src/components/settings-modal.tsx`, `src/lib/app-settings.ts`, `src/components/course-player.tsx`):**
+  - Expanded `SettingsModal` to all 7 cohesive tabs (`General`, `Shortcuts`, `AI`, `Voice`, `Data`, `Feedback`, `About`), removing colored icon squares, emojis, and legacy accent swatches to stay consistent with `UI_UX_SYSTEM.md`.
+  - Wired real `CoursePlayer` keyboard shortcuts (`Space`/`K`, `ArrowLeft`/`ArrowRight`, `J`/`L`, `ArrowUp`/`ArrowDown`, `M`, `C`, `P`, `F`, `Shift+N`/`Shift+P`, `<`/`>`, `0–9`) respecting `tutin_settings.keyboardShortcuts`, and updated Settings -> `Shortcuts` to accurately document **Player**, **Course canvas**, **Notes editor**, and **Navigation** shortcuts.
+  - Implemented Whisper/OpenRouter/Google configuration fields, offline punctuation model management (`/api/settings/punctuation-models`), XTTS dubbing device controls (`/api/dub/gpu-info`, `/api/dub/set-device`), browser storage & `tutin_media_db` telemetry, portable JSON backup export/import, Formspree feedback submission, and `<AlertDialog>` confirmation for destructive workspace reset.
+
+### Changed
+- **Flat Edge-to-Edge App Shell & Completion Semantic Color (`new ui/masterclass-study-companion-main/masterclass-study-companion-main/src/components/app-shell.tsx`, `src/components/course-player.tsx`, `src/components/canvas/course-canvas-page.tsx`, `src/components/roadmap-page.tsx`, `src/routes/canvas.$courseId.tsx`, `src/routes/roadmap.tsx`):**
+  - Removed the inset curved `<main>` card frame (`my-2 mr-2 sm:my-3 sm:mr-3 rounded-2xl shadow-workspace`), replacing it with a flush edge-to-edge workspace pane separated from the vertical `IconDock` by `border-l border-border/50`. Updated `CoursePlayer`, `CourseCanvasPage`, and `RoadmapPage` to full `h-dvh` sizing, and added `fixedViewport` on `AppShell` for `/canvas/$courseId` and `/roadmap` so full-bleed canvases have no right-edge scrollbar gutter.
+  - Added semantic emerald completion styling (`bg-chart-4` and `text-emerald-600 dark:text-emerald-400`) strictly to `CourseCard` (`100%` completed progress bar and percentage label) and `PlaylistTab` (completed lesson checkmarks, fully completed module counts, and `100%` course progress header/bar) while keeping the remaining UI neutral monochrome.
+
 ### Fixed
 - **Floating HUD, Notes Drawer & Lightbox Pointer Isolation (`new ui/masterclass-study-companion-main/masterclass-study-companion-main/src/components/canvas/canvas-hud.tsx`, `src/components/canvas/canvas-notes-drawer.tsx`, `src/components/canvas/course-canvas-page.tsx`):**
   - Marked all floating HUD toolbars (`Top-Left Context Bar`, `Top-Right History/Tidy/Zoom Bar`, `Bottom Floating Tool Dock`), `CanvasNotesDrawer`, and the image lightbox overlay with `data-canvas-ui="true"` plus `onPointerDown`, `onDoubleClick`, and `onWheel` propagation stops, and added matching `[data-canvas-ui="true"]` early returns inside `course-canvas-page.tsx` stage `onWheel` and `handleStagePointerDown`. Clicking any floating tool button now triggers its React `onClick` instead of being hijacked by the background stage's `setPointerCapture(e.pointerId)`, and mouse-wheel scrolling works inside the Notes drawer.
