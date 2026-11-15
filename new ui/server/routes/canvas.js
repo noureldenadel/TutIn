@@ -31,6 +31,73 @@ function safeJsonParse(raw, fallback) {
     }
 }
 
+const SQL_CHUNK_SIZE = 400
+
+function deleteCourseRowsNotIn(table, courseId, keepIds) {
+    if (!keepIds || keepIds.size === 0) {
+        run(`DELETE FROM ${table} WHERE course_id = ?`, [courseId])
+        return
+    }
+    const existing = getAll(`SELECT id FROM ${table} WHERE course_id = ?`, [courseId])
+    const toDelete = existing.map(r => r.id).filter(id => !keepIds.has(id))
+    for (let i = 0; i < toDelete.length; i += SQL_CHUNK_SIZE) {
+        const chunk = toDelete.slice(i, i + SQL_CHUNK_SIZE)
+        const ph = chunk.map(() => '?').join(',')
+        run(`DELETE FROM ${table} WHERE course_id = ? AND id IN (${ph})`, [courseId, ...chunk])
+    }
+}
+
+function saveViewportRow(courseId, viewport, updatedAtIso = new Date().toISOString()) {
+    const rawX = viewport?.x ?? viewport?.pan?.x ?? 0
+    const rawY = viewport?.y ?? viewport?.pan?.y ?? 0
+    const rawZoom = viewport?.zoom ?? 1
+    const vpX = Number.isFinite(Number(rawX)) ? Number(rawX) : 0
+    const vpY = Number.isFinite(Number(rawY)) ? Number(rawY) : 0
+    const vpZoom = Number.isFinite(Number(rawZoom)) && Number(rawZoom) > 0 ? Number(rawZoom) : 1
+    run(`
+        INSERT INTO canvas_viewports (course_id, pan_x, pan_y, zoom, updated_at)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(course_id) DO UPDATE SET
+            pan_x = excluded.pan_x,
+            pan_y = excluded.pan_y,
+            zoom = excluded.zoom,
+            updated_at = excluded.updated_at
+    `, [courseId, vpX, vpY, vpZoom, updatedAtIso])
+}
+
+/**
+ * Delete canvas_nodes linked to deleted note IDs (and any edges attached to them).
+ * Returns the number of canvas_nodes deleted so callers know whether to sync canvas.json.
+ */
+export function deleteLinkedCanvasNodesForNotes(courseId, noteIds) {
+    if (!courseId || !Array.isArray(noteIds) || noteIds.length === 0) return 0
+    const nodeIds = []
+    for (let i = 0; i < noteIds.length; i += SQL_CHUNK_SIZE) {
+        const chunk = noteIds.slice(i, i + SQL_CHUNK_SIZE)
+        const ph = chunk.map(() => '?').join(',')
+        const rows = getAll(
+            `SELECT id FROM canvas_nodes WHERE course_id = ? AND note_id IN (${ph})`,
+            [courseId, ...chunk]
+        )
+        for (const row of rows) nodeIds.push(row.id)
+    }
+    if (nodeIds.length === 0) return 0
+
+    for (let i = 0; i < nodeIds.length; i += SQL_CHUNK_SIZE) {
+        const chunk = nodeIds.slice(i, i + SQL_CHUNK_SIZE)
+        const ph = chunk.map(() => '?').join(',')
+        run(
+            `DELETE FROM canvas_edges WHERE course_id = ? AND (from_node_id IN (${ph}) OR to_node_id IN (${ph}))`,
+            [courseId, ...chunk, ...chunk]
+        )
+        run(
+            `DELETE FROM canvas_nodes WHERE course_id = ? AND id IN (${ph})`,
+            [courseId, ...chunk]
+        )
+    }
+    return nodeIds.length
+}
+
 /**
  * Read Canvas v2 state for a course from SQLite (with automatic v1 fallback).
  */
@@ -67,7 +134,9 @@ export function readCanvasStateFromDb(courseId) {
         y: Number(g.y) || 0,
         width: Number(g.width) || 340,
         height: Number(g.height) || 240,
-        tintIndex: Number(g.tint_index) || (idx % 6),
+        tintIndex: g.tint_index !== null && g.tint_index !== undefined && g.tint_index !== ''
+            ? Number(g.tint_index)
+            : (idx % 6),
         layoutMode: g.layout_mode === 'auto' ? 'auto' : 'custom',
         collapsed: Boolean(g.collapsed),
     }))
@@ -172,9 +241,9 @@ export function readCanvasStateFromDb(courseId) {
 
     const vp = getOne(`SELECT pan_x, pan_y, zoom, updated_at FROM canvas_viewports WHERE course_id = ?`, [courseId])
     const viewport = vp ? {
-        x: Number(vp.pan_x) || 0,
-        y: Number(vp.pan_y) || 0,
-        zoom: Number(vp.zoom) || 1,
+        x: Number.isFinite(Number(vp.pan_x)) ? Number(vp.pan_x) : 0,
+        y: Number.isFinite(Number(vp.pan_y)) ? Number(vp.pan_y) : 0,
+        zoom: Number.isFinite(Number(vp.zoom)) && Number(vp.zoom) > 0 ? Number(vp.zoom) : 1,
     } : { x: 0, y: 0, zoom: 1 }
 
     const meta = getOne(`SELECT dismissed_note_ids, last_sync_revision, updated_at FROM canvas_course_meta WHERE course_id = ?`, [courseId])
@@ -260,29 +329,12 @@ export function writeCanvasPayloadToDb(courseId, payload, { insideTransaction = 
     const execute = () => {
         // 1. Viewport
         if (payload?.viewport) {
-            const vpX = payload.viewport.x ?? payload.viewport.pan?.x ?? 0
-            const vpY = payload.viewport.y ?? payload.viewport.pan?.y ?? 0
-            const vpZoom = payload.viewport.zoom ?? 1
-            run(`
-                INSERT INTO canvas_viewports (course_id, pan_x, pan_y, zoom, updated_at)
-                VALUES (?, ?, ?, ?, ?)
-                ON CONFLICT(course_id) DO UPDATE SET
-                    pan_x = excluded.pan_x,
-                    pan_y = excluded.pan_y,
-                    zoom = excluded.zoom,
-                    updated_at = excluded.updated_at
-            `, [courseId, vpX, vpY, vpZoom, nowIso])
+            saveViewportRow(courseId, payload.viewport, nowIso)
         }
 
         // 2. Groups (Artboards)
         if (Array.isArray(payload?.groups) || !isV2Payload) {
-            const groupIds = groups.map(g => g.id)
-            if (groupIds.length > 0) {
-                const ph = groupIds.map(() => '?').join(',')
-                run(`DELETE FROM canvas_groups WHERE course_id = ? AND id NOT IN (${ph})`, [courseId, ...groupIds])
-            } else {
-                run(`DELETE FROM canvas_groups WHERE course_id = ?`, [courseId])
-            }
+            deleteCourseRowsNotIn('canvas_groups', courseId, new Set(groups.map(g => g.id)))
 
             groups.forEach((g, idx) => {
                 run(`
@@ -306,6 +358,7 @@ export function writeCanvasPayloadToDb(courseId, payload, { insideTransaction = 
                         collapsed = excluded.collapsed,
                         sort_order = excluded.sort_order,
                         updated_at = excluded.updated_at
+                    WHERE canvas_groups.course_id = excluded.course_id
                 `, [
                     g.id,
                     courseId,
@@ -331,19 +384,14 @@ export function writeCanvasPayloadToDb(courseId, payload, { insideTransaction = 
         // 3. Cards -> canvas_nodes
         const savedCardIdSet = new Set()
         if (Array.isArray(payload?.cards) || Array.isArray(payload?.nodes)) {
-            const cardIds = rawCards.map(c => c.id)
-            if (cardIds.length > 0) {
-                const ph = cardIds.map(() => '?').join(',')
-                run(`DELETE FROM canvas_nodes WHERE course_id = ? AND id NOT IN (${ph})`, [courseId, ...cardIds])
-            } else {
-                run(`DELETE FROM canvas_nodes WHERE course_id = ?`, [courseId])
-            }
+            deleteCourseRowsNotIn('canvas_nodes', courseId, new Set(rawCards.map(c => c.id)))
+            const validCourseNoteIds = new Set(
+                getAll('SELECT id FROM notes WHERE course_id = ?', [courseId]).map(r => r.id)
+            )
 
             for (const card of rawCards) {
                 savedCardIdSet.add(card.id)
-                const verifiedNoteId = card.noteId
-                    ? getOne('SELECT id FROM notes WHERE id = ?', [card.noteId])?.id ?? null
-                    : null
+                const verifiedNoteId = card.noteId && validCourseNoteIds.has(card.noteId) ? card.noteId : null
 
                 run(`
                     INSERT INTO canvas_nodes (
@@ -374,6 +422,7 @@ export function writeCanvasPayloadToDb(courseId, payload, { insideTransaction = 
                         caption = excluded.caption,
                         accent_index = excluded.accent_index,
                         updated_at = excluded.updated_at
+                    WHERE canvas_nodes.course_id = excluded.course_id
                 `, [
                     card.id,
                     courseId,
@@ -411,13 +460,7 @@ export function writeCanvasPayloadToDb(courseId, payload, { insideTransaction = 
                 const toId = e.toId || e.toNodeId
                 return fromId && toId && savedCardIdSet.has(fromId) && savedCardIdSet.has(toId)
             })
-            const edgeIds = validEdges.map(e => e.id)
-            if (edgeIds.length > 0) {
-                const ph = edgeIds.map(() => '?').join(',')
-                run(`DELETE FROM canvas_edges WHERE course_id = ? AND id NOT IN (${ph})`, [courseId, ...edgeIds])
-            } else {
-                run(`DELETE FROM canvas_edges WHERE course_id = ?`, [courseId])
-            }
+            deleteCourseRowsNotIn('canvas_edges', courseId, new Set(validEdges.map(e => e.id)))
 
             for (const edge of validEdges) {
                 const fromId = edge.fromId || edge.fromNodeId
@@ -435,6 +478,7 @@ export function writeCanvasPayloadToDb(courseId, payload, { insideTransaction = 
                         to_side = excluded.to_side,
                         style = excluded.style,
                         label = excluded.label
+                    WHERE canvas_edges.course_id = excluded.course_id
                 `, [
                     edge.id,
                     courseId,
@@ -450,29 +494,57 @@ export function writeCanvasPayloadToDb(courseId, payload, { insideTransaction = 
             }
         }
 
-        // 5. Strokes
+        // 5. Strokes — avoid destructive delete + re-insert when stroke rows are unchanged
         if (Array.isArray(payload?.strokes)) {
-            run(`DELETE FROM canvas_strokes WHERE course_id = ?`, [courseId])
-            payload.strokes.forEach((stroke, idx) => {
-                const parentGroupId = stroke.parentGroupId && remappedGroupIds.has(stroke.parentGroupId)
+            const nextStrokes = payload.strokes.map(stroke => ({
+                id: stroke.id,
+                tool: stroke.tool === 'highlighter' ? 'highlighter' : 'pen',
+                pointsJson: JSON.stringify(stroke.points || []),
+                colorToken: stroke.colorToken || 'ink',
+                size: Number(stroke.size ?? 3),
+                parentGroupId: stroke.parentGroupId && remappedGroupIds.has(stroke.parentGroupId)
                     ? remappedGroupIds.get(stroke.parentGroupId)
-                    : (stroke.parentGroupId ?? null)
-                run(`
-                    INSERT INTO canvas_strokes (
-                        id, course_id, tool, points, color_token, size, parent_group_id, sort_order, created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                `, [
-                    stroke.id,
-                    courseId,
-                    stroke.tool === 'highlighter' ? 'highlighter' : 'pen',
-                    JSON.stringify(stroke.points || []),
-                    stroke.colorToken || 'ink',
-                    stroke.size ?? 3,
-                    parentGroupId,
-                    idx,
-                    nowIso,
-                ])
-            })
+                    : (stroke.parentGroupId ?? null),
+            }))
+
+            const existingStrokes = getAll(
+                `SELECT id, tool, points, color_token, size, parent_group_id FROM canvas_strokes WHERE course_id = ? ORDER BY sort_order ASC, created_at ASC`,
+                [courseId]
+            )
+            const strokesUnchanged =
+                existingStrokes.length === nextStrokes.length &&
+                nextStrokes.every((s, idx) => {
+                    const prev = existingStrokes[idx]
+                    return (
+                        prev.id === s.id &&
+                        prev.tool === s.tool &&
+                        prev.points === s.pointsJson &&
+                        prev.color_token === s.colorToken &&
+                        Number(prev.size) === s.size &&
+                        (prev.parent_group_id ?? null) === s.parentGroupId
+                    )
+                })
+
+            if (!strokesUnchanged) {
+                run(`DELETE FROM canvas_strokes WHERE course_id = ?`, [courseId])
+                nextStrokes.forEach((stroke, idx) => {
+                    run(`
+                        INSERT INTO canvas_strokes (
+                            id, course_id, tool, points, color_token, size, parent_group_id, sort_order, created_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    `, [
+                        stroke.id,
+                        courseId,
+                        stroke.tool,
+                        stroke.pointsJson,
+                        stroke.colorToken,
+                        stroke.size,
+                        stroke.parentGroupId,
+                        idx,
+                        nowIso,
+                    ])
+                })
+            }
         }
 
         // 6. Meta (dismissedNoteIds, revision, updatedAt)
@@ -532,6 +604,18 @@ router.put('/:courseId', (req, res) => {
         res.json({ success: true })
     } catch (err) {
         console.error('Failed to save canvas data:', err)
+        res.status(500).json({ error: err.message })
+    }
+})
+
+// PATCH /api/canvas/:courseId/viewport — lightweight pan/zoom persistence without rewriting nodes/strokes/vault
+router.patch('/:courseId/viewport', (req, res) => {
+    const { courseId } = req.params
+    try {
+        saveViewportRow(courseId, req.body)
+        res.json({ success: true })
+    } catch (err) {
+        console.error('Failed to save canvas viewport:', err)
         res.status(500).json({ error: err.message })
     }
 })

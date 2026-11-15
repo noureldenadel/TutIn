@@ -14,6 +14,7 @@ const SKIP_WORD_RE = /^(?:https?:\/\/|www\.|[\w.-]+@[\w.-]+\.\w+$|0x[0-9a-f]+$|\
 
 let spellInstance: NSpellInstance | null = null;
 let loadPromise: Promise<NSpellInstance | null> | null = null;
+let customWordSetCache: Set<string> | null = null;
 const sessionIgnoredWords = new Set<string>();
 const readyListeners = new Set<() => void>();
 
@@ -21,6 +22,7 @@ export interface EditorContextHooks {
   onBeforeMutate?: () => void;
   onAfterPaste?: () => void;
   onPasteImage?: (file: File) => Promise<void>;
+  onTryPasteVaultHtml?: (rawHtml: string) => Promise<boolean>;
 }
 
 const editorHooksMap = new WeakMap<HTMLElement, EditorContextHooks>();
@@ -41,6 +43,7 @@ function loadCustomWords(): string[] {
 }
 
 function persistCustomWords(words: string[]): void {
+  customWordSetCache = new Set(words.map((w) => w.toLowerCase()));
   try {
     localStorage.setItem(CUSTOM_DICT_STORAGE_KEY, JSON.stringify(words));
   } catch {
@@ -49,11 +52,10 @@ function persistCustomWords(words: string[]): void {
 }
 
 function getCustomWordSet(): Set<string> {
-  return new Set(loadCustomWords().map((w) => w.toLowerCase()));
-}
-
-export function isSpellCheckerReady(): boolean {
-  return spellInstance !== null;
+  if (!customWordSetCache) {
+    customWordSetCache = new Set(loadCustomWords().map((w) => w.toLowerCase()));
+  }
+  return customWordSetCache;
 }
 
 export function subscribeSpellCheckerReady(listener: () => void): () => void {
@@ -536,9 +538,15 @@ export function inspectAppContextTarget({
       ? (targetEl.closest("input, textarea") as HTMLInputElement | HTMLTextAreaElement)
       : null;
 
+  const wrapperRoot = !inputEl
+    ? ((targetEl?.closest('[data-note-scroll-wrapper="true"]') as HTMLElement | null) ??
+      (targetEl?.closest('[data-editing-card="true"]') as HTMLElement | null))
+    : null;
+
   const editableRoot = !inputEl
     ? ((targetEl?.closest('[contenteditable="true"]') as HTMLElement | null) ??
-      (targetEl?.closest(".note-editor") as HTMLElement | null))
+      (targetEl?.closest(".note-editor") as HTMLElement | null) ??
+      (wrapperRoot?.querySelector('.note-editor[contenteditable="true"]') as HTMLElement | null))
     : null;
 
   const isEditable = Boolean(inputEl || editableRoot);
@@ -560,6 +568,18 @@ export function inspectAppContextTarget({
         }
       : null;
 
+    const pasteIntoInput = async (): Promise<boolean> => {
+      if (!navigator.clipboard?.readText) return false;
+      try {
+        const clipText = await navigator.clipboard.readText();
+        if (!clipText) return true;
+        applyInputReplacement(inputEl, sStart, sEnd, clipText);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+
     return {
       imageSrc,
       isEditable: true,
@@ -574,28 +594,8 @@ export function inspectAppContextTarget({
         if (!selectedText) return;
         await copyTextToClipboard(selectedText);
       },
-      paste: async () => {
-        if (!navigator.clipboard?.readText) return false;
-        try {
-          const clipText = await navigator.clipboard.readText();
-          if (!clipText) return true;
-          applyInputReplacement(inputEl, sStart, sEnd, clipText);
-          return true;
-        } catch {
-          return false;
-        }
-      },
-      pastePlainText: async () => {
-        if (!navigator.clipboard?.readText) return false;
-        try {
-          const clipText = await navigator.clipboard.readText();
-          if (!clipText) return true;
-          applyInputReplacement(inputEl, sStart, sEnd, clipText);
-          return true;
-        } catch {
-          return false;
-        }
-      },
+      paste: pasteIntoInput,
+      pastePlainText: pasteIntoInput,
       copyImage: async () => {
         if (imageSrc) await copyImageToClipboard(imageSrc);
       },
@@ -683,6 +683,24 @@ export function inspectAppContextTarget({
       if (navigator.clipboard?.read) {
         try {
           const items = await navigator.clipboard.read();
+          let cachedHtml: string | null = null;
+          if (hooks?.onTryPasteVaultHtml) {
+            for (const item of items) {
+              if (item.types.includes("text/html")) {
+                const rawHtml = await item.getType("text/html").then((blob) => blob.text());
+                cachedHtml = rawHtml;
+                editableRoot.focus({ preventScroll: true });
+                if (sel) {
+                  sel.removeAllRanges();
+                  sel.addRange(targetRange);
+                }
+                if (await hooks.onTryPasteVaultHtml(rawHtml)) {
+                  return true;
+                }
+              }
+            }
+          }
+
           for (const item of items) {
             const imgType = item.types.find((t) => t.startsWith("image/"));
             if (imgType && hooks?.onPasteImage) {
@@ -699,13 +717,21 @@ export function inspectAppContextTarget({
             }
           }
 
-          for (const item of items) {
-            if (item.types.includes("text/html")) {
-              const rawHtml = await item.getType("text/html").then((blob) => blob.text());
-              const cleanHtml = sanitizeClipboardHtml(rawHtml);
-              if (cleanHtml) {
-                applyContentEditableHtml(editableRoot, targetRange, cleanHtml);
-                return true;
+          if (cachedHtml) {
+            const cleanHtml = sanitizeClipboardHtml(cachedHtml);
+            if (cleanHtml) {
+              applyContentEditableHtml(editableRoot, targetRange, cleanHtml);
+              return true;
+            }
+          } else {
+            for (const item of items) {
+              if (item.types.includes("text/html")) {
+                const rawHtml = await item.getType("text/html").then((blob) => blob.text());
+                const cleanHtml = sanitizeClipboardHtml(rawHtml);
+                if (cleanHtml) {
+                  applyContentEditableHtml(editableRoot, targetRange, cleanHtml);
+                  return true;
+                }
               }
             }
           }

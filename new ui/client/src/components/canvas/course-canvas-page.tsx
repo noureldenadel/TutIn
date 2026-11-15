@@ -40,6 +40,7 @@ import {
   restoreNoteCardToCanvas,
   returnCardToOriginGroup,
   saveCourseCanvas,
+  saveCourseViewport,
   tidyAllCanvasArtboards,
   tidySelectedCards,
   tidyVideoArtboard,
@@ -64,7 +65,13 @@ import {
   updateCourseNoteContent,
   type NoteItem,
 } from "@/lib/course-notes";
-import { resolveMediaUrl, saveMediaFile } from "@/lib/media-store";
+import { copyImageToClipboard } from "@/lib/clipboard";
+import {
+  extractSameCourseVaultImageUrisFromHtml,
+  resolveMediaUrl,
+  saveMediaFile,
+  verifyVaultMediaExists,
+} from "@/lib/media-store";
 import { inspectAppContextTarget } from "@/lib/spellcheck";
 import { cn } from "@/lib/utils";
 
@@ -118,6 +125,7 @@ export function CourseCanvasPage({ course }: { course: Course }) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const lastNotesRevisionRef = useRef(0);
   const canvasHydratedRef = useRef(false);
+  const lastSavedSnapshotRef = useRef<CourseCanvasState | null>(null);
   const altUsedInGestureRef = useRef(false);
   const zoomDragRef = useRef<{
     anchorClientX: number;
@@ -295,7 +303,14 @@ export function CourseCanvasPage({ course }: { course: Course }) {
         if (cancelled) return;
         setLessons(curr.lessons);
         setNotes(loadedNotes);
-        setCanvasState(reconcileCanvasWithNotes(loadedCanvas, loadedNotes, curr.lessons, courseId));
+        const reconciled = reconcileCanvasWithNotes(
+          loadedCanvas,
+          loadedNotes,
+          curr.lessons,
+          courseId,
+        );
+        lastSavedSnapshotRef.current = reconciled;
+        setCanvasState(reconciled);
         canvasHydratedRef.current = true;
       } catch (err) {
         console.error("[CourseCanvas] Failed to hydrate from server:", err);
@@ -315,7 +330,8 @@ export function CourseCanvasPage({ course }: { course: Course }) {
 
   // Subscribe to Player note updates & cross-tab updates
   useEffect(() => {
-    return subscribeCourseNotesChanged(courseId, (nextNotes) => {
+    return subscribeCourseNotesChanged(courseId, (nextNotes, meta) => {
+      if (meta?.source === "canvas") return;
       lastNotesRevisionRef.current += 1;
       setNotes(nextNotes);
       setCanvasState((prev) =>
@@ -324,14 +340,37 @@ export function CourseCanvasPage({ course }: { course: Course }) {
     });
   }, [courseId, lessons]);
 
-  // Debounced auto-save to server SQLite & .tutin/canvas.json
+  // Debounced auto-save to server SQLite & .tutin/canvas.json (or lightweight viewport PATCH)
   useEffect(() => {
     if (!canvasHydratedRef.current) return;
-    const timer = window.setTimeout(() => {
-      saveCourseCanvas(stateRef.current);
+    const saved = lastSavedSnapshotRef.current;
+    const structureDirty =
+      !saved ||
+      canvasState.groups !== saved.groups ||
+      canvasState.cards !== saved.cards ||
+      canvasState.edges !== saved.edges ||
+      canvasState.strokes !== saved.strokes ||
+      canvasState.dismissedNoteIds !== saved.dismissedNoteIds;
+    const viewportDirty = !saved || canvasState.viewport !== saved.viewport;
+
+    if (!structureDirty && !viewportDirty) return;
+
+    if (structureDirty) {
+      const timer = window.setTimeout(() => {
+        const current = stateRef.current;
+        saveCourseCanvas(current);
+        lastSavedSnapshotRef.current = current;
+      }, 180);
+      return () => window.clearTimeout(timer);
+    }
+
+    const vpTimer = window.setTimeout(() => {
+      const current = stateRef.current;
+      saveCourseViewport(courseId, current.viewport);
+      lastSavedSnapshotRef.current = current;
     }, 180);
-    return () => window.clearTimeout(timer);
-  }, [canvasState]);
+    return () => window.clearTimeout(vpTimer);
+  }, [canvasState, courseId]);
 
   useEffect(() => {
     const flush = () => {
@@ -344,7 +383,7 @@ export function CourseCanvasPage({ course }: { course: Course }) {
       if (pending) {
         const card = stateRef.current.cards.find((c) => c.id === pending.cardId);
         if (card && pending.html !== card.htmlContent) {
-          const estimatedHeight = estimateVideoNoteCardHeight(pending.html, 0);
+          const estimatedHeight = estimateVideoNoteCardHeight(pending.html, 0, card.width);
           stateRef.current = applyCardHeightUpdate(
             stateRef.current,
             pending.cardId,
@@ -352,11 +391,30 @@ export function CourseCanvasPage({ course }: { course: Course }) {
             pending.html,
           );
           if (card.type === "video-note" && card.noteId) {
-            updateCourseNoteContent(courseId, card.noteId, pending.html);
+            updateCourseNoteContent(courseId, card.noteId, pending.html, {
+              source: "canvas",
+            });
           }
         }
       }
-      saveCourseCanvas(stateRef.current);
+      const current = stateRef.current;
+      const saved = lastSavedSnapshotRef.current;
+      const structureDirty =
+        !saved ||
+        current.groups !== saved.groups ||
+        current.cards !== saved.cards ||
+        current.edges !== saved.edges ||
+        current.strokes !== saved.strokes ||
+        current.dismissedNoteIds !== saved.dismissedNoteIds;
+      const viewportDirty = !saved || current.viewport !== saved.viewport;
+
+      if (structureDirty) {
+        saveCourseCanvas(current);
+        lastSavedSnapshotRef.current = current;
+      } else if (viewportDirty) {
+        saveCourseViewport(courseId, current.viewport);
+        lastSavedSnapshotRef.current = current;
+      }
       flushPendingCanvasSave(courseId);
     };
     window.addEventListener("beforeunload", flush);
@@ -365,6 +423,33 @@ export function CourseCanvasPage({ course }: { course: Course }) {
       flush();
     };
   }, [courseId, resetEditSession]);
+
+  const syncRevertedVideoNoteContents = useCallback(
+    (prevCards: CanvasCard[], nextCards: CanvasCard[]) => {
+      const prevHtmlByNoteId = new Map<string, string>();
+      for (const c of prevCards) {
+        if (c.type === "video-note" && c.noteId) {
+          prevHtmlByNoteId.set(c.noteId, c.htmlContent);
+        }
+      }
+      let latestNotes: NoteItem[] | null = null;
+      for (const c of nextCards) {
+        if (c.type === "video-note" && c.noteId) {
+          const prevHtml = prevHtmlByNoteId.get(c.noteId);
+          if (prevHtml !== undefined && prevHtml !== c.htmlContent) {
+            lastNotesRevisionRef.current += 1;
+            latestNotes = updateCourseNoteContent(courseId, c.noteId, c.htmlContent, {
+              source: "canvas",
+            });
+          }
+        }
+      }
+      if (latestNotes) {
+        setNotes(latestNotes);
+      }
+    },
+    [courseId],
+  );
 
   const pushHistorySnapshot = useCallback((snapshot: HistorySnapshot) => {
     const nextUndo = [...undoStackRef.current.slice(-(MAX_UNDO_HISTORY - 1)), snapshot];
@@ -398,8 +483,10 @@ export function CourseCanvasPage({ course }: { course: Course }) {
     redoStackRef.current = nextRedo;
     setUndoStack(nextUndo);
     setRedoStack(nextRedo);
+    syncRevertedVideoNoteContents(currentSnap.cards, snap.cards);
+    stateRef.current = { ...stateRef.current, ...snap };
     setCanvasState((curr) => ({ ...curr, ...snap }));
-  }, [resetEditSession]);
+  }, [resetEditSession, syncRevertedVideoNoteContents]);
 
   const handleRedo = useCallback(() => {
     resetEditSession();
@@ -413,8 +500,10 @@ export function CourseCanvasPage({ course }: { course: Course }) {
     redoStackRef.current = nextRedo;
     setUndoStack(nextUndo);
     setRedoStack(nextRedo);
+    syncRevertedVideoNoteContents(currentSnap.cards, snap.cards);
+    stateRef.current = { ...stateRef.current, ...snap };
     setCanvasState((curr) => ({ ...curr, ...snap }));
-  }, [resetEditSession]);
+  }, [resetEditSession, syncRevertedVideoNoteContents]);
 
   const screenToWorld = useCallback((clientX: number, clientY: number) => {
     const rect = containerRef.current?.getBoundingClientRect();
@@ -527,7 +616,9 @@ export function CourseCanvasPage({ course }: { course: Course }) {
       // Two-way live sync back to Video Player NotesTab (Option A)
       if (contentChanged && card.type === "video-note" && card.noteId) {
         lastNotesRevisionRef.current += 1;
-        const nextNotes = updateCourseNoteContent(courseId, card.noteId, html);
+        const nextNotes = updateCourseNoteContent(courseId, card.noteId, html, {
+          source: "canvas",
+        });
         setNotes(nextNotes);
       }
     },
@@ -652,43 +743,50 @@ export function CourseCanvasPage({ course }: { course: Course }) {
     [applyWithUndo, commitPendingEdit, startEditingCard],
   );
 
+  const insertImageMediaUriAt = useCallback(
+    async (mediaUri: string, worldX: number, worldY: number) => {
+      const resolvedUrl = await resolveMediaUrl(mediaUri);
+      const dims = await measureImageDimensions(resolvedUrl);
+
+      const imgCard: CanvasCard = {
+        id: createCanvasId("img"),
+        type: "image",
+        groupId: null,
+        membershipState: "canvas-only",
+        isCanvasOnly: true,
+        x: Math.round(worldX - dims.width / 2),
+        y: Math.round(worldY - dims.height / 2),
+        width: dims.width,
+        height: dims.height,
+        htmlContent: "",
+        imageSrc: mediaUri,
+        caption: "",
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      };
+      const targetGroup = resolveCardGroupAtDrop(imgCard, stateRef.current.groups);
+      imgCard.groupId = targetGroup?.id ?? null;
+
+      applyWithUndo((prev) => ({
+        ...prev,
+        cards: [...prev.cards, imgCard],
+      }));
+      setSelectedCardIds(new Set([imgCard.id]));
+      setTool("select");
+    },
+    [applyWithUndo],
+  );
+
   const insertImageFileAt = useCallback(
     async (file: File, worldX: number, worldY: number) => {
       try {
         const mediaUri = await saveMediaFile(file, courseId);
-        const resolvedUrl = await resolveMediaUrl(mediaUri);
-        const dims = await measureImageDimensions(resolvedUrl);
-
-        const imgCard: CanvasCard = {
-          id: createCanvasId("img"),
-          type: "image",
-          groupId: null,
-          membershipState: "canvas-only",
-          isCanvasOnly: true,
-          x: Math.round(worldX - dims.width / 2),
-          y: Math.round(worldY - dims.height / 2),
-          width: dims.width,
-          height: dims.height,
-          htmlContent: "",
-          imageSrc: mediaUri,
-          caption: "",
-          createdAt: Date.now(),
-          updatedAt: Date.now(),
-        };
-        const targetGroup = resolveCardGroupAtDrop(imgCard, stateRef.current.groups);
-        imgCard.groupId = targetGroup?.id ?? null;
-
-        applyWithUndo((prev) => ({
-          ...prev,
-          cards: [...prev.cards, imgCard],
-        }));
-        setSelectedCardIds(new Set([imgCard.id]));
-        setTool("select");
+        await insertImageMediaUriAt(mediaUri, worldX, worldY);
       } catch (err) {
         toast.error(err instanceof Error ? err.message : "Failed to insert image.");
       }
     },
-    [applyWithUndo, courseId],
+    [courseId, insertImageMediaUriAt],
   );
 
   const insertCustomArtboardAt = useCallback(
@@ -997,6 +1095,26 @@ export function CourseCanvasPage({ course }: { course: Course }) {
         return;
       }
 
+      if (
+        (e.ctrlKey || e.metaKey) &&
+        !e.shiftKey &&
+        !e.altKey &&
+        e.key.toLowerCase() === "c" &&
+        selectedCardIds.size === 1 &&
+        !window.getSelection()?.toString()
+      ) {
+        const selectedId = Array.from(selectedCardIds)[0];
+        const card = stateRef.current.cards.find((c) => c.id === selectedId);
+        if (card?.type === "image" && card.imageSrc) {
+          e.preventDefault();
+          void resolveMediaUrl(card.imageSrc)
+            .then((resolved) => copyImageToClipboard(resolved))
+            .then(() => toast("Image copied"))
+            .catch(() => toast.error("Could not copy image."));
+          return;
+        }
+      }
+
       if (e.key === "Delete" || e.key === "Backspace") {
         if (selectedEdgeId) {
           e.preventDefault();
@@ -1092,26 +1210,52 @@ export function CourseCanvasPage({ course }: { course: Course }) {
   useEffect(() => {
     const onPaste = (e: ClipboardEvent) => {
       if (isEditableElement(e.target) || editingCardId) return;
-      const items = e.clipboardData?.items;
-      if (!items) return;
-      for (const item of Array.from(items)) {
-        if (item.type.startsWith("image/")) {
-          const file = item.getAsFile();
-          if (!file) continue;
-          e.preventDefault();
-          const rect = containerRef.current?.getBoundingClientRect();
-          const vp = stateRef.current.viewport;
-          const cx = rect ? (rect.width / 2 - vp.x) / vp.zoom : 240;
-          const cy = rect ? (rect.height / 2 - vp.y) / vp.zoom : 200;
-          void insertImageFileAt(file, cx, cy);
-          return;
-        }
+      const rawHtml = e.clipboardData?.getData("text/html") ?? "";
+      const items = e.clipboardData?.items ? Array.from(e.clipboardData.items) : [];
+      const pastedFiles = items
+        .filter((item) => item.type.startsWith("image/"))
+        .map((item) => item.getAsFile())
+        .filter((file): file is File => Boolean(file));
+
+      const sameCourseUris = rawHtml
+        ? extractSameCourseVaultImageUrisFromHtml(rawHtml, courseId)
+        : null;
+      if ((!sameCourseUris || sameCourseUris.length === 0) && pastedFiles.length === 0) return;
+
+      e.preventDefault();
+      const rect = containerRef.current?.getBoundingClientRect();
+      const vp = stateRef.current.viewport;
+      const cx = rect ? (rect.width / 2 - vp.x) / vp.zoom : 240;
+      const cy = rect ? (rect.height / 2 - vp.y) / vp.zoom : 200;
+
+      if (sameCourseUris && sameCourseUris.length > 0) {
+        void (async () => {
+          const checks = await Promise.all(
+            sameCourseUris.map((uri) => verifyVaultMediaExists(uri)),
+          );
+          if (checks.every(Boolean)) {
+            for (let i = 0; i < sameCourseUris.length; i++) {
+              await insertImageMediaUriAt(sameCourseUris[i]!, cx + i * 36, cy + i * 36);
+            }
+            return;
+          }
+          if (pastedFiles.length > 0) {
+            await insertImageFileAt(pastedFiles[0]!, cx, cy);
+          }
+        })().catch((err) => {
+          toast.error(err instanceof Error ? err.message : "Failed to paste image.");
+        });
+        return;
+      }
+
+      if (pastedFiles.length > 0) {
+        void insertImageFileAt(pastedFiles[0]!, cx, cy);
       }
     };
 
     window.addEventListener("paste", onPaste);
     return () => window.removeEventListener("paste", onPaste);
-  }, [editingCardId, insertImageFileAt]);
+  }, [courseId, editingCardId, insertImageFileAt, insertImageMediaUriAt]);
 
   // Native non-passive wheel listener for responsive zoom (Alt + wheel) and pan
   useEffect(() => {
@@ -1628,206 +1772,422 @@ export function CourseCanvasPage({ course }: { course: Course }) {
     }
   };
 
-  const captureMoveOrigins = (groupIds: Iterable<string>, cardIds: Iterable<string>) => {
-    const groupOrigPositions = new Map<string, { x: number; y: number }>();
-    const movedGroupIds = new Set<string>();
-    const movedGroupBounds: Array<{ x: number; y: number; width: number; height: number }> = [];
-    for (const gid of groupIds) {
-      const group = stateRef.current.groups.find((item) => item.id === gid);
-      if (group) {
-        groupOrigPositions.set(gid, { x: group.x, y: group.y });
-        movedGroupIds.add(gid);
-        if (!group.collapsed) {
-          movedGroupBounds.push({
-            x: group.x,
-            y: group.y,
-            width: group.width,
-            height: group.height,
-          });
+  const captureMoveOrigins = useCallback(
+    (groupIds: Iterable<string>, cardIds: Iterable<string>) => {
+      const groupOrigPositions = new Map<string, { x: number; y: number }>();
+      const movedGroupIds = new Set<string>();
+      const movedGroupBounds: Array<{ x: number; y: number; width: number; height: number }> = [];
+      for (const gid of groupIds) {
+        const group = stateRef.current.groups.find((item) => item.id === gid);
+        if (group) {
+          groupOrigPositions.set(gid, { x: group.x, y: group.y });
+          movedGroupIds.add(gid);
+          if (!group.collapsed) {
+            movedGroupBounds.push({
+              x: group.x,
+              y: group.y,
+              width: group.width,
+              height: group.height,
+            });
+          }
         }
       }
-    }
 
-    const isPointInMovedGroup = (px: number, py: number): boolean =>
-      movedGroupBounds.some(
-        (b) => px >= b.x && px <= b.x + b.width && py >= b.y && py <= b.y + b.height,
+      const isPointInMovedGroup = (px: number, py: number): boolean =>
+        movedGroupBounds.some(
+          (b) => px >= b.x && px <= b.x + b.width && py >= b.y && py <= b.y + b.height,
+        );
+
+      const cardOrigPositions = new Map<string, { x: number; y: number }>();
+      for (const c of stateRef.current.cards) {
+        if (
+          (c.groupId && movedGroupIds.has(c.groupId)) ||
+          (!c.groupId &&
+            movedGroupBounds.length > 0 &&
+            isPointInMovedGroup(c.x + c.width / 2, c.y + c.height / 2))
+        ) {
+          cardOrigPositions.set(c.id, { x: c.x, y: c.y });
+        }
+      }
+      for (const cid of cardIds) {
+        if (!cardOrigPositions.has(cid)) {
+          const c = stateRef.current.cards.find((item) => item.id === cid);
+          if (c) cardOrigPositions.set(cid, { x: c.x, y: c.y });
+        }
+      }
+
+      const strokeOrigPoints = new Map<string, [number, number, number][]>();
+      if (movedGroupIds.size > 0) {
+        for (const s of stateRef.current.strokes) {
+          const belongsToGroup = Boolean(s.parentGroupId && movedGroupIds.has(s.parentGroupId));
+          const enclosesMidpoint =
+            !s.parentGroupId &&
+            movedGroupBounds.length > 0 &&
+            s.points.length > 0 &&
+            (() => {
+              const mid = s.points[Math.floor(s.points.length / 2)]!;
+              return isPointInMovedGroup(mid[0], mid[1]);
+            })();
+          if (belongsToGroup || enclosesMidpoint) {
+            strokeOrigPoints.set(
+              s.id,
+              s.points.map((pt) => [...pt] as [number, number, number]),
+            );
+          }
+        }
+      }
+
+      return { groupOrigPositions, cardOrigPositions, strokeOrigPoints };
+    },
+    [],
+  );
+
+  const handleStartDragCard = useCallback(
+    (cardId: string, e: React.PointerEvent) => {
+      if (e.button !== 0) return;
+      const wp = screenToWorld(e.clientX, e.clientY);
+      const currentSelectedCards = selectedCardIdsRef.current;
+      const currentSelectedGroups = selectedGroupIdsRef.current;
+      const wasSoleSelectedAtDown =
+        !e.shiftKey &&
+        ((currentSelectedCards.size === 1 &&
+          currentSelectedCards.has(cardId) &&
+          currentSelectedGroups.size === 0) ||
+          e.detail >= 2);
+      const allowClickEdit =
+        !e.shiftKey &&
+        !(e.target instanceof Element && Boolean(e.target.closest("img, a, button")));
+      const isCardInSelection = currentSelectedCards.has(cardId);
+      const activeCardIds = isCardInSelection ? Array.from(currentSelectedCards) : [cardId];
+      const activeGroupIds = isCardInSelection ? Array.from(currentSelectedGroups) : [];
+      const { groupOrigPositions, cardOrigPositions, strokeOrigPoints } = captureMoveOrigins(
+        activeGroupIds,
+        activeCardIds,
       );
 
-    const cardOrigPositions = new Map<string, { x: number; y: number }>();
-    for (const c of stateRef.current.cards) {
-      if (
-        (c.groupId && movedGroupIds.has(c.groupId)) ||
-        (!c.groupId &&
-          movedGroupBounds.length > 0 &&
-          isPointInMovedGroup(c.x + c.width / 2, c.y + c.height / 2))
-      ) {
-        cardOrigPositions.set(c.id, { x: c.x, y: c.y });
-      }
-    }
-    for (const cid of cardIds) {
-      if (!cardOrigPositions.has(cid)) {
-        const c = stateRef.current.cards.find((item) => item.id === cid);
-        if (c) cardOrigPositions.set(cid, { x: c.x, y: c.y });
-      }
-    }
+      dragCardsRef.current = {
+        pointerId: e.pointerId,
+        startClientX: e.clientX,
+        startClientY: e.clientY,
+        startWorldX: wp.x,
+        startWorldY: wp.y,
+        initialPositions: cardOrigPositions,
+        groupOrigPositions,
+        strokeOrigPoints,
+        primaryCardId: cardId,
+        snapshotBefore: snapshotOf(stateRef.current),
+        moved: false,
+        wasSoleSelectedAtDown,
+        shiftKey: e.shiftKey,
+        allowClickEdit,
+      };
+    },
+    [captureMoveOrigins, screenToWorld],
+  );
 
-    const strokeOrigPoints = new Map<string, [number, number, number][]>();
-    if (movedGroupIds.size > 0) {
-      for (const s of stateRef.current.strokes) {
-        const belongsToGroup = Boolean(s.parentGroupId && movedGroupIds.has(s.parentGroupId));
-        const enclosesMidpoint =
-          !s.parentGroupId &&
-          movedGroupBounds.length > 0 &&
-          s.points.length > 0 &&
-          (() => {
-            const mid = s.points[Math.floor(s.points.length / 2)]!;
-            return isPointInMovedGroup(mid[0], mid[1]);
-          })();
-        if (belongsToGroup || enclosesMidpoint) {
-          strokeOrigPoints.set(
-            s.id,
-            s.points.map((pt) => [...pt] as [number, number, number]),
-          );
+  const handleStartDragGroup = useCallback(
+    (groupId: string, e: React.PointerEvent) => {
+      if (e.button !== 0) return;
+      const group = stateRef.current.groups.find((g) => g.id === groupId);
+      if (!group) return;
+
+      const currentSelectedGroups = selectedGroupIdsRef.current;
+      const currentSelectedCards = selectedCardIdsRef.current;
+      let activeGroupIds: string[];
+      let activeCardIds: string[];
+
+      if (e.shiftKey) {
+        const nextGroups = new Set(currentSelectedGroups);
+        if (nextGroups.has(groupId)) {
+          nextGroups.delete(groupId);
+          selectedGroupIdsRef.current = nextGroups;
+          setSelectedGroupIds(nextGroups);
+          setSelectedEdgeId(null);
+          return;
         }
-      }
-    }
-
-    return { groupOrigPositions, cardOrigPositions, strokeOrigPoints };
-  };
-
-  const handleStartDragCard = (cardId: string, e: React.PointerEvent) => {
-    if (e.button !== 0) return;
-    const wp = screenToWorld(e.clientX, e.clientY);
-    const currentSelectedCards = selectedCardIdsRef.current;
-    const currentSelectedGroups = selectedGroupIdsRef.current;
-    const wasSoleSelectedAtDown =
-      !e.shiftKey &&
-      ((currentSelectedCards.size === 1 &&
-        currentSelectedCards.has(cardId) &&
-        currentSelectedGroups.size === 0) ||
-        e.detail >= 2);
-    const allowClickEdit =
-      !e.shiftKey && !(e.target instanceof Element && Boolean(e.target.closest("img, a, button")));
-    const isCardInSelection = currentSelectedCards.has(cardId);
-    const activeCardIds = isCardInSelection ? Array.from(currentSelectedCards) : [cardId];
-    const activeGroupIds = isCardInSelection ? Array.from(currentSelectedGroups) : [];
-    const { groupOrigPositions, cardOrigPositions, strokeOrigPoints } = captureMoveOrigins(
-      activeGroupIds,
-      activeCardIds,
-    );
-
-    dragCardsRef.current = {
-      pointerId: e.pointerId,
-      startClientX: e.clientX,
-      startClientY: e.clientY,
-      startWorldX: wp.x,
-      startWorldY: wp.y,
-      initialPositions: cardOrigPositions,
-      groupOrigPositions,
-      strokeOrigPoints,
-      primaryCardId: cardId,
-      snapshotBefore: snapshotOf(stateRef.current),
-      moved: false,
-      wasSoleSelectedAtDown,
-      shiftKey: e.shiftKey,
-      allowClickEdit,
-    };
-  };
-
-  const handleStartDragGroup = (groupId: string, e: React.PointerEvent) => {
-    if (e.button !== 0) return;
-    const group = stateRef.current.groups.find((g) => g.id === groupId);
-    if (!group) return;
-
-    const currentSelectedGroups = selectedGroupIdsRef.current;
-    const currentSelectedCards = selectedCardIdsRef.current;
-    let activeGroupIds: string[];
-    let activeCardIds: string[];
-
-    if (e.shiftKey) {
-      const nextGroups = new Set(currentSelectedGroups);
-      if (nextGroups.has(groupId)) {
-        nextGroups.delete(groupId);
+        nextGroups.add(groupId);
         selectedGroupIdsRef.current = nextGroups;
         setSelectedGroupIds(nextGroups);
         setSelectedEdgeId(null);
-        return;
+        activeGroupIds = Array.from(nextGroups);
+        activeCardIds = Array.from(currentSelectedCards);
+      } else if (currentSelectedGroups.has(groupId)) {
+        activeGroupIds = Array.from(currentSelectedGroups);
+        activeCardIds = Array.from(currentSelectedCards);
+      } else {
+        const nextGroups = new Set([groupId]);
+        selectedGroupIdsRef.current = nextGroups;
+        setSelectedGroupIds(nextGroups);
+        selectedCardIdsRef.current = new Set();
+        setSelectedCardIds(new Set());
+        setSelectedEdgeId(null);
+        activeGroupIds = [groupId];
+        activeCardIds = [];
       }
-      nextGroups.add(groupId);
-      selectedGroupIdsRef.current = nextGroups;
-      setSelectedGroupIds(nextGroups);
+
+      const wp = screenToWorld(e.clientX, e.clientY);
+      const { groupOrigPositions, cardOrigPositions, strokeOrigPoints } = captureMoveOrigins(
+        activeGroupIds,
+        activeCardIds,
+      );
+
+      dragGroupRef.current = {
+        groupId,
+        startWorldX: wp.x,
+        startWorldY: wp.y,
+        groupOrigPositions,
+        childOrigPositions: cardOrigPositions,
+        strokeOrigPoints,
+        snapshotBefore: snapshotOf(stateRef.current),
+        moved: false,
+        shiftKey: e.shiftKey,
+      };
+      try {
+        containerRef.current?.setPointerCapture(e.pointerId);
+      } catch {
+        // ignore
+      }
+    },
+    [captureMoveOrigins, screenToWorld],
+  );
+
+  const handleStartResize = useCallback(
+    (
+      kind: "card" | "group",
+      id: string,
+      e: React.PointerEvent,
+      axis: "both" | "width" | "height" = "both",
+    ) => {
+      if (e.button !== 0) return;
+      const wp = screenToWorld(e.clientX, e.clientY);
+      const target =
+        kind === "card"
+          ? stateRef.current.cards.find((c) => c.id === id)
+          : stateRef.current.groups.find((g) => g.id === id);
+      if (!target) return;
+
+      resizeGestureRef.current = {
+        kind,
+        id,
+        axis,
+        startWorldX: wp.x,
+        startWorldY: wp.y,
+        origW: target.width,
+        origH: target.height,
+        snapshotBefore: snapshotOf(stateRef.current),
+        changed: false,
+      };
+      try {
+        containerRef.current?.setPointerCapture(e.pointerId);
+      } catch {
+        // ignore
+      }
+    },
+    [screenToWorld],
+  );
+
+  const handleSelectGroup = useCallback((groupId: string, ev: React.PointerEvent) => {
+    if (ev.button === 2) {
+      if (!selectedGroupIdsRef.current.has(groupId)) {
+        const nextGroups = new Set([groupId]);
+        selectedGroupIdsRef.current = nextGroups;
+        setSelectedGroupIds(nextGroups);
+        selectedCardIdsRef.current = new Set();
+        setSelectedCardIds(new Set());
+        setSelectedEdgeId(null);
+      }
+      return;
+    }
+    if (ev.shiftKey) {
+      const next = new Set(selectedGroupIdsRef.current);
+      if (next.has(groupId)) next.delete(groupId);
+      else next.add(groupId);
+      selectedGroupIdsRef.current = next;
+      setSelectedGroupIds(next);
       setSelectedEdgeId(null);
-      activeGroupIds = Array.from(nextGroups);
-      activeCardIds = Array.from(currentSelectedCards);
-    } else if (currentSelectedGroups.has(groupId)) {
-      activeGroupIds = Array.from(currentSelectedGroups);
-      activeCardIds = Array.from(currentSelectedCards);
-    } else {
+      return;
+    }
+    const nextGroups = new Set([groupId]);
+    selectedGroupIdsRef.current = nextGroups;
+    setSelectedGroupIds(nextGroups);
+    selectedCardIdsRef.current = new Set();
+    setSelectedCardIds(new Set());
+    setSelectedEdgeId(null);
+  }, []);
+
+  const handleStartGroupResize = useCallback(
+    (groupId: string, ev: React.PointerEvent) => handleStartResize("group", groupId, ev),
+    [handleStartResize],
+  );
+
+  const handleRenameGroup = useCallback(
+    (groupId: string, nextTitle: string) => {
+      applyWithUndo((prev) => ({
+        ...prev,
+        groups: prev.groups.map((g) => (g.id === groupId ? { ...g, title: nextTitle } : g)),
+      }));
+    },
+    [applyWithUndo],
+  );
+
+  const handleToggleGroupCollapse = useCallback(
+    (groupId: string) => {
+      applyWithUndo((prev) => ({
+        ...prev,
+        groups: prev.groups.map((g) => (g.id === groupId ? { ...g, collapsed: !g.collapsed } : g)),
+      }));
+    },
+    [applyWithUndo],
+  );
+
+  const handleTidyGroup = useCallback(
+    (groupId: string) => {
+      applyWithUndo((prev) => tidyVideoArtboard(prev, groupId));
+    },
+    [applyWithUndo],
+  );
+
+  const handleDeleteSingleGroup = useCallback(
+    (groupId: string) => deleteGroupsByIds(new Set([groupId])),
+    [deleteGroupsByIds],
+  );
+
+  const handleGroupContextMenu = useCallback((groupId: string, ev: React.MouseEvent) => {
+    const currSelectedGroups = selectedGroupIdsRef.current;
+    const targetGroupIds = currSelectedGroups.has(groupId)
+      ? Array.from(currSelectedGroups)
+      : [groupId];
+    if (!currSelectedGroups.has(groupId)) {
       const nextGroups = new Set([groupId]);
       selectedGroupIdsRef.current = nextGroups;
       setSelectedGroupIds(nextGroups);
       selectedCardIdsRef.current = new Set();
       setSelectedCardIds(new Set());
       setSelectedEdgeId(null);
-      activeGroupIds = [groupId];
-      activeCardIds = [];
     }
+    setContextMenu({
+      kind: "artboard",
+      clientX: ev.clientX,
+      clientY: ev.clientY,
+      groupIds: targetGroupIds,
+    });
+  }, []);
 
-    const wp = screenToWorld(e.clientX, e.clientY);
-    const { groupOrigPositions, cardOrigPositions, strokeOrigPoints } = captureMoveOrigins(
-      activeGroupIds,
-      activeCardIds,
-    );
-
-    dragGroupRef.current = {
-      groupId,
-      startWorldX: wp.x,
-      startWorldY: wp.y,
-      groupOrigPositions,
-      childOrigPositions: cardOrigPositions,
-      strokeOrigPoints,
-      snapshotBefore: snapshotOf(stateRef.current),
-      moved: false,
-      shiftKey: e.shiftKey,
-    };
-    try {
-      containerRef.current?.setPointerCapture(e.pointerId);
-    } catch {
-      // ignore
+  const handleSelectCard = useCallback((cardId: string, ev: React.PointerEvent) => {
+    if (ev.shiftKey) {
+      const next = new Set(selectedCardIdsRef.current);
+      if (next.has(cardId)) next.delete(cardId);
+      else next.add(cardId);
+      selectedCardIdsRef.current = next;
+      setSelectedCardIds(next);
+    } else if (!selectedCardIdsRef.current.has(cardId)) {
+      const next = new Set([cardId]);
+      selectedCardIdsRef.current = next;
+      setSelectedCardIds(next);
+      selectedGroupIdsRef.current = new Set();
+      setSelectedGroupIds(new Set());
     }
-  };
+    setSelectedEdgeId(null);
+  }, []);
 
-  const handleStartResize = (
-    kind: "card" | "group",
-    id: string,
-    e: React.PointerEvent,
-    axis: "both" | "width" | "height" = "both",
-  ) => {
-    if (e.button !== 0) return;
-    const wp = screenToWorld(e.clientX, e.clientY);
-    const target =
-      kind === "card"
-        ? stateRef.current.cards.find((c) => c.id === id)
-        : stateRef.current.groups.find((g) => g.id === id);
-    if (!target) return;
+  const handleStartCardResize = useCallback(
+    (cardId: string, ev: React.PointerEvent, axis?: "both" | "width" | "height") =>
+      handleStartResize("card", cardId, ev, axis),
+    [handleStartResize],
+  );
 
-    resizeGestureRef.current = {
-      kind,
-      id,
-      axis,
-      startWorldX: wp.x,
-      startWorldY: wp.y,
-      origW: target.width,
-      origH: target.height,
-      snapshotBefore: snapshotOf(stateRef.current),
-      changed: false,
-    };
-    try {
-      containerRef.current?.setPointerCapture(e.pointerId);
-    } catch {
-      // ignore
-    }
-  };
+  const handleCommitCardHtml = useCallback(
+    (cardId: string, html: string) => persistCardDraft(cardId, html, { updateLayout: false }),
+    [persistCardDraft],
+  );
+
+  const handleMeasuredCardHeightGrow = useCallback((cardId: string, measuredHeight: number) => {
+    setCanvasState((prev) => applyCardHeightUpdate(prev, cardId, measuredHeight));
+  }, []);
+
+  const handleDeleteSingleCard = useCallback(
+    (cardId: string) => deleteCardsByIds(new Set([cardId])),
+    [deleteCardsByIds],
+  );
+
+  const handleStartCardConnect = useCallback(
+    (cardId: string, ev: React.PointerEvent, side: CanvasSide) => {
+      const wp = screenToWorld(ev.clientX, ev.clientY);
+      setConnectingFrom({
+        cardId,
+        fromSide: side,
+        startClient: { x: ev.clientX, y: ev.clientY },
+        pointerWorld: wp,
+      });
+      setTool("connect");
+    },
+    [screenToWorld],
+  );
+
+  const handleCardContextMenu = useCallback(
+    (card: CanvasCard, ev: React.MouseEvent) => {
+      const currSelected = selectedCardIdsRef.current;
+      const targetIds = currSelected.has(card.id) ? Array.from(currSelected) : [card.id];
+      if (!currSelected.has(card.id)) {
+        const next = new Set([card.id]);
+        selectedCardIdsRef.current = next;
+        setSelectedCardIds(next);
+        selectedGroupIdsRef.current = new Set();
+        setSelectedGroupIds(new Set());
+        setSelectedEdgeId(null);
+      }
+      const cardImgEl =
+        card.type === "image"
+          ? ((ev.currentTarget as Element | null)?.querySelector("img") ?? null)
+          : null;
+      const fallbackImageSrc =
+        card.type === "image"
+          ? cardImgEl?.currentSrc || cardImgEl?.src || card.imageSrc || null
+          : null;
+      const analysis = inspectAppContextTarget({
+        clientX: ev.clientX,
+        clientY: ev.clientY,
+        target: ev.target,
+        fallbackImageSrc,
+      });
+      const cardLabel =
+        card.originLessonIdx !== undefined
+          ? `${formatCanvasLessonCode(lessons, card.originLessonIdx)} · ${formatTimestamp(card.timestamp ?? 0)}`
+          : card.caption || "Image";
+      setContextMenu({
+        kind: "cards",
+        clientX: ev.clientX,
+        clientY: ev.clientY,
+        cardIds: targetIds,
+        analysis,
+        onOpenImage: (src) => setLightboxImage({ src, label: cardLabel }),
+      });
+    },
+    [lessons],
+  );
+
+  const handleOpenCardLightbox = useCallback(
+    (src: string, card: CanvasCard) => {
+      setLightboxImage({
+        src,
+        label:
+          card.originLessonIdx !== undefined
+            ? `${formatCanvasLessonCode(lessons, card.originLessonIdx)} · ${formatTimestamp(card.timestamp ?? 0)}`
+            : card.caption || "Image",
+      });
+    },
+    [lessons],
+  );
+
+  const handleUpdateImageCaption = useCallback(
+    (cardId: string, caption: string) => {
+      applyWithUndo((prev) => ({
+        ...prev,
+        cards: prev.cards.map((c) => (c.id === cardId ? { ...c, caption } : c)),
+      }));
+    },
+    [applyWithUndo],
+  );
 
   const groupCounts = useMemo(() => {
     const counts = new Map<string, number>();
@@ -1999,77 +2359,15 @@ export function CourseCanvasPage({ course }: { course: Course }) {
               childCount={groupCounts.get(group.id) ?? 0}
               renameSignal={renameGroupSignal?.groupId === group.id ? renameGroupSignal.seq : 0}
               pointerEventsDisabled={stageInterceptsCards}
-              onSelect={(ev) => {
-                if (ev.button === 2) {
-                  if (!selectedGroupIdsRef.current.has(group.id)) {
-                    const nextGroups = new Set([group.id]);
-                    selectedGroupIdsRef.current = nextGroups;
-                    setSelectedGroupIds(nextGroups);
-                    selectedCardIdsRef.current = new Set();
-                    setSelectedCardIds(new Set());
-                    setSelectedEdgeId(null);
-                  }
-                  return;
-                }
-                if (ev.shiftKey) {
-                  const next = new Set(selectedGroupIdsRef.current);
-                  if (next.has(group.id)) next.delete(group.id);
-                  else next.add(group.id);
-                  selectedGroupIdsRef.current = next;
-                  setSelectedGroupIds(next);
-                  setSelectedEdgeId(null);
-                  return;
-                }
-                const nextGroups = new Set([group.id]);
-                selectedGroupIdsRef.current = nextGroups;
-                setSelectedGroupIds(nextGroups);
-                selectedCardIdsRef.current = new Set();
-                setSelectedCardIds(new Set());
-                setSelectedEdgeId(null);
-              }}
-              onStartDragHeader={(ev) => handleStartDragGroup(group.id, ev)}
-              onStartDragEdge={(ev) => handleStartDragGroup(group.id, ev)}
-              onStartResize={(ev) => handleStartResize("group", group.id, ev)}
-              onRename={(nextTitle) => {
-                applyWithUndo((prev) => ({
-                  ...prev,
-                  groups: prev.groups.map((g) =>
-                    g.id === group.id ? { ...g, title: nextTitle } : g,
-                  ),
-                }));
-              }}
-              onToggleCollapse={() => {
-                applyWithUndo((prev) => ({
-                  ...prev,
-                  groups: prev.groups.map((g) =>
-                    g.id === group.id ? { ...g, collapsed: !g.collapsed } : g,
-                  ),
-                }));
-              }}
-              onTidy={() => {
-                applyWithUndo((prev) => tidyVideoArtboard(prev, group.id));
-              }}
-              onDelete={() => deleteGroupsByIds(new Set([group.id]))}
-              onContextMenu={(ev) => {
-                const currSelectedGroups = selectedGroupIdsRef.current;
-                const targetGroupIds = currSelectedGroups.has(group.id)
-                  ? Array.from(currSelectedGroups)
-                  : [group.id];
-                if (!currSelectedGroups.has(group.id)) {
-                  const nextGroups = new Set([group.id]);
-                  selectedGroupIdsRef.current = nextGroups;
-                  setSelectedGroupIds(nextGroups);
-                  selectedCardIdsRef.current = new Set();
-                  setSelectedCardIds(new Set());
-                  setSelectedEdgeId(null);
-                }
-                setContextMenu({
-                  kind: "artboard",
-                  clientX: ev.clientX,
-                  clientY: ev.clientY,
-                  groupIds: targetGroupIds,
-                });
-              }}
+              onSelect={handleSelectGroup}
+              onStartDragHeader={handleStartDragGroup}
+              onStartDragEdge={handleStartDragGroup}
+              onStartResize={handleStartGroupResize}
+              onRename={handleRenameGroup}
+              onToggleCollapse={handleToggleGroupCollapse}
+              onTidy={handleTidyGroup}
+              onDelete={handleDeleteSingleGroup}
+              onContextMenu={handleGroupContextMenu}
             />
           ))}
         </div>
@@ -2138,99 +2436,21 @@ export function CourseCanvasPage({ course }: { course: Course }) {
                 }
                 isConnectMode={tool === "connect" || Boolean(connectingFrom)}
                 pointerEventsDisabled={stageInterceptsCards}
-                onSelect={(ev) => {
-                  if (ev.shiftKey) {
-                    const next = new Set(selectedCardIdsRef.current);
-                    if (next.has(card.id)) next.delete(card.id);
-                    else next.add(card.id);
-                    selectedCardIdsRef.current = next;
-                    setSelectedCardIds(next);
-                  } else if (!selectedCardIdsRef.current.has(card.id)) {
-                    const next = new Set([card.id]);
-                    selectedCardIdsRef.current = next;
-                    setSelectedCardIds(next);
-                    selectedGroupIdsRef.current = new Set();
-                    setSelectedGroupIds(new Set());
-                  }
-                  setSelectedEdgeId(null);
-                }}
-                onStartDrag={(ev) => handleStartDragCard(card.id, ev)}
-                onStartResize={(ev, axis) => handleStartResize("card", card.id, ev, axis)}
-                onStartEdit={() => startEditingCard(card.id)}
+                onSelect={handleSelectCard}
+                onStartDrag={handleStartDragCard}
+                onStartResize={handleStartCardResize}
+                onStartEdit={startEditingCard}
                 onFinishEdit={commitPendingEdit}
-                onDraftChange={(html) => handleDraftChange(card.id, html)}
-                onCommitHtml={(html) => persistCardDraft(card.id, html, { updateLayout: false })}
-                onMeasuredHeightGrow={(measuredHeight) => {
-                  setCanvasState((prev) => applyCardHeightUpdate(prev, card.id, measuredHeight));
-                }}
-                onReturnToOriginGroup={() => handleReturnCardToOrigin(card.id)}
-                onDelete={() => deleteCardsByIds(new Set([card.id]))}
-                onContextMenu={(ev) => {
-                  const currSelected = selectedCardIdsRef.current;
-                  const targetIds = currSelected.has(card.id)
-                    ? Array.from(currSelected)
-                    : [card.id];
-                  if (!currSelected.has(card.id)) {
-                    const next = new Set([card.id]);
-                    selectedCardIdsRef.current = next;
-                    setSelectedCardIds(next);
-                    selectedGroupIdsRef.current = new Set();
-                    setSelectedGroupIds(new Set());
-                    setSelectedEdgeId(null);
-                  }
-                  const cardImgEl =
-                    card.type === "image"
-                      ? ((ev.currentTarget as Element | null)?.querySelector("img") ?? null)
-                      : null;
-                  const fallbackImageSrc =
-                    card.type === "image"
-                      ? cardImgEl?.currentSrc || cardImgEl?.src || card.imageSrc || null
-                      : null;
-                  const analysis = inspectAppContextTarget({
-                    clientX: ev.clientX,
-                    clientY: ev.clientY,
-                    target: ev.target,
-                    fallbackImageSrc,
-                  });
-                  const cardLabel =
-                    card.originLessonIdx !== undefined
-                      ? `${formatCanvasLessonCode(lessons, card.originLessonIdx)} · ${formatTimestamp(card.timestamp ?? 0)}`
-                      : card.caption || "Image";
-                  setContextMenu({
-                    kind: "cards",
-                    clientX: ev.clientX,
-                    clientY: ev.clientY,
-                    cardIds: targetIds,
-                    analysis,
-                    onOpenImage: (src) => setLightboxImage({ src, label: cardLabel }),
-                  });
-                }}
-                onStartConnect={(ev, side) => {
-                  const wp = screenToWorld(ev.clientX, ev.clientY);
-                  setConnectingFrom({
-                    cardId: card.id,
-                    fromSide: side,
-                    startClient: { x: ev.clientX, y: ev.clientY },
-                    pointerWorld: wp,
-                  });
-                  setTool("connect");
-                }}
-                onCompleteConnect={(ev, side) => handleCompleteConnect(card.id, ev, side)}
-                onOpenLightbox={(src, c) =>
-                  setLightboxImage({
-                    src,
-                    label:
-                      c.originLessonIdx !== undefined
-                        ? `${formatCanvasLessonCode(lessons, c.originLessonIdx)} · ${formatTimestamp(c.timestamp ?? 0)}`
-                        : c.caption || "Image",
-                  })
-                }
-                onUpdateImageCaption={(caption) => {
-                  applyWithUndo((prev) => ({
-                    ...prev,
-                    cards: prev.cards.map((c) => (c.id === card.id ? { ...c, caption } : c)),
-                  }));
-                }}
+                onDraftChange={handleDraftChange}
+                onCommitHtml={handleCommitCardHtml}
+                onMeasuredHeightGrow={handleMeasuredCardHeightGrow}
+                onReturnToOriginGroup={handleReturnCardToOrigin}
+                onDelete={handleDeleteSingleCard}
+                onContextMenu={handleCardContextMenu}
+                onStartConnect={handleStartCardConnect}
+                onCompleteConnect={handleCompleteConnect}
+                onOpenLightbox={handleOpenCardLightbox}
+                onUpdateImageCaption={handleUpdateImageCaption}
               />
             );
           })}

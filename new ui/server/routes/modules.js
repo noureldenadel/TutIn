@@ -1,6 +1,8 @@
 import express from 'express'
 import { getAll, getOne, run, transaction } from '../database.js'
 import { recalculateCourseProgress } from './courses.js'
+import { syncCourseNotesToVault } from './notes.js'
+import { deleteLinkedCanvasNodesForNotes, syncCourseCanvasToVault } from './canvas.js'
 
 const router = express.Router()
 
@@ -104,9 +106,23 @@ router.put('/:id', (req, res) => {
 router.delete('/:id', (req, res) => {
     try {
         const mod = getOne('SELECT course_id FROM modules WHERE id = ?', [req.params.id])
-        run('DELETE FROM modules WHERE id = ?', [req.params.id])
+        const noteIds = getAll(
+            `SELECT n.id FROM notes n INNER JOIN videos v ON n.video_id = v.id WHERE v.module_id = ?`,
+            [req.params.id]
+        ).map(n => n.id)
+        let removedCanvasNodes = 0
+
+        transaction(() => {
+            if (mod?.course_id && noteIds.length > 0) {
+                removedCanvasNodes = deleteLinkedCanvasNodesForNotes(mod.course_id, noteIds)
+            }
+            run('DELETE FROM modules WHERE id = ?', [req.params.id])
+        })
+
         if (mod?.course_id) {
             recalculateCourseProgress(mod.course_id)
+            if (noteIds.length > 0) syncCourseNotesToVault(mod.course_id)
+            if (removedCanvasNodes > 0) syncCourseCanvasToVault(mod.course_id)
         }
         res.json({ success: true })
     } catch (err) {

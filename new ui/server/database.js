@@ -255,6 +255,7 @@ function runMigrations() {
         { name: '005_course_language', fn: migration005 },
         { name: '006_primary_transcript', fn: migration006 },
         { name: '007_canvas_v2_schema', fn: migration007 },
+        { name: '008_cleanup_orphaned_video_nodes', fn: migration008 },
     ]
 
     for (const migration of migrations) {
@@ -498,7 +499,7 @@ function migration003() {
             created_at TEXT,
             updated_at TEXT,
             FOREIGN KEY (course_id) REFERENCES courses(id) ON DELETE CASCADE,
-            FOREIGN KEY (note_id) REFERENCES notes(id) ON DELETE SET NULL
+            FOREIGN KEY (note_id) REFERENCES notes(id) ON DELETE CASCADE
         )`,
         `CREATE INDEX IF NOT EXISTS idx_canvas_nodes_course ON canvas_nodes(course_id)`,
         `CREATE TABLE IF NOT EXISTS canvas_edges (
@@ -633,4 +634,21 @@ function migration007() {
     for (const stmt of statements) {
         db.run(stmt)
     }
+}
+
+/**
+ * Migration 008: Clean up orphaned video-note cards left by prior ON DELETE SET NULL FK
+ */
+function migration008() {
+    db.run(`
+        DELETE FROM canvas_nodes
+        WHERE type = 'video-note'
+          AND COALESCE(is_canvas_only, 0) = 0
+          AND (note_id IS NULL OR note_id NOT IN (SELECT id FROM notes))
+    `)
+    db.run(`
+        DELETE FROM canvas_edges
+        WHERE from_node_id NOT IN (SELECT id FROM canvas_nodes)
+           OR to_node_id NOT IN (SELECT id FROM canvas_nodes)
+    `)
 }

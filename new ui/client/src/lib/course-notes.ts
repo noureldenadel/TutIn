@@ -17,13 +17,10 @@ export interface NoteItem {
 }
 
 export const NOTES_CHANGED_EVENT = "tutin:notes_changed";
+export type NoteChangeSource = "player" | "canvas" | "fetch" | "rollback";
 
 const courseNotesCache = new Map<string, NoteItem[]>();
 const notesRevisionByCourse = new Map<string, number>();
-
-export function getNotesStorageKey(courseId: string): string {
-  return `tutin_course_notes_${courseId}`;
-}
 
 export function getNextNotesRevision(courseId: string): number {
   const next = (notesRevisionByCourse.get(courseId) ?? 0) + 1;
@@ -128,41 +125,22 @@ function mapApiNoteRow(
   };
 }
 
-function emitNotesChanged(courseId: string, notes: NoteItem[], revision?: number): void {
+function emitNotesChanged(
+  courseId: string,
+  notes: NoteItem[],
+  revision?: number,
+  source: NoteChangeSource = "player",
+): void {
   const cloned = notes.map(cloneNote);
   courseNotesCache.set(courseId, cloned);
   const rev = revision ?? getNextNotesRevision(courseId);
   if (typeof window !== "undefined") {
     window.dispatchEvent(
       new CustomEvent(NOTES_CHANGED_EVENT, {
-        detail: { courseId, notes: cloned, revision: rev },
+        detail: { courseId, notes: cloned, revision: rev, source },
       }),
     );
   }
-}
-
-export function remapCachedNotesLessonIndices(
-  courseId: string,
-  lessons: CourseLessonItem[],
-): NoteItem[] {
-  const current = courseNotesCache.get(courseId);
-  if (!current || lessons.length === 0) return current ? current.map(cloneNote) : [];
-
-  let changed = false;
-  const remapped = current.map((n) => {
-    if (!n.videoId) return n;
-    const idx = lessons.findIndex((l) => l.lessonId === n.videoId);
-    if (idx >= 0 && idx !== n.lessonIdx) {
-      changed = true;
-      return { ...n, lessonIdx: idx };
-    }
-    return n;
-  });
-
-  if (changed) {
-    emitNotesChanged(courseId, remapped);
-  }
-  return remapped.map(cloneNote);
 }
 
 export async function fetchCourseNotes(
@@ -176,7 +154,7 @@ export async function fetchCourseNotes(
   const mapped = Array.isArray(rows)
     ? rows.map((row) => mapApiNoteRow(row, courseId, lessons))
     : [];
-  emitNotesChanged(courseId, mapped);
+  emitNotesChanged(courseId, mapped, undefined, "fetch");
   return mapped.map(cloneNote);
 }
 
@@ -184,77 +162,13 @@ export function getCourseNotes(courseId: string): NoteItem[] {
   return (courseNotesCache.get(courseId) ?? []).map(cloneNote);
 }
 
-export function saveCourseNotes(
-  courseId: string,
-  notes: NoteItem[],
-  options?: { syncServer?: boolean },
-): NoteItem[] {
-  const prev = courseNotesCache.get(courseId) ?? [];
-  const next = notes.map(cloneNote);
-  emitNotesChanged(courseId, next);
-
-  if (options?.syncServer !== false && typeof window !== "undefined") {
-    const prevById = new Map(prev.map((n) => [n.id, n]));
-    const nextIds = new Set(next.map((n) => n.id));
-
-    for (const removed of prev) {
-      if (!nextIds.has(removed.id)) {
-        void apiRequest(`/api/notes/${encodeURIComponent(removed.id)}`, {
-          method: "DELETE",
-        });
-      }
-    }
-
-    for (const item of next) {
-      const old = prevById.get(item.id);
-      if (!old) {
-        if (item.videoId) {
-          void apiRequest("/api/notes", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              id: item.id,
-              videoId: item.videoId,
-              courseId,
-              timestamp: item.timestamp,
-              content: item.content,
-              isBookmark: Boolean(item.isBookmark),
-              tags: item.tags ?? [],
-              images: item.images,
-            }),
-          });
-        }
-      } else if (
-        old.content !== item.content ||
-        old.timestamp !== item.timestamp ||
-        old.images.length !== item.images.length
-      ) {
-        void apiRequest(`/api/notes/${encodeURIComponent(item.id)}`, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            content: item.content,
-            timestamp: item.timestamp,
-            images: item.images,
-            tags: item.tags ?? [],
-          }),
-        });
-      }
-    }
-  }
-
-  return next.map(cloneNote);
-}
-
 export async function createNoteOnServer(courseId: string, note: NoteItem): Promise<NoteItem> {
-  const existing = getCourseNotes(courseId);
   const withCreatedAt: NoteItem = {
     ...note,
     courseId,
     createdAt: note.createdAt || Date.now(),
     updatedAt: Date.now(),
   };
-  emitNotesChanged(courseId, [...existing, withCreatedAt]);
 
   await apiJson<{ success: boolean; id: string }>("/api/notes", {
     method: "POST",
@@ -270,61 +184,17 @@ export async function createNoteOnServer(courseId: string, note: NoteItem): Prom
       images: withCreatedAt.images,
     }),
   });
-  return withCreatedAt;
-}
 
-export function upsertCourseNote(courseId: string, note: NoteItem): NoteItem[] {
   const existing = getCourseNotes(courseId);
-  const idx = existing.findIndex((n) => n.id === note.id);
-  const now = Date.now();
-  const nextNote: NoteItem = {
-    ...note,
-    courseId,
-    updatedAt: now,
-  };
-
-  let nextList: NoteItem[];
-  if (idx >= 0) {
-    nextList = [...existing];
-    nextList[idx] = nextNote;
-    emitNotesChanged(courseId, nextList);
-    void apiRequest(`/api/notes/${encodeURIComponent(note.id)}`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        content: nextNote.content,
-        timestamp: nextNote.timestamp,
-        images: nextNote.images,
-        tags: nextNote.tags ?? [],
-      }),
-    });
-  } else {
-    nextList = [...existing, nextNote];
-    emitNotesChanged(courseId, nextList);
-    if (nextNote.videoId) {
-      void apiRequest("/api/notes", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          id: nextNote.id,
-          videoId: nextNote.videoId,
-          courseId,
-          timestamp: nextNote.timestamp,
-          content: nextNote.content,
-          isBookmark: Boolean(nextNote.isBookmark),
-          tags: nextNote.tags ?? [],
-          images: nextNote.images,
-        }),
-      });
-    }
-  }
-  return nextList;
+  emitNotesChanged(courseId, [...existing, withCreatedAt], undefined, "player");
+  return withCreatedAt;
 }
 
 export function updateCourseNoteContent(
   courseId: string,
   noteId: string,
   htmlContent: string,
+  options?: { source?: NoteChangeSource },
 ): NoteItem[] {
   const existing = getCourseNotes(courseId);
   const now = Date.now();
@@ -339,7 +209,7 @@ export function updateCourseNoteContent(
         }
       : n,
   );
-  emitNotesChanged(courseId, nextList);
+  emitNotesChanged(courseId, nextList, undefined, options?.source ?? "player");
   void apiRequest(`/api/notes/${encodeURIComponent(noteId)}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
@@ -347,30 +217,61 @@ export function updateCourseNoteContent(
       content: htmlContent,
       images: nextImages,
     }),
-  });
+    keepalive: true,
+  })
+    .then((res) => {
+      if (!res.ok) {
+        console.error(`[CourseNotes] Failed to update note ${noteId}: ${res.status}`);
+        emitNotesChanged(courseId, existing, undefined, "rollback");
+      }
+    })
+    .catch((err) => {
+      console.error(`[CourseNotes] Failed to update note ${noteId}:`, err);
+      emitNotesChanged(courseId, existing, undefined, "rollback");
+    });
   return nextList;
 }
 
-export function deleteCourseNoteById(courseId: string, noteId: string): NoteItem[] {
+export function deleteCourseNoteById(
+  courseId: string,
+  noteId: string,
+  options?: { source?: NoteChangeSource },
+): NoteItem[] {
   const existing = getCourseNotes(courseId);
   const nextList = existing.filter((n) => n.id !== noteId);
-  emitNotesChanged(courseId, nextList);
+  emitNotesChanged(courseId, nextList, undefined, options?.source ?? "player");
   void apiRequest(`/api/notes/${encodeURIComponent(noteId)}`, {
     method: "DELETE",
-  });
+    keepalive: true,
+  })
+    .then((res) => {
+      if (!res.ok) {
+        console.error(`[CourseNotes] Failed to delete note ${noteId}: ${res.status}`);
+        emitNotesChanged(courseId, existing, undefined, "rollback");
+      }
+    })
+    .catch((err) => {
+      console.error(`[CourseNotes] Failed to delete note ${noteId}:`, err);
+      emitNotesChanged(courseId, existing, undefined, "rollback");
+    });
   return nextList;
 }
 
 export function subscribeCourseNotesChanged(
   courseId: string,
-  listener: (notes: NoteItem[]) => void,
+  listener: (notes: NoteItem[], meta?: { source?: NoteChangeSource | undefined }) => void,
 ): () => void {
   if (typeof window === "undefined") return () => {};
 
   const onCustom = (e: Event) => {
-    const detail = (e as CustomEvent<{ courseId?: string; notes?: NoteItem[] }>).detail;
+    const detail = (
+      e as CustomEvent<{ courseId?: string; notes?: NoteItem[]; source?: NoteChangeSource }>
+    ).detail;
     if (detail?.courseId === courseId && Array.isArray(detail.notes)) {
-      listener(detail.notes.map(cloneNote));
+      listener(
+        detail.notes.map(cloneNote),
+        detail.source !== undefined ? { source: detail.source } : undefined,
+      );
     }
   };
 

@@ -1,9 +1,11 @@
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type CSSProperties,
+  type ClipboardEvent as ReactClipboardEvent,
   type ReactNode,
 } from "react";
 import {
@@ -57,6 +59,7 @@ import {
   restoreCaretBookmark,
   sanitizeClipboardHtml,
   sanitizeHttpUrl,
+  sanitizeStoredNoteHtml,
   stripLiveSyntaxArtifacts,
   stripSyntaxBeforeExecCommand,
   syncImageTailParagraphs,
@@ -67,7 +70,9 @@ import {
   unwrapEmptyInlinePairOnSpace,
   wrapSelectionAsLink,
 } from "@/components/notes/note-markdown";
+import { copyImageToClipboard } from "@/lib/clipboard";
 import {
+  extractSameCourseVaultImageUrisFromHtml,
   hydrateContainerMedia,
   isMediaUri,
   resolveMediaUrl,
@@ -75,6 +80,7 @@ import {
   saveMediaFile,
   serializeContainerMediaHtml,
   useResolvedNoteHtml,
+  verifyVaultMediaExists,
 } from "@/lib/media-store";
 import {
   inspectAppContextTarget,
@@ -98,6 +104,7 @@ export interface RichNoteSurfaceProps {
   onSubmit?: (() => void) | undefined;
   onCancel?: (() => void) | undefined;
   onCaptureScreenshot?: (() => Promise<string>) | undefined;
+  onOpenImage?: ((src: string) => void) | undefined;
   getSuggestion?: ((textBefore: string) => RichNoteSuggestion | null) | undefined;
   onWritingActivity?: (() => void) | undefined;
   onSuspendSmartTimers?: (() => void) | undefined;
@@ -124,7 +131,8 @@ export function RichNoteHtmlContent({
   onImageClick?: ((src: string, e: React.MouseEvent<HTMLDivElement>) => void) | undefined;
   onHtmlChange?: ((nextHtml: string) => void) | undefined;
 }) {
-  const resolvedHtml = useResolvedNoteHtml(html);
+  const safeHtml = useMemo(() => sanitizeStoredNoteHtml(html), [html]);
+  const resolvedHtml = useResolvedNoteHtml(safeHtml);
   const contentRef = useRef<HTMLDivElement>(null);
   const [contextMenu, setContextMenu] = useState<{
     state: StandaloneContextMenuState;
@@ -524,7 +532,7 @@ function InPlaceImageCropOverlay({
       // ignore
     }
     if (mode === "draw") {
-      setCrop((prev) => (prev.width < 3 || prev.height < 3 ? DEFAULT_CROP_RECT : prev));
+      setCrop((prev) => (prev.width < 2 || prev.height < 2 ? DEFAULT_CROP_RECT : prev));
     }
   };
 
@@ -532,13 +540,13 @@ function InPlaceImageCropOverlay({
   const wrapScrollTop = wrapperElement?.scrollTop ?? 0;
   const wrapClientHeight = wrapperElement?.clientHeight ?? 0;
   const viewBottom = wrapScrollTop + wrapClientHeight;
-  const spaceBelow = wrapClientHeight > 0 ? viewBottom - (rect.top + rect.height) : 48;
-  const spaceAbove = wrapClientHeight > 0 ? rect.top - wrapScrollTop : 48;
+  const spaceBelow = wrapClientHeight > 0 ? viewBottom - (rect.top + rect.height) : 52;
+  const spaceAbove = wrapClientHeight > 0 ? rect.top - wrapScrollTop : 52;
   const barPlacementClass =
-    spaceBelow >= 40
-      ? "top-[calc(100%+8px)]"
-      : spaceAbove >= 40
-        ? "bottom-[calc(100%+8px)]"
+    spaceBelow >= 44
+      ? "top-[calc(100%+12px)]"
+      : spaceAbove >= 44
+        ? "bottom-[calc(100%+12px)]"
         : "bottom-2";
 
   return (
@@ -562,12 +570,11 @@ function InPlaceImageCropOverlay({
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
         onPointerCancel={handlePointerUp}
-        onPointerDown={(e) => startDrag(modified ? "move" : "draw", e)}
-        className={cn(
-          "relative h-full w-full touch-none rounded-[8px]",
-          modified ? "cursor-move" : "cursor-crosshair",
-        )}
+        onPointerDown={(e) => startDrag(e.altKey && modified ? "move" : "draw", e)}
+        className="relative h-full w-full cursor-crosshair touch-none rounded-[8px]"
       >
+        {/* Slight outer hit rim lets edge clicks start a crop cleanly from 0%/100% */}
+        <div className="pointer-events-auto absolute -inset-2 cursor-crosshair" />
         <img
           ref={sourceImgRef}
           src={imageSrc}
@@ -622,24 +629,25 @@ function InPlaceImageCropOverlay({
             </>
           )}
 
-          {CROP_HANDLES.map((h) => (
-            <div
-              key={h.mode}
-              onPointerDown={(e) => startDrag(h.mode, e)}
-              className={cn(
-                "pointer-events-auto absolute flex items-center justify-center",
-                h.posClass,
-                h.cursor,
-              )}
-            >
-              <span
+          {modified &&
+            CROP_HANDLES.map((h) => (
+              <div
+                key={h.mode}
+                onPointerDown={(e) => startDrag(h.mode, e)}
                 className={cn(
-                  "pointer-events-none block shadow-[0_0_2px_rgba(0,0,0,0.65)]",
-                  h.barClass,
+                  "pointer-events-auto absolute flex items-center justify-center",
+                  h.posClass,
+                  h.cursor,
                 )}
-              />
-            </div>
-          ))}
+              >
+                <span
+                  className={cn(
+                    "pointer-events-none block shadow-[0_0_2px_rgba(0,0,0,0.65)]",
+                    h.barClass,
+                  )}
+                />
+              </div>
+            ))}
         </div>
       </div>
 
@@ -834,6 +842,7 @@ export function RichNoteSurface({
   onSubmit,
   onCancel,
   onCaptureScreenshot,
+  onOpenImage,
   getSuggestion,
   onWritingActivity,
   onSuspendSmartTimers,
@@ -862,6 +871,7 @@ export function RichNoteSurface({
   const handledSpaceKeyDownRef = useRef(false);
   const contextMenuOpenRef = useRef(false);
   const forcePlainPasteRef = useRef(false);
+  const blurTimeoutRef = useRef<number | null>(null);
 
   const [croppingImage, setCroppingImage] = useState<{
     element: HTMLImageElement;
@@ -894,9 +904,18 @@ export function RichNoteSurface({
   onWritingActivityRef.current = onWritingActivity;
 
   useEffect(() => {
+    return () => {
+      if (blurTimeoutRef.current !== null) {
+        window.clearTimeout(blurTimeoutRef.current);
+        blurTimeoutRef.current = null;
+      }
+    };
+  }, []);
+
+  useEffect(() => {
     const ed = editorRef.current;
     if (!ed || isInitializedRef.current) return;
-    ed.innerHTML = content || "";
+    ed.innerHTML = sanitizeStoredNoteHtml(content || "");
     normalizeEmptyEditorOnMount(ed);
     normalizeEditorImageBlocks(ed);
     isInitializedRef.current = true;
@@ -930,6 +949,26 @@ export function RichNoteSurface({
       onChangeRef.current(serializeContainerMediaHtml(editorRef.current));
     }
   }, []);
+
+  const writeCleanSelectionToClipboard = useCallback(
+    (e: ReactClipboardEvent<HTMLDivElement>): { ed: HTMLDivElement; range: Range } | null => {
+      const sel = window.getSelection();
+      const ed = editorRef.current;
+      if (!sel || sel.rangeCount === 0 || !ed) return null;
+      const range = sel.getRangeAt(0);
+      if (range.collapsed || !ed.contains(range.commonAncestorContainer)) return null;
+      const div = document.createElement("div");
+      div.appendChild(range.cloneContents());
+      stripLiveSyntaxArtifacts(div);
+      const html = div.innerHTML.replace(/\u200B/g, "");
+      const plain = (div.textContent || "").replace(/\u200B/g, "");
+      e.preventDefault();
+      e.clipboardData.setData("text/html", html);
+      e.clipboardData.setData("text/plain", plain);
+      return { ed, range };
+    },
+    [],
+  );
 
   const triggerWritingActivity = useCallback(() => {
     onWritingActivityRef.current?.();
@@ -1330,30 +1369,23 @@ export function RichNoteSurface({
     [captureUndoSnapshot, getImageBlock, handleInput, triggerWritingActivity],
   );
 
-  const handleImageInsert = useCallback(
-    async (rawSrcOrFile: string | File) => {
+  const commitInsertedImageUri = useCallback(
+    async (storedUri: string, preAwaitRange: Range | null, shouldCaptureUndo = false) => {
       const ed = editorRef.current;
       if (!ed) return;
-      const selBefore = window.getSelection();
-      const preAwaitRange =
-        selBefore && selBefore.rangeCount > 0 && ed.contains(selBefore.getRangeAt(0).startContainer)
-          ? selBefore.getRangeAt(0).cloneRange()
-          : null;
-      ed.focus({ preventScroll: true });
-      captureUndoSnapshot(true);
+      if (shouldCaptureUndo) captureUndoSnapshot(true);
 
-      const storedUri =
-        typeof rawSrcOrFile === "string"
-          ? await saveMediaDataUrl(rawSrcOrFile, courseIdRef.current)
-          : await saveMediaFile(rawSrcOrFile, courseIdRef.current);
-      const displayUrl = isMediaUri(storedUri) ? await resolveMediaUrl(storedUri) : storedUri;
+      const displayUrl =
+        isMediaUri(storedUri) || storedUri.startsWith("/api/")
+          ? await resolveMediaUrl(storedUri)
+          : storedUri;
 
       const imgWrapper = document.createElement("div");
       imgWrapper.setAttribute(NOTE_IMAGE_BLOCK_ATTR, "true");
       imgWrapper.contentEditable = "false";
       const img = document.createElement("img");
       img.src = displayUrl;
-      if (isMediaUri(storedUri)) {
+      if (isMediaUri(storedUri) || storedUri.startsWith("/api/")) {
         img.setAttribute("data-media-uri", storedUri);
       }
       img.alt = "Note snapshot";
@@ -1417,6 +1449,55 @@ export function RichNoteSurface({
     ],
   );
 
+  const capturePreAwaitRange = useCallback((): Range | null => {
+    const ed = editorRef.current;
+    if (!ed) return null;
+    const selBefore = window.getSelection();
+    return selBefore &&
+      selBefore.rangeCount > 0 &&
+      ed.contains(selBefore.getRangeAt(0).startContainer)
+      ? selBefore.getRangeAt(0).cloneRange()
+      : null;
+  }, []);
+
+  const handleImageInsert = useCallback(
+    async (rawSrcOrFile: string | File) => {
+      const ed = editorRef.current;
+      if (!ed) return;
+      const preAwaitRange = capturePreAwaitRange();
+      ed.focus({ preventScroll: true });
+      captureUndoSnapshot(true);
+
+      const storedUri =
+        typeof rawSrcOrFile === "string"
+          ? await saveMediaDataUrl(rawSrcOrFile, courseIdRef.current)
+          : await saveMediaFile(rawSrcOrFile, courseIdRef.current);
+
+      await commitInsertedImageUri(storedUri, preAwaitRange, false);
+    },
+    [capturePreAwaitRange, captureUndoSnapshot, commitInsertedImageUri],
+  );
+
+  const tryPasteSameCourseVaultImages = useCallback(
+    async (rawHtml: string, explicitRange?: Range | null): Promise<boolean> => {
+      const uris = extractSameCourseVaultImageUrisFromHtml(rawHtml, courseIdRef.current);
+      if (!uris || uris.length === 0) return false;
+      const checks = await Promise.all(uris.map((uri) => verifyVaultMediaExists(uri)));
+      if (checks.some((exists) => !exists)) return false;
+
+      const ed = editorRef.current;
+      if (!ed) return false;
+      const initialRange = explicitRange ?? capturePreAwaitRange();
+      ed.focus({ preventScroll: true });
+      captureUndoSnapshot(true);
+      for (let i = 0; i < uris.length; i++) {
+        await commitInsertedImageUri(uris[i]!, i === 0 ? initialRange : null, false);
+      }
+      return true;
+    },
+    [capturePreAwaitRange, captureUndoSnapshot, commitInsertedImageUri],
+  );
+
   useEffect(() => {
     void preloadSpellChecker();
     const ed = editorRef.current;
@@ -1427,11 +1508,19 @@ export function RichNoteSurface({
         normalizeEditorImageBlocks(ed);
         syncLiveMarkdownSyntax(ed);
         handleInput();
+        void hydrateContainerMedia(ed);
         triggerWritingActivity();
       },
       onPasteImage: (file) => handleImageInsert(file),
+      onTryPasteVaultHtml: (rawHtml) => tryPasteSameCourseVaultImages(rawHtml),
     });
-  }, [captureUndoSnapshot, handleImageInsert, handleInput, triggerWritingActivity]);
+  }, [
+    captureUndoSnapshot,
+    handleImageInsert,
+    handleInput,
+    triggerWritingActivity,
+    tryPasteSameCourseVaultImages,
+  ]);
 
   const handleSelectedImageKeyDown = useCallback(
     (e: KeyboardEvent | React.KeyboardEvent<HTMLDivElement>): boolean => {
@@ -1456,6 +1545,28 @@ export function RichNoteSurface({
       const hasTextCaret = Boolean(
         sel && sel.rangeCount > 0 && ed.contains(sel.getRangeAt(0).startContainer),
       );
+
+      const lower = e.key.toLowerCase();
+      if (!hasTextCaret && (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey) {
+        if (lower === "c" || lower === "x") {
+          e.preventDefault();
+          e.stopPropagation();
+          const imgEl = selectedImg.element;
+          const imgSrc = selectedImg.src;
+          void copyImageToClipboard(imgSrc)
+            .then(() => {
+              if (lower === "x") {
+                if (imgEl.isConnected) handleRemoveImage(imgEl);
+              } else {
+                toast("Image copied");
+              }
+            })
+            .catch(() => {
+              toast.error("Could not copy image.");
+            });
+          return true;
+        }
+      }
 
       if (e.key === "Backspace" || e.key === "Delete") {
         if (hasTextCaret) {
@@ -1785,25 +1896,33 @@ export function RichNoteSurface({
     triggerWritingActivity();
 
     if (!forcePlain) {
-      const items = e.clipboardData?.items;
-      if (items) {
-        for (const item of Array.from(items)) {
-          if (item.type.startsWith("image/")) {
-            e.preventDefault();
-            const file = item.getAsFile();
-            if (!file) continue;
-            try {
-              await handleImageInsert(file);
-            } catch (err: unknown) {
-              toast.error(err instanceof Error ? err.message : "Failed to paste image.");
-            }
-            return;
-          }
+      const ed = editorRef.current;
+      const rawHtml = e.clipboardData?.getData("text/html") ?? "";
+      const plain = e.clipboardData?.getData("text/plain")?.trim() ?? "";
+      const items = e.clipboardData?.items ? Array.from(e.clipboardData.items) : [];
+      const pastedImageFiles = items
+        .filter((item) => item.type.startsWith("image/"))
+        .map((item) => item.getAsFile())
+        .filter((file): file is File => Boolean(file));
+
+      if (rawHtml && extractSameCourseVaultImageUrisFromHtml(rawHtml, courseIdRef.current)) {
+        e.preventDefault();
+        const preAwaitRange = capturePreAwaitRange();
+        if (await tryPasteSameCourseVaultImages(rawHtml, preAwaitRange)) {
+          return;
         }
       }
 
-      const ed = editorRef.current;
-      const plain = e.clipboardData?.getData("text/plain")?.trim();
+      if (pastedImageFiles.length > 0) {
+        e.preventDefault();
+        try {
+          await handleImageInsert(pastedImageFiles[0]!);
+        } catch (err: unknown) {
+          toast.error(err instanceof Error ? err.message : "Failed to paste image.");
+        }
+        return;
+      }
+
       if (ed && plain && /^https?:\/\/\S+$/i.test(plain)) {
         const sel = window.getSelection();
         if (sel && sel.rangeCount > 0 && !sel.getRangeAt(0).collapsed) {
@@ -1820,7 +1939,6 @@ export function RichNoteSurface({
         }
       }
 
-      const rawHtml = e.clipboardData?.getData("text/html");
       if (ed && rawHtml) {
         const cleanHtml = sanitizeClipboardHtml(rawHtml);
         if (cleanHtml) {
@@ -1832,6 +1950,7 @@ export function RichNoteSurface({
           normalizeEditorImageBlocks(ed);
           syncLiveMarkdownSyntax(ed);
           handleInput();
+          void hydrateContainerMedia(ed);
           return;
         }
       }
@@ -2101,10 +2220,16 @@ export function RichNoteSurface({
     if (didModify && croppedDataUrl && targetImg) {
       captureUndoSnapshot(true);
       const storedUri = await saveMediaDataUrl(croppedDataUrl, courseIdRef.current);
-      const displayUrl = isMediaUri(storedUri) ? await resolveMediaUrl(storedUri) : storedUri;
+      const displayUrl =
+        isMediaUri(storedUri) || storedUri.startsWith("/api/")
+          ? await resolveMediaUrl(storedUri)
+          : storedUri;
       targetImg.src = displayUrl;
-      if (isMediaUri(storedUri)) targetImg.setAttribute("data-media-uri", storedUri);
-      else targetImg.removeAttribute("data-media-uri");
+      if (isMediaUri(storedUri) || storedUri.startsWith("/api/")) {
+        targetImg.setAttribute("data-media-uri", storedUri);
+      } else {
+        targetImg.removeAttribute("data-media-uri");
+      }
 
       if (editorRef.current) {
         normalizeEditorImageBlocks(editorRef.current);
@@ -2186,6 +2311,7 @@ export function RichNoteSurface({
 
       <div
         ref={wrapperRef}
+        data-note-scroll-wrapper="true"
         onClick={handleEditorClick}
         onContextMenu={(e) => {
           if (e.currentTarget.closest("[data-canvas-card-id]")) return;
@@ -2366,7 +2492,11 @@ export function RichNoteSurface({
           }}
           onMouseUp={updateGhostSuggestion}
           onBlur={() => {
-            setTimeout(() => {
+            if (blurTimeoutRef.current !== null) {
+              window.clearTimeout(blurTimeoutRef.current);
+            }
+            blurTimeoutRef.current = window.setTimeout(() => {
+              blurTimeoutRef.current = null;
               removeGhostSpan();
               setGhostSuggestion(null);
               const ed = editorRef.current;
@@ -2381,21 +2511,36 @@ export function RichNoteSurface({
             }, 150);
           }}
           onCopy={(e) => {
+            writeCleanSelectionToClipboard(e);
+          }}
+          onCut={(e) => {
+            const extracted = writeCleanSelectionToClipboard(e);
+            if (!extracted) return;
+            const { ed, range } = extracted;
+            captureUndoSnapshot(true);
+            range.deleteContents();
+            range.collapse(true);
             const sel = window.getSelection();
-            const ed = editorRef.current;
-            if (!sel || sel.rangeCount === 0 || !ed) return;
-            const range = sel.getRangeAt(0);
-            if (range.collapsed || !ed.contains(range.commonAncestorContainer)) return;
-            const div = document.createElement("div");
-            div.appendChild(range.cloneContents());
-            stripLiveSyntaxArtifacts(div);
-            const html = div.innerHTML.replace(/\u200B/g, "");
-            const plain = (div.textContent || "").replace(/\u200B/g, "");
-            e.preventDefault();
-            e.clipboardData.setData("text/html", html);
-            e.clipboardData.setData("text/plain", plain);
+            sel?.removeAllRanges();
+            sel?.addRange(range);
+            normalizeEmptyEditorOnMount(ed);
+            if (
+              ed.firstElementChild &&
+              (!ed.contains(range.startContainer) || range.startContainer === ed)
+            ) {
+              placeCaretAtStart(ed.firstElementChild as HTMLElement);
+            }
+            syncImageTailParagraphs(ed);
+            reconcileActiveMarkdownSyntax(ed);
+            syncLiveMarkdownSyntax(ed);
+            handleInput();
+            triggerWritingActivity();
           }}
           onFocus={() => {
+            if (blurTimeoutRef.current !== null) {
+              window.clearTimeout(blurTimeoutRef.current);
+              blurTimeoutRef.current = null;
+            }
             try {
               document.execCommand("defaultParagraphSeparator", false, "p");
             } catch {
@@ -2580,7 +2725,11 @@ export function RichNoteSurface({
       </div>
 
       {contextMenu && (
-        <StandaloneAppContextMenu state={contextMenu} onClose={() => setContextMenu(null)} />
+        <StandaloneAppContextMenu
+          state={contextMenu}
+          onOpenImage={onOpenImage}
+          onClose={() => setContextMenu(null)}
+        />
       )}
     </div>
   );

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import { Link } from "@tanstack/react-router";
 import { Clock, CornerDownLeft, Maximize2, Pencil, Trash2 } from "lucide-react";
 
@@ -108,7 +108,7 @@ function ImageCardBody({
   );
 }
 
-export function CanvasCardView({
+export const CanvasCardView = memo(function CanvasCardView({
   courseId,
   card,
   lessonCode,
@@ -147,21 +147,25 @@ export function CanvasCardView({
   snapTargetSide?: CanvasSide | undefined;
   isConnectMode: boolean;
   pointerEventsDisabled: boolean;
-  onSelect: (e: React.PointerEvent) => void;
-  onStartDrag: (e: React.PointerEvent) => void;
-  onStartResize: (e: React.PointerEvent, axis?: "both" | "width" | "height") => void;
-  onStartEdit: () => void;
+  onSelect: (cardId: string, e: React.PointerEvent) => void;
+  onStartDrag: (cardId: string, e: React.PointerEvent) => void;
+  onStartResize: (
+    cardId: string,
+    e: React.PointerEvent,
+    axis?: "both" | "width" | "height",
+  ) => void;
+  onStartEdit: (cardId: string) => void;
   onFinishEdit: () => void;
-  onDraftChange?: ((html: string) => void) | undefined;
-  onCommitHtml?: ((html: string) => void) | undefined;
-  onMeasuredHeightGrow?: ((nextHeight: number) => void) | undefined;
-  onReturnToOriginGroup: () => void;
-  onDelete: () => void;
-  onStartConnect: (e: React.PointerEvent, side: CanvasSide) => void;
-  onCompleteConnect: (e: React.PointerEvent, side?: CanvasSide) => void;
-  onContextMenu?: ((e: React.MouseEvent) => void) | undefined;
+  onDraftChange?: ((cardId: string, html: string) => void) | undefined;
+  onCommitHtml?: ((cardId: string, html: string) => void) | undefined;
+  onMeasuredHeightGrow?: ((cardId: string, nextHeight: number) => void) | undefined;
+  onReturnToOriginGroup: (cardId: string) => void;
+  onDelete: (cardId: string) => void;
+  onStartConnect: (cardId: string, e: React.PointerEvent, side: CanvasSide) => void;
+  onCompleteConnect: (cardId: string, e: React.PointerEvent, side?: CanvasSide) => void;
+  onContextMenu?: ((card: CanvasCard, e: React.MouseEvent) => void) | undefined;
   onOpenLightbox: (src: string, card: CanvasCard) => void;
-  onUpdateImageCaption: (caption: string) => void;
+  onUpdateImageCaption: (cardId: string, caption: string) => void;
 }) {
   const [draftHtml, setDraftHtml] = useState(card.htmlContent);
   const [editingCaption, setEditingCaption] = useState(false);
@@ -170,6 +174,8 @@ export function CanvasCardView({
   const wasEditingRef = useRef(false);
   const initialHtmlOnEditRef = useRef(card.htmlContent);
   const hasEditedDraftRef = useRef(false);
+  const cardIdRef = useRef(card.id);
+  cardIdRef.current = card.id;
   const cardHeightRef = useRef(card.height);
   cardHeightRef.current = card.height;
   const onDraftChangeRef = useRef(onDraftChange);
@@ -189,7 +195,7 @@ export function CanvasCardView({
       initialHtmlOnEditRef.current = card.htmlContent;
       hasEditedDraftRef.current = false;
       setDraftHtml(card.htmlContent);
-      onDraftChangeRef.current?.(card.htmlContent);
+      onDraftChangeRef.current?.(cardIdRef.current, card.htmlContent);
     } else if (!isEditing) {
       wasEditingRef.current = false;
       hasEditedDraftRef.current = false;
@@ -214,18 +220,33 @@ export function CanvasCardView({
         if (!hasEditedDraftRef.current) return;
         const editorEl = el.querySelector(".note-editor") as HTMLElement | null;
         if (!editorEl) return;
-        const headerEl = el.querySelector("[data-card-header='true']") as HTMLElement | null;
-        const viewChromeHeight = (headerEl?.offsetHeight ?? 0) + (isTextOnly ? 18 : 24);
-        const measured = Math.ceil(viewChromeHeight + editorEl.offsetHeight);
+        const wrapperEl = el.querySelector(
+          "[data-note-scroll-wrapper='true']",
+        ) as HTMLElement | null;
+        let measured: number;
+        if (wrapperEl && wrapperEl.clientHeight > 0) {
+          const cs = window.getComputedStyle(wrapperEl);
+          const wrapperPaddingY =
+            (parseFloat(cs.paddingTop) || 0) + (parseFloat(cs.paddingBottom) || 0);
+          const chromeHeight = Math.max(0, el.offsetHeight - wrapperEl.clientHeight);
+          const contentHeight = Math.max(
+            wrapperEl.scrollHeight,
+            editorEl.offsetHeight + wrapperPaddingY,
+          );
+          measured = Math.ceil(chromeHeight + contentHeight);
+        } else {
+          const headerEl = el.querySelector("[data-card-header='true']") as HTMLElement | null;
+          measured = Math.ceil((headerEl?.offsetHeight ?? 0) + editorEl.offsetHeight);
+        }
         if (measured > cardHeightRef.current + 2 && measured <= 12000) {
-          onMeasuredHeightGrowRef.current?.(measured);
+          onMeasuredHeightGrowRef.current?.(cardIdRef.current, measured);
         }
         return;
       }
 
       const measured = Math.ceil(el.offsetHeight);
       if (measured > cardHeightRef.current + 4 && measured <= 12000) {
-        onMeasuredHeightGrowRef.current?.(measured);
+        onMeasuredHeightGrowRef.current?.(cardIdRef.current, measured);
       }
     };
 
@@ -253,7 +274,7 @@ export function CanvasCardView({
       if (rafId) cancelAnimationFrame(rafId);
       observer.disconnect();
     };
-  }, [card.htmlContent, isEditing, isImage, isTextOnly, draftHtml]);
+  }, [card.id, card.htmlContent, isEditing, isImage]);
 
   const codePrefix =
     lessonCode ?? (card.originLessonIdx !== undefined ? `L${card.originLessonIdx + 1}` : undefined);
@@ -268,6 +289,7 @@ export function CanvasCardView({
     <div
       ref={cardRootRef}
       data-canvas-card-id={card.id}
+      data-editing-card={isEditing ? "true" : undefined}
       style={{
         transform: `translate3d(${card.x}px, ${card.y}px, 0)`,
         width: card.width,
@@ -291,7 +313,7 @@ export function CanvasCardView({
         e.stopPropagation();
         if (e.button === 2) {
           if (!selected) {
-            onSelect(e);
+            onSelect(card.id, e);
           }
           return;
         }
@@ -300,14 +322,14 @@ export function CanvasCardView({
           return;
         }
         if (isConnectMode) {
-          onCompleteConnect(e);
+          onCompleteConnect(card.id, e);
           return;
         }
         if (!isEditing && !editingCaption) {
           setHoveredPortSide(null);
-          onStartDrag(e);
+          onStartDrag(card.id, e);
         }
-        onSelect(e);
+        onSelect(card.id, e);
       }}
       onPointerMove={(e) => {
         if (pointerEventsDisabled || isEditing || editingCaption || isConnectSource) return;
@@ -357,7 +379,7 @@ export function CanvasCardView({
         if (pointerEventsDisabled) return;
         e.preventDefault();
         e.stopPropagation();
-        onContextMenu?.(e);
+        onContextMenu?.(card, e);
       }}
       onDoubleClick={(e) => {
         if (pointerEventsDisabled || isConnectMode) return;
@@ -365,7 +387,7 @@ export function CanvasCardView({
         if (isImage) {
           setEditingCaption(true);
         } else if (!isEditing) {
-          onStartEdit();
+          onStartEdit(card.id);
         }
       }}
       className={cn(
@@ -449,7 +471,7 @@ export function CanvasCardView({
                   type="button"
                   onClick={(e) => {
                     e.stopPropagation();
-                    onReturnToOriginGroup();
+                    onReturnToOriginGroup(card.id);
                   }}
                   title="Return to lesson artboard"
                   className="flex size-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
@@ -465,7 +487,7 @@ export function CanvasCardView({
                 title="Edit note"
                 onClick={(e) => {
                   e.stopPropagation();
-                  onStartEdit();
+                  onStartEdit(card.id);
                 }}
                 className="flex size-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
               >
@@ -479,7 +501,7 @@ export function CanvasCardView({
               title={isVideoNote ? "Hide from canvas" : "Delete card"}
               onClick={(e) => {
                 e.stopPropagation();
-                onDelete();
+                onDelete(card.id);
               }}
               className="flex size-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-destructive/15 hover:text-destructive"
             >
@@ -497,7 +519,7 @@ export function CanvasCardView({
           onStartEditCaption={() => setEditingCaption(true)}
           onCommitCaption={(caption) => {
             setEditingCaption(false);
-            onUpdateImageCaption(caption);
+            onUpdateImageCaption(card.id, caption);
           }}
           onCancelCaption={() => setEditingCaption(false)}
           onOpenLightbox={(src) => onOpenLightbox(src, card)}
@@ -525,10 +547,11 @@ export function CanvasCardView({
                 hasEditedDraftRef.current = true;
               }
               setDraftHtml(html);
-              onDraftChange?.(html);
+              onDraftChange?.(card.id, html);
             }}
             onSubmit={onFinishEdit}
             onCancel={onFinishEdit}
+            onOpenImage={(src) => onOpenLightbox(src, card)}
             compactToolbar={!isTextOnly}
             minHeightClassName={isTextOnly ? "min-h-[60px]" : "min-h-[90px]"}
             maxHeightClassName=""
@@ -549,7 +572,7 @@ export function CanvasCardView({
                 aria-label="Delete text"
                 onClick={(e) => {
                   e.stopPropagation();
-                  onDelete();
+                  onDelete(card.id);
                 }}
                 className="flex size-5 items-center justify-center rounded text-muted-foreground hover:bg-destructive/15 hover:text-destructive [&_svg]:stroke-[1.75]"
               >
@@ -562,7 +585,7 @@ export function CanvasCardView({
             html={card.htmlContent || "<p></p>"}
             className={isTextOnly ? "text-base font-medium leading-6" : undefined}
             onImageClick={(src) => onOpenLightbox(src, card)}
-            onHtmlChange={onCommitHtml}
+            onHtmlChange={onCommitHtml ? (nextHtml) => onCommitHtml(card.id, nextHtml) : undefined}
           />
         </div>
       )}
@@ -603,10 +626,10 @@ export function CanvasCardView({
                   e.stopPropagation();
                   setHoveredPortSide(null);
                   if (isConnectMode) {
-                    onCompleteConnect(e, side);
+                    onCompleteConnect(card.id, e, side);
                     return;
                   }
-                  onStartConnect(e, side);
+                  onStartConnect(card.id, e, side);
                 }}
                 className={cn(
                   "absolute z-20 size-3 rounded-full border-2 border-card bg-primary shadow-sm transition-[opacity,transform] duration-150 before:absolute before:-inset-1.5 before:rounded-full",
@@ -631,7 +654,7 @@ export function CanvasCardView({
               e.preventDefault();
               e.stopPropagation();
               setHoveredPortSide(null);
-              onStartResize(e, "width");
+              onStartResize(card.id, e, "width");
             }}
             title="Drag edge to resize width"
             className="absolute inset-y-2.5 right-0 z-10 w-1.5 cursor-ew-resize"
@@ -642,7 +665,7 @@ export function CanvasCardView({
               e.preventDefault();
               e.stopPropagation();
               setHoveredPortSide(null);
-              onStartResize(e, "height");
+              onStartResize(card.id, e, "height");
             }}
             title="Drag edge to resize height"
             className="absolute inset-x-2.5 bottom-0 z-10 h-1.5 cursor-ns-resize"
@@ -653,7 +676,7 @@ export function CanvasCardView({
               e.preventDefault();
               e.stopPropagation();
               setHoveredPortSide(null);
-              onStartResize(e, "both");
+              onStartResize(card.id, e, "both");
             }}
             title="Drag to resize"
             className={cn(
@@ -667,4 +690,4 @@ export function CanvasCardView({
       )}
     </div>
   );
-}
+});

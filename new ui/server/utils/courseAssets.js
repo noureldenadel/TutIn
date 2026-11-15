@@ -24,16 +24,25 @@ export { chunksToVTT, parseVTT, parseSRT, parseASS }
 
 // ── Vault Directory Helpers ─────────────────────────────────────
 
+function ensureDir(dir, label) {
+    if (!dir) return null
+    if (!fs.existsSync(dir)) {
+        try {
+            fs.mkdirSync(dir, { recursive: true })
+        } catch (err) {
+            console.warn(`[CourseAssets] Failed to create ${label} directory (${dir}):`, err.message)
+            return null
+        }
+    }
+    return dir
+}
+
 /**
  * Returns (and creates) the root .tutin vault directory for a course.
  */
 export function getVaultDir(courseFolder) {
     if (!courseFolder) return null
-    const dir = path.join(courseFolder, '.tutin')
-    if (!fs.existsSync(dir)) {
-        try { fs.mkdirSync(dir, { recursive: true }) } catch { return null }
-    }
-    return dir
+    return ensureDir(path.join(courseFolder, '.tutin'), 'vault')
 }
 
 /**
@@ -42,11 +51,7 @@ export function getVaultDir(courseFolder) {
 export function getCaptionsDir(courseFolder, relModulePath = '') {
     if (!courseFolder) return null
     const vaultDir = getVaultDir(courseFolder)
-    const dir = path.join(vaultDir || courseFolder, 'captions', relModulePath)
-    if (!fs.existsSync(dir)) {
-        try { fs.mkdirSync(dir, { recursive: true }) } catch { return null }
-    }
-    return dir
+    return ensureDir(path.join(vaultDir || courseFolder, 'captions', relModulePath), 'captions')
 }
 
 /**
@@ -55,53 +60,34 @@ export function getCaptionsDir(courseFolder, relModulePath = '') {
 export function getDubsDir(courseFolder, relModulePath = '') {
     if (!courseFolder) return null
     const vaultDir = getVaultDir(courseFolder)
-    const dir = path.join(vaultDir || courseFolder, 'dubs', relModulePath)
-    if (!fs.existsSync(dir)) {
-        try { fs.mkdirSync(dir, { recursive: true }) } catch { return null }
-    }
-    return dir
+    return ensureDir(path.join(vaultDir || courseFolder, 'dubs', relModulePath), 'dubs')
 }
 
 /**
  * Returns (and creates) the notes directory inside .tutin.
  */
 export function getNotesDir(courseFolder) {
-    if (!courseFolder) return null
     const vaultDir = getVaultDir(courseFolder)
     if (!vaultDir) return null
-    const dir = path.join(vaultDir, 'notes')
-    if (!fs.existsSync(dir)) {
-        try { fs.mkdirSync(dir, { recursive: true }) } catch { return null }
-    }
-    return dir
+    return ensureDir(path.join(vaultDir, 'notes'), 'notes')
 }
 
 /**
  * Returns (and creates) the screenshots directory inside .tutin/notes/screenshots.
  */
 export function getScreenshotsDir(courseFolder) {
-    if (!courseFolder) return null
     const notesDir = getNotesDir(courseFolder)
     if (!notesDir) return null
-    const dir = path.join(notesDir, 'screenshots')
-    if (!fs.existsSync(dir)) {
-        try { fs.mkdirSync(dir, { recursive: true }) } catch { return null }
-    }
-    return dir
+    return ensureDir(path.join(notesDir, 'screenshots'), 'screenshots')
 }
 
 /**
  * Returns (and creates) the summaries directory inside .tutin/summaries.
  */
 export function getSummariesVaultDir(courseFolder, relModulePath = '') {
-    if (!courseFolder) return null
     const vaultDir = getVaultDir(courseFolder)
     if (!vaultDir) return null
-    const dir = path.join(vaultDir, 'summaries', relModulePath)
-    if (!fs.existsSync(dir)) {
-        try { fs.mkdirSync(dir, { recursive: true }) } catch { return null }
-    }
-    return dir
+    return ensureDir(path.join(vaultDir, 'summaries', relModulePath), 'summaries')
 }
 
 /**
@@ -257,16 +243,6 @@ export function normalizeSubtitleSources(rawSources = [], courseLanguage = 'en')
 }
 
 /**
- * Full path for a dubbed audio file.
- * e.g. /Course/.tutin/dubs/Module 1/01 - Intro.ar.mp3
- */
-export function getDubFilePath(courseFolder, relModulePath, videoBaseName, lang) {
-    const dir = getDubsDir(courseFolder, relModulePath)
-    if (!dir) return null
-    return path.join(dir, `${videoBaseName}.${lang}.mp3`)
-}
-
-/**
  * Full path for a summary markdown file.
  * e.g. /Course/.tutin/summaries/Module 1/01 - Intro.md
  */
@@ -277,78 +253,14 @@ export function getSummaryFilePath(courseFolder, relModulePath, videoBaseName) {
 }
 
 /**
- * Full path for an internal TTS companion file (contains phonetically-nudged text).
- * e.g. /Course/.tutin/captions/Module 1/01 - Intro.ar-eg.tts.json
+ * Full path for a legacy TTS companion file.
+ * Kept internal so transcript deletion/replacement still cleans up legacy artifacts.
  */
-export function getTtsCompanionFilePath(courseFolder, relModulePath, videoBaseName, lang) {
+function getTtsCompanionFilePath(courseFolder, relModulePath, videoBaseName, lang) {
     const dir = getCaptionsDir(courseFolder, relModulePath)
     if (!dir) return null
     const safeLang = (lang && lang !== 'source') ? lang : 'en'
     return path.join(dir, `${videoBaseName}.${safeLang}.tts.json`)
-}
-
-/**
- * Save TTS companion segments (phonetically nudged text for speech synthesis).
- * Writes strictly as an internal artifact: <videoBaseName>.<lang>.tts.json
- */
-export function saveTtsCompanionFile(videoMeta, lang, ttsSegments) {
-    if (!ttsSegments || !Array.isArray(ttsSegments) || ttsSegments.length === 0) return null
-    const { id, courseFolder, relModulePath = '', videoBaseName } = videoMeta
-
-    if (courseFolder && fs.existsSync(courseFolder)) {
-        const ttsPath = getTtsCompanionFilePath(courseFolder, relModulePath, videoBaseName, lang)
-        if (ttsPath) {
-            try {
-                fs.writeFileSync(ttsPath, JSON.stringify(ttsSegments, null, 2), 'utf8')
-                return ttsPath
-            } catch (err) {
-                console.warn('[CourseAssets] Failed to write TTS companion file in vault:', err.message)
-            }
-        }
-    }
-
-    // Cloud course fallback: save to AppData
-    const appDataDir = path.join(getTranscriptsDir(), 'tts_companion')
-    if (!fs.existsSync(appDataDir)) {
-        try { fs.mkdirSync(appDataDir, { recursive: true }) } catch { }
-    }
-    const cachePath = path.join(appDataDir, `${id}.${lang}.tts.json`)
-    try {
-        fs.writeFileSync(cachePath, JSON.stringify(ttsSegments, null, 2), 'utf8')
-        return cachePath
-    } catch { }
-
-    return null
-}
-
-/**
- * Load TTS companion segments if available for this video and language.
- */
-export function loadTtsCompanionSegments(videoId, lang, videoMeta = {}) {
-    const { courseFolder, relModulePath = '', videoBaseName } = videoMeta
-    const isLocalCourse = Boolean(courseFolder && fs.existsSync(courseFolder))
-
-    if (isLocalCourse && videoBaseName) {
-        const ttsPath = getTtsCompanionFilePath(courseFolder, relModulePath, videoBaseName, lang)
-        if (ttsPath && fs.existsSync(ttsPath)) {
-            try {
-                const data = JSON.parse(fs.readFileSync(ttsPath, 'utf8'))
-                if (Array.isArray(data) && data.length > 0) return data
-            } catch { }
-        }
-    }
-
-    // Check AppData fallback
-    const appDataDir = path.join(getTranscriptsDir(), 'tts_companion')
-    const cachePath = path.join(appDataDir, `${videoId}.${lang}.tts.json`)
-    if (fs.existsSync(cachePath)) {
-        try {
-            const data = JSON.parse(fs.readFileSync(cachePath, 'utf8'))
-            if (Array.isArray(data) && data.length > 0) return data
-        } catch { }
-    }
-
-    return null
 }
 
 /**
@@ -360,12 +272,20 @@ export function deleteTtsCompanionFile(videoId, lang, videoMeta = {}) {
     if (courseFolder && videoBaseName && fs.existsSync(courseFolder)) {
         const ttsPath = getTtsCompanionFilePath(courseFolder, relModulePath, videoBaseName, lang)
         if (ttsPath && fs.existsSync(ttsPath)) {
-            try { fs.unlinkSync(ttsPath) } catch { }
+            try {
+                fs.unlinkSync(ttsPath)
+            } catch (err) {
+                console.warn('[CourseAssets] Failed to remove vault TTS companion file:', err.message)
+            }
         }
     }
     const cachePath = path.join(getTranscriptsDir(), 'tts_companion', `${videoId}.${lang}.tts.json`)
     if (fs.existsSync(cachePath)) {
-        try { fs.unlinkSync(cachePath) } catch { }
+        try {
+            fs.unlinkSync(cachePath)
+        } catch (err) {
+            console.warn('[CourseAssets] Failed to remove cached TTS companion file:', err.message)
+        }
     }
 }
 
@@ -409,7 +329,9 @@ export function saveCaptionFile(videoMeta, lang, chunks, origin = 'uploaded', ve
         try {
             const staleCache = getCacheFilePath(id, lang, origin, version)
             if (fs.existsSync(staleCache)) fs.unlinkSync(staleCache)
-        } catch { }
+        } catch (err) {
+            console.warn('[CourseAssets] Failed to remove stale caption cache:', err.message)
+        }
 
         return vttPath
     }
@@ -418,7 +340,9 @@ export function saveCaptionFile(videoMeta, lang, chunks, origin = 'uploaded', ve
     const cachePath = getCacheFilePath(id, lang, origin, version)
     try {
         fs.writeFileSync(cachePath, JSON.stringify(chunks, null, 2), 'utf8')
-    } catch { }
+    } catch (err) {
+        console.warn('[CourseAssets] Failed to write caption cache file:', err.message)
+    }
 
     return cachePath
 }
@@ -500,7 +424,9 @@ export function loadCaptionChunks(videoId, lang, subtitleSources = [], courseFol
                 const chunks = readCaptionFile(text, resolvedEntry.filePath)
                 if (chunks.length) return normalizeChunks(chunks)
             }
-        } catch { /* fall through */ }
+        } catch (err) {
+            console.warn('[CourseAssets] Failed to read caption source file:', err.message)
+        }
     }
 
     let targetLang = (lang || 'en').toLowerCase().trim()
@@ -537,7 +463,9 @@ export function loadCaptionChunks(videoId, lang, subtitleSources = [], courseFol
                         const text = fs.readFileSync(candidate, 'utf8')
                         const chunks = parseVTT(text)
                         if (chunks.length) return normalizeChunks(chunks)
-                    } catch { /* fall through */ }
+                    } catch (err) {
+                        console.warn('[CourseAssets] Failed to read vault VTT file:', err.message)
+                    }
                 }
             }
         }
@@ -553,7 +481,9 @@ export function loadCaptionChunks(videoId, lang, subtitleSources = [], courseFol
                 try {
                     const parsed = JSON.parse(fs.readFileSync(cPath, 'utf8'))
                     if (Array.isArray(parsed) && parsed.length > 0) return normalizeChunks(parsed)
-                } catch { /* fall through */ }
+                } catch (err) {
+                    console.warn('[CourseAssets] Failed to read cached caption JSON:', err.message)
+                }
             }
         }
     }
@@ -596,7 +526,9 @@ export function listCourseLanguages(courseFolder) {
                         }
                     }
                 }
-            } catch { }
+            } catch (err) {
+                console.warn(`[CourseAssets] Failed to scan captions directory (${current}):`, err.message)
+            }
         }
         walk(dir)
     }
@@ -654,7 +586,9 @@ export function listDubLanguages(videoId, courseFolder = null, relModulePath = '
                             const parts = f.split('.')
                             if (parts.length >= 3) langs.add(parts[parts.length - 2])
                         })
-                } catch { }
+                } catch (err) {
+                    console.warn(`[CourseAssets] Failed to list vault dubs (${modDir}):`, err.message)
+                }
             }
         }
         checkDubs(path.join(courseFolder, '.tutin', 'dubs'))
@@ -669,7 +603,9 @@ export function listDubLanguages(videoId, courseFolder = null, relModulePath = '
                         const match = f.match(new RegExp(`^${videoId}\\.([a-z]{2,3}(?:-[a-z]{2,4})?)\\.mp3$`))
                         if (match) langs.add(match[1])
                     })
-            } catch { }
+            } catch (err) {
+                console.warn(`[CourseAssets] Failed to list cached dubs (${dubsDir}):`, err.message)
+            }
         }
     }
 
@@ -706,22 +642,34 @@ export function getDubCachePath(videoId, lang) {
 
 // ── Vault Notes, Screenshots, Canvas & Summaries Persistence ──────────────
 
+function writeVaultJsonFile(dir, fileName, payload, label) {
+    if (!dir) return false
+    const filePath = path.join(dir, fileName)
+    try {
+        fs.writeFileSync(filePath, JSON.stringify(payload, null, 2), 'utf8')
+        return true
+    } catch (err) {
+        console.error(`[CourseAssets] Failed to save ${label}:`, err.message)
+        return false
+    }
+}
+
+function readVaultJsonFile(filePath, fallback, label) {
+    if (!fs.existsSync(filePath)) return fallback
+    try {
+        return JSON.parse(fs.readFileSync(filePath, 'utf8'))
+    } catch (err) {
+        console.warn(`[CourseAssets] Failed to parse ${label} (${filePath}):`, err.message)
+        return fallback
+    }
+}
+
 /**
  * Save notes for a course to <courseFolder>/.tutin/notes/notes.json.
  */
 export function saveVaultNotes(courseFolder, notes) {
     if (!courseFolder || !fs.existsSync(courseFolder)) return false
-    const notesDir = getNotesDir(courseFolder)
-    if (!notesDir) return false
-
-    const filePath = path.join(notesDir, 'notes.json')
-    try {
-        fs.writeFileSync(filePath, JSON.stringify(notes, null, 2), 'utf8')
-        return true
-    } catch (err) {
-        console.error('[CourseAssets] Failed to save vault notes:', err.message)
-        return false
-    }
+    return writeVaultJsonFile(getNotesDir(courseFolder), 'notes.json', notes, 'vault notes')
 }
 
 /**
@@ -729,13 +677,11 @@ export function saveVaultNotes(courseFolder, notes) {
  */
 export function loadVaultNotes(courseFolder) {
     if (!courseFolder) return []
-    const filePath = path.join(courseFolder, '.tutin', 'notes', 'notes.json')
-    if (fs.existsSync(filePath)) {
-        try {
-            return JSON.parse(fs.readFileSync(filePath, 'utf8'))
-        } catch { }
-    }
-    return []
+    return readVaultJsonFile(
+        path.join(courseFolder, '.tutin', 'notes', 'notes.json'),
+        [],
+        'vault notes'
+    )
 }
 
 /**
@@ -743,17 +689,7 @@ export function loadVaultNotes(courseFolder) {
  */
 export function saveVaultCanvas(courseFolder, canvasData) {
     if (!courseFolder || !fs.existsSync(courseFolder)) return false
-    const vaultDir = getVaultDir(courseFolder)
-    if (!vaultDir) return false
-
-    const filePath = path.join(vaultDir, 'canvas.json')
-    try {
-        fs.writeFileSync(filePath, JSON.stringify(canvasData, null, 2), 'utf8')
-        return true
-    } catch (err) {
-        console.error('[CourseAssets] Failed to save vault canvas:', err.message)
-        return false
-    }
+    return writeVaultJsonFile(getVaultDir(courseFolder), 'canvas.json', canvasData, 'vault canvas')
 }
 
 /**
@@ -761,13 +697,11 @@ export function saveVaultCanvas(courseFolder, canvasData) {
  */
 export function loadVaultCanvas(courseFolder) {
     if (!courseFolder) return null
-    const filePath = path.join(courseFolder, '.tutin', 'canvas.json')
-    if (fs.existsSync(filePath)) {
-        try {
-            return JSON.parse(fs.readFileSync(filePath, 'utf8'))
-        } catch { }
-    }
-    return null
+    return readVaultJsonFile(
+        path.join(courseFolder, '.tutin', 'canvas.json'),
+        null,
+        'vault canvas'
+    )
 }
 
 /**
@@ -775,17 +709,7 @@ export function loadVaultCanvas(courseFolder) {
  */
 export function saveVaultMetadata(courseFolder, metadata) {
     if (!courseFolder || !fs.existsSync(courseFolder)) return false
-    const vaultDir = getVaultDir(courseFolder)
-    if (!vaultDir) return false
-
-    const filePath = path.join(vaultDir, 'metadata.json')
-    try {
-        fs.writeFileSync(filePath, JSON.stringify(metadata, null, 2), 'utf8')
-        return true
-    } catch (err) {
-        console.error('[CourseAssets] Failed to save vault metadata:', err.message)
-        return false
-    }
+    return writeVaultJsonFile(getVaultDir(courseFolder), 'metadata.json', metadata, 'vault metadata')
 }
 
 /**
@@ -793,13 +717,11 @@ export function saveVaultMetadata(courseFolder, metadata) {
  */
 export function loadVaultMetadata(courseFolder) {
     if (!courseFolder) return null
-    const filePath = path.join(courseFolder, '.tutin', 'metadata.json')
-    if (fs.existsSync(filePath)) {
-        try {
-            return JSON.parse(fs.readFileSync(filePath, 'utf8'))
-        } catch { }
-    }
-    return null
+    return readVaultJsonFile(
+        path.join(courseFolder, '.tutin', 'metadata.json'),
+        null,
+        'vault metadata'
+    )
 }
 
 /**
@@ -827,7 +749,9 @@ export function loadVaultSummary(courseFolder, relModulePath, videoBaseName) {
     if (summaryPath && fs.existsSync(summaryPath)) {
         try {
             return fs.readFileSync(summaryPath, 'utf8')
-        } catch { }
+        } catch (err) {
+            console.warn('[CourseAssets] Failed to load vault summary:', err.message)
+        }
     }
     return null
 }
@@ -842,7 +766,9 @@ export function deleteVaultSummary(courseFolder, relModulePath, videoBaseName) {
         try {
             fs.unlinkSync(summaryPath)
             return true
-        } catch { }
+        } catch (err) {
+            console.warn('[CourseAssets] Failed to delete vault summary:', err.message)
+        }
     }
     return false
 }
@@ -873,12 +799,16 @@ export function scanVaultSummary(courseFolder) {
                     try {
                         const stat = fs.statSync(fullPath)
                         totalSizeBytes += stat.size
-                    } catch { }
+                    } catch (err) {
+                        console.warn(`[CourseAssets] Failed to stat vault file (${fullPath}):`, err.message)
+                    }
                 } else if (entry.isDirectory()) {
                     walkDir(fullPath)
                 }
             }
-        } catch { }
+        } catch (err) {
+            console.warn(`[CourseAssets] Failed to read vault directory (${dir}):`, err.message)
+        }
     }
 
     if (hasVault) {
@@ -902,14 +832,18 @@ export function scanVaultSummary(courseFolder) {
                             const stat = fs.statSync(p)
                             size = stat.size
                             dubsSizeBytes += size
-                        } catch { }
+                        } catch (err) {
+                            console.warn(`[CourseAssets] Failed to stat dub file (${p}):`, err.message)
+                        }
                         const parts = e.name.slice(0, -4).split('.')
                         const lang = parts.length >= 2 ? parts[parts.length - 1] : 'unknown'
                         dubLangs.add(lang)
                         dubFiles.push({ fileName: e.name, filePath: p, lang, sizeBytes: size })
                     }
                 }
-            } catch { }
+            } catch (err) {
+                console.warn(`[CourseAssets] Failed to scan dubs directory (${dir}):`, err.message)
+            }
         }
         walk(baseDir)
     }
@@ -944,7 +878,9 @@ export function scanVaultSummary(courseFolder) {
                         })
                     }
                 }
-            } catch { }
+            } catch (err) {
+                console.warn(`[CourseAssets] Failed to scan captions vault (${dir}):`, err.message)
+            }
         }
         walk(baseDir)
     }
@@ -964,7 +900,9 @@ export function scanVaultSummary(courseFolder) {
                         summaryFiles.push({ fileName: e.name, filePath: p, baseName })
                     }
                 }
-            } catch { }
+            } catch (err) {
+                console.warn(`[CourseAssets] Failed to scan summaries vault (${dir}):`, err.message)
+            }
         }
         walk(baseDir)
     }
@@ -988,10 +926,10 @@ export function scanVaultSummary(courseFolder) {
     const screenshotsDir = path.join(courseFolder, '.tutin', 'notes', 'screenshots')
     if (fs.existsSync(screenshotsDir)) {
         try {
-            screenshotsCount = fs.readdirSync(screenshotsDir).filter(f => {
-                try { return !fs.statSync(path.join(screenshotsDir, f)).isDirectory() } catch { return false }
-            }).length
-        } catch { }
+            screenshotsCount = fs.readdirSync(screenshotsDir, { withFileTypes: true }).filter(e => !e.isDirectory()).length
+        } catch (err) {
+            console.warn('[CourseAssets] Failed to scan screenshots directory:', err.message)
+        }
     }
 
     // 6. Metadata

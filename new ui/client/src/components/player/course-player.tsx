@@ -2998,6 +2998,7 @@ function RichNoteEditor({
   onSubmit,
   onCancel,
   onCaptureScreenshot,
+  onOpenImage,
   onPlay,
   onPause,
   getPlaybackState,
@@ -3016,6 +3017,7 @@ function RichNoteEditor({
   onSubmit: () => void;
   onCancel: () => void;
   onCaptureScreenshot: () => Promise<string>;
+  onOpenImage?: ((src: string) => void) | undefined;
   onPlay: () => void;
   onPause: () => void;
   getPlaybackState: () => { isPlaying: boolean; currentTime: number };
@@ -3149,6 +3151,7 @@ function RichNoteEditor({
       onSubmit={onSubmit}
       onCancel={onCancel}
       onCaptureScreenshot={onCaptureScreenshot}
+      onOpenImage={onOpenImage}
       getSuggestion={autocompleteEnabled ? getSuggestionFn : undefined}
       onWritingActivity={triggerWritingActivity}
       onSuspendSmartTimers={cleanupSmartTimers}
@@ -3201,6 +3204,7 @@ function NotesTab({
   const [smartPauseRewind, setSmartPauseRewind] = useState(true);
   const [menuOpen, setMenuOpen] = useState(false);
   const [smartPauseState, setSmartPauseState] = useState<SmartPauseStatus | null>(null);
+  const isSavingNoteRef = useRef(false);
 
   useEffect(() => {
     setNotes(getCourseNotes(courseId));
@@ -3252,7 +3256,8 @@ function NotesTab({
   };
 
   const handleSaveNewNote = async () => {
-    if (!hasMeaningfulHtmlContent(noteContent)) return;
+    if (isSavingNoteRef.current || !hasMeaningfulHtmlContent(noteContent)) return;
+    isSavingNoteRef.current = true;
     const newNote: NoteItem = {
       id: generateId("note"),
       courseId,
@@ -3263,15 +3268,17 @@ function NotesTab({
       images: extractImagesFromHtml(noteContent),
       createdAt: Date.now(),
     };
-    setNoteContent("");
-    setShowAddNote(false);
-    setNoteTimestamp(null);
-    setEditorKey((k) => k + 1);
     try {
       await createNoteOnServer(courseId, newNote);
       setNotes(getCourseNotes(courseId));
+      setNoteContent("");
+      setShowAddNote(false);
+      setNoteTimestamp(null);
+      setEditorKey((k) => k + 1);
     } catch {
       toast.error("Failed to save note");
+    } finally {
+      isSavingNoteRef.current = false;
     }
   };
 
@@ -3529,6 +3536,13 @@ function NotesTab({
               onSubmit={() => void handleSaveNewNote()}
               onCancel={cancelEditor}
               onCaptureScreenshot={onCaptureFrame}
+              onOpenImage={(src) =>
+                setPreviewImage({
+                  src,
+                  timestamp: noteTimestamp ?? time,
+                  videoTitle: lessonTitle,
+                })
+              }
               onPlay={onPlay}
               onPause={onPause}
               getPlaybackState={getPlaybackState}
@@ -3594,6 +3608,13 @@ function NotesTab({
                       onSubmit={handleUpdateNote}
                       onCancel={cancelEditor}
                       onCaptureScreenshot={onCaptureFrame}
+                      onOpenImage={(src) =>
+                        setPreviewImage({
+                          src,
+                          timestamp: note.timestamp,
+                          videoTitle: lessonTitle,
+                        })
+                      }
                       onPlay={onPlay}
                       onPause={onPause}
                       getPlaybackState={getPlaybackState}

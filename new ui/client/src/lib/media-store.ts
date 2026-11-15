@@ -6,9 +6,26 @@ const DB_NAME = "tutin_media_store";
 const STORE_NAME = "images";
 const DB_VERSION = 1;
 const MEDIA_SCHEME = "media://";
+const VAULT_MEDIA_PREFIX = "/api/notes/media/";
+const COPIED_MEDIA_STORAGE_KEY = "tutin_copied_vault_media_v1";
+const COPIED_MEDIA_TTL_MS = 24 * 60 * 60 * 1000;
+const MAX_COPIED_MEDIA_REFS = 8;
+const THUMB_SAMPLE_DIM = 16;
 
+interface CopiedVaultMediaRef {
+  vaultUri: string;
+  courseId: string;
+  width: number;
+  height: number;
+  thumbB64: string;
+  copiedAt: number;
+}
+
+const MAX_CACHED_OBJECT_URLS = 250;
 const resolvedObjectUrls = new Map<string, string>();
 const inFlightResolutions = new Map<string, Promise<string>>();
+let sharedMediaDbPromise: Promise<IDBDatabase> | null = null;
+let memoryCopiedMediaRefs: CopiedVaultMediaRef[] = [];
 
 export function isMediaUri(src: string | undefined | null): src is `media://${string}` {
   return typeof src === "string" && src.startsWith(MEDIA_SCHEME);
@@ -18,23 +35,287 @@ export function extractMediaId(uri: string): string {
   return uri.startsWith(MEDIA_SCHEME) ? uri.slice(MEDIA_SCHEME.length) : uri;
 }
 
+export function extractVaultMediaUri(rawSrc: string | undefined | null): string | null {
+  if (typeof rawSrc !== "string") return null;
+  const trimmed = rawSrc.trim();
+  if (!trimmed) return null;
+
+  let pathname = "";
+  if (trimmed.startsWith(VAULT_MEDIA_PREFIX)) {
+    pathname = trimmed.split(/[?#]/)[0] ?? "";
+  } else if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
+    try {
+      const parsed = new URL(trimmed);
+      const allowedOrigins = new Set<string>();
+      if (typeof window !== "undefined") {
+        allowedOrigins.add(window.location.origin);
+        if (API_BASE_URL) {
+          allowedOrigins.add(new URL(API_BASE_URL, window.location.origin).origin);
+        }
+      } else if (API_BASE_URL) {
+        allowedOrigins.add(new URL(API_BASE_URL).origin);
+      }
+      if (!allowedOrigins.has(parsed.origin)) return null;
+      pathname = parsed.pathname;
+    } catch {
+      return null;
+    }
+  } else {
+    return null;
+  }
+
+  if (!pathname.startsWith(VAULT_MEDIA_PREFIX)) return null;
+  const rest = pathname.slice(VAULT_MEDIA_PREFIX.length);
+  const segments = rest.split("/");
+  if (segments.length !== 2) return null;
+  const [courseSeg, fileSeg] = segments;
+  if (
+    !courseSeg ||
+    !fileSeg ||
+    courseSeg === "." ||
+    courseSeg === ".." ||
+    fileSeg === "." ||
+    fileSeg === ".."
+  ) {
+    return null;
+  }
+  return `${VAULT_MEDIA_PREFIX}${courseSeg}/${fileSeg}`;
+}
+
+export function getVaultMediaCourseId(vaultUri: string): string | null {
+  const normalized = extractVaultMediaUri(vaultUri);
+  if (!normalized) return null;
+  const courseSeg = normalized.slice(VAULT_MEDIA_PREFIX.length).split("/")[0] ?? "";
+  try {
+    return decodeURIComponent(courseSeg);
+  } catch {
+    return courseSeg;
+  }
+}
+
+export function isVaultMediaCourseCompatible(vaultUri: string, targetCourseId?: string): boolean {
+  const mediaCourse = getVaultMediaCourseId(vaultUri);
+  if (!mediaCourse) return false;
+  const expected = targetCourseId || "shared";
+  return mediaCourse === expected;
+}
+
+export async function verifyVaultMediaExists(vaultUri: string): Promise<boolean> {
+  const normalized = extractVaultMediaUri(vaultUri);
+  if (!normalized) return false;
+  try {
+    const res = await fetch(apiUrl(normalized), { method: "HEAD" });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+export function extractSameCourseVaultImageUrisFromHtml(
+  rawHtml: string | undefined | null,
+  targetCourseId?: string,
+): string[] | null {
+  if (!rawHtml || typeof DOMParser === "undefined") return null;
+  const startMarker = "<!--StartFragment-->";
+  const endMarker = "<!--EndFragment-->";
+  const startIdx = rawHtml.indexOf(startMarker);
+  const endIdx = rawHtml.indexOf(endMarker);
+  const slice =
+    startIdx !== -1 && endIdx > startIdx
+      ? rawHtml.slice(startIdx + startMarker.length, endIdx)
+      : rawHtml;
+
+  const doc = new DOMParser().parseFromString(slice, "text/html");
+  doc.body.querySelectorAll("meta, link, title, style, script").forEach((n) => n.remove());
+  const imgs = Array.from(doc.body.querySelectorAll("img"));
+  if (imgs.length === 0) return null;
+
+  const leftoverText = (doc.body.textContent || "").replace(/[\u00A0\u200B]/g, "").trim();
+  if (leftoverText.length > 0) return null;
+
+  if (doc.body.querySelector("hr, pre, table, input, ul, ol, blockquote, h1, h2, h3, h4, h5, h6")) {
+    return null;
+  }
+
+  const uris: string[] = [];
+  for (const img of imgs) {
+    const rawCandidate = img.getAttribute("data-media-uri") || img.getAttribute("src") || "";
+    const vaultUri = extractVaultMediaUri(rawCandidate);
+    if (!vaultUri || !isVaultMediaCourseCompatible(vaultUri, targetCourseId)) {
+      return null;
+    }
+    uris.push(vaultUri);
+  }
+  return uris.length > 0 ? uris : null;
+}
+
+function readCopiedMediaRefs(): CopiedVaultMediaRef[] {
+  const now = Date.now();
+  let list = memoryCopiedMediaRefs;
+  if (typeof window !== "undefined" && window.localStorage) {
+    try {
+      const raw = window.localStorage.getItem(COPIED_MEDIA_STORAGE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          list = parsed;
+        }
+      }
+    } catch {
+      // Ignore storage read error
+    }
+  }
+  const fresh = list.filter(
+    (entry) =>
+      entry &&
+      typeof entry.vaultUri === "string" &&
+      typeof entry.courseId === "string" &&
+      typeof entry.width === "number" &&
+      typeof entry.height === "number" &&
+      typeof entry.thumbB64 === "string" &&
+      typeof entry.copiedAt === "number" &&
+      now - entry.copiedAt < COPIED_MEDIA_TTL_MS,
+  );
+  memoryCopiedMediaRefs = fresh;
+  return fresh;
+}
+
+function computeCanvasThumbB64(source: CanvasImageSource): string | null {
+  const thumbCanvas = document.createElement("canvas");
+  thumbCanvas.width = THUMB_SAMPLE_DIM;
+  thumbCanvas.height = THUMB_SAMPLE_DIM;
+  const ctx = thumbCanvas.getContext("2d");
+  if (!ctx) return null;
+  try {
+    ctx.drawImage(source, 0, 0, THUMB_SAMPLE_DIM, THUMB_SAMPLE_DIM);
+    const { data } = ctx.getImageData(0, 0, THUMB_SAMPLE_DIM, THUMB_SAMPLE_DIM);
+    const rgb = new Uint8Array(THUMB_SAMPLE_DIM * THUMB_SAMPLE_DIM * 3);
+    for (let i = 0, j = 0; i < data.length; i += 4, j += 3) {
+      rgb[j] = data[i] ?? 0;
+      rgb[j + 1] = data[i + 1] ?? 0;
+      rgb[j + 2] = data[i + 2] ?? 0;
+    }
+    let bin = "";
+    for (let i = 0; i < rgb.length; i++) {
+      bin += String.fromCharCode(rgb[i]!);
+    }
+    return btoa(bin);
+  } catch {
+    return null;
+  }
+}
+
+function isThumbB64Close(aB64: string, bB64: string): boolean {
+  if (aB64 === bB64) return true;
+  try {
+    const aStr = atob(aB64);
+    const bStr = atob(bB64);
+    if (aStr.length !== bStr.length || aStr.length === 0) return false;
+    let totalDiff = 0;
+    let maxDiff = 0;
+    for (let i = 0; i < aStr.length; i++) {
+      const diff = Math.abs(aStr.charCodeAt(i) - bStr.charCodeAt(i));
+      totalDiff += diff;
+      if (diff > maxDiff) maxDiff = diff;
+      if (maxDiff > 12) return false;
+    }
+    return totalDiff / aStr.length <= 2.0;
+  } catch {
+    return false;
+  }
+}
+
+export function rememberCopiedVaultImage(
+  src: string,
+  width: number,
+  height: number,
+  source: CanvasImageSource,
+): void {
+  const vaultUri = extractVaultMediaUri(src);
+  const courseId = vaultUri ? getVaultMediaCourseId(vaultUri) : null;
+  if (!vaultUri || !courseId || width <= 0 || height <= 0) return;
+
+  const thumbB64 = computeCanvasThumbB64(source);
+  if (!thumbB64) return;
+
+  const nextEntry: CopiedVaultMediaRef = {
+    vaultUri,
+    courseId,
+    width,
+    height,
+    thumbB64,
+    copiedAt: Date.now(),
+  };
+  const nextList = [
+    nextEntry,
+    ...readCopiedMediaRefs().filter((item) => item.vaultUri !== vaultUri),
+  ].slice(0, MAX_COPIED_MEDIA_REFS);
+  memoryCopiedMediaRefs = nextList;
+  if (typeof window !== "undefined" && window.localStorage) {
+    try {
+      window.localStorage.setItem(COPIED_MEDIA_STORAGE_KEY, JSON.stringify(nextList));
+    } catch {
+      // Ignore storage quota error
+    }
+  }
+}
+
+export async function findReusableCopiedVaultMediaForBlob(
+  blob: Blob,
+  targetCourseId?: string,
+): Promise<string | null> {
+  const refs = readCopiedMediaRefs().filter((entry) =>
+    isVaultMediaCourseCompatible(entry.vaultUri, targetCourseId),
+  );
+  if (refs.length === 0) return null;
+
+  const objectUrl = URL.createObjectURL(blob);
+  try {
+    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const el = new Image();
+      el.onload = () => resolve(el);
+      el.onerror = () => reject(new Error("decode failed"));
+      el.src = objectUrl;
+    });
+    const width = img.naturalWidth || img.width;
+    const height = img.naturalHeight || img.height;
+    const candidateRefs = refs.filter((r) => r.width === width && r.height === height);
+    if (candidateRefs.length === 0) return null;
+
+    const thumbB64 = computeCanvasThumbB64(img);
+    if (!thumbB64) return null;
+
+    for (const candidate of candidateRefs) {
+      if (isThumbB64Close(candidate.thumbB64, thumbB64)) {
+        if (await verifyVaultMediaExists(candidate.vaultUri)) {
+          return candidate.vaultUri;
+        }
+      }
+    }
+    return null;
+  } catch {
+    return null;
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
+}
+
 export function normalizeMediaSrcForStorage(src: string): string {
   if (!src) return src;
+  const vaultUri = extractVaultMediaUri(src);
+  if (vaultUri) return vaultUri;
   if (API_BASE_URL && src.startsWith(`${API_BASE_URL}/api/`)) {
     return src.slice(API_BASE_URL.length);
   }
   return src;
 }
 
-export function resolveNoteImageSrc(src: string): string {
-  if (!src) return src;
-  if (src.startsWith("/api/")) return apiUrl(src);
-  return src;
-}
-
 function openMediaDb(): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
+  if (sharedMediaDbPromise) return sharedMediaDbPromise;
+
+  sharedMediaDbPromise = new Promise<IDBDatabase>((resolve, reject) => {
     if (typeof window === "undefined" || !("indexedDB" in window)) {
+      sharedMediaDbPromise = null;
       reject(new Error("IndexedDB is not available in this environment."));
       return;
     }
@@ -45,9 +326,36 @@ function openMediaDb(): Promise<IDBDatabase> {
         db.createObjectStore(STORE_NAME);
       }
     };
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error ?? new Error("Failed to open media database."));
+    req.onsuccess = () => {
+      const db = req.result;
+      db.onversionchange = () => {
+        db.close();
+        sharedMediaDbPromise = null;
+      };
+      db.onclose = () => {
+        sharedMediaDbPromise = null;
+      };
+      resolve(db);
+    };
+    req.onerror = () => {
+      sharedMediaDbPromise = null;
+      reject(req.error ?? new Error("Failed to open media database."));
+    };
   });
+
+  return sharedMediaDbPromise;
+}
+
+function cacheResolvedObjectUrl(id: string, url: string): void {
+  if (resolvedObjectUrls.size >= MAX_CACHED_OBJECT_URLS) {
+    const oldestKey = resolvedObjectUrls.keys().next().value;
+    if (oldestKey !== undefined) {
+      const oldestUrl = resolvedObjectUrls.get(oldestKey);
+      if (oldestUrl) URL.revokeObjectURL(oldestUrl);
+      resolvedObjectUrls.delete(oldestKey);
+    }
+  }
+  resolvedObjectUrls.set(id, url);
 }
 
 async function getBlobFromDb(id: string): Promise<Blob | null> {
@@ -143,6 +451,10 @@ export async function saveMediaBlob(
   courseId?: string,
   filename?: string,
 ): Promise<string> {
+  if (courseId) {
+    const reusedUri = await findReusableCopiedVaultMediaForBlob(blob, courseId);
+    if (reusedUri) return reusedUri;
+  }
   const compressed = await compressImageFileToBlob(blob);
   const dataUrl = await blobToDataUrl(compressed);
   return uploadMediaDataUrlToVault(dataUrl, courseId, filename);
@@ -182,7 +494,7 @@ export async function resolveMediaUrl(src: string): Promise<string> {
     const blob = await getBlobFromDb(id);
     if (!blob) return src;
     const url = URL.createObjectURL(blob);
-    resolvedObjectUrls.set(id, url);
+    cacheResolvedObjectUrl(id, url);
     return url;
   })().finally(() => {
     inFlightResolutions.delete(id);

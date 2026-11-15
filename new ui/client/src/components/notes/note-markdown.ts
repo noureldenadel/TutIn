@@ -16,6 +16,7 @@ export {
   restoreCaretBookmark,
   sanitizeClipboardHtml,
   sanitizeHttpUrl,
+  sanitizeStoredNoteHtml,
   stripLiveSyntaxArtifacts,
 } from "./markdown/note-dom";
 

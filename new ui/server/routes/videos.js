@@ -4,6 +4,8 @@ import path from 'path'
 import { spawn } from 'child_process'
 import { getAll, getOne, run, transaction } from '../database.js'
 import { recalculateCourseProgress } from './courses.js'
+import { syncCourseNotesToVault } from './notes.js'
+import { deleteLinkedCanvasNodesForNotes, syncCourseCanvasToVault } from './canvas.js'
 import { getFfmpegPath } from '../utils/ffmpeg.js'
 import { normalizeSubtitleSources } from '../utils/courseAssets.js'
 
@@ -392,9 +394,20 @@ router.post('/:id/favorite', (req, res) => {
 router.delete('/:id', (req, res) => {
     try {
         const video = getOne('SELECT course_id FROM videos WHERE id = ?', [req.params.id])
-        run('DELETE FROM videos WHERE id = ?', [req.params.id])
+        const noteIds = getAll('SELECT id FROM notes WHERE video_id = ?', [req.params.id]).map(n => n.id)
+        let removedCanvasNodes = 0
+
+        transaction(() => {
+            if (video?.course_id && noteIds.length > 0) {
+                removedCanvasNodes = deleteLinkedCanvasNodesForNotes(video.course_id, noteIds)
+            }
+            run('DELETE FROM videos WHERE id = ?', [req.params.id])
+        })
+
         if (video?.course_id) {
             recalculateCourseProgress(video.course_id)
+            if (noteIds.length > 0) syncCourseNotesToVault(video.course_id)
+            if (removedCanvasNodes > 0) syncCourseCanvasToVault(video.course_id)
         }
         res.json({ success: true })
     } catch (err) {

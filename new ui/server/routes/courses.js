@@ -448,7 +448,8 @@ router.post('/:id/hydrate-vault', (req, res) => {
                 }
             }
 
-            // 2. Hydrate Notes
+            // 2. Hydrate Notes (guard against ID collision if a .tutin vault was copied from another course)
+            const rekeyedNoteIds = new Map()
             if (Array.isArray(vaultData?.notes) && vaultData.notes.length > 0) {
                 const now = new Date().toISOString()
 
@@ -473,21 +474,31 @@ router.post('/:id/hydrate-vault', (req, res) => {
                     }
 
                     if (matchedVideo) {
-                        const existingNote = getOne('SELECT id FROM notes WHERE id = ?', [note.id])
+                        const existingOwner = getOne('SELECT id, course_id FROM notes WHERE id = ?', [note.id])
+                        const targetNoteId = existingOwner && existingOwner.course_id !== id
+                            ? `${id}_${note.id}`
+                            : note.id
+                        if (targetNoteId !== note.id) {
+                            rekeyedNoteIds.set(note.id, targetNoteId)
+                        }
+                        const existingTarget = existingOwner?.course_id === id
+                            ? existingOwner
+                            : getOne('SELECT id, course_id FROM notes WHERE id = ?', [targetNoteId])
+
                         const rewrittenContent = rewriteMediaUrlCourseId(note.content || '', id)
                         const rewrittenImages = (note.images || []).map(img => rewriteMediaUrlCourseId(img, id))
                         const imagesJson = JSON.stringify(rewrittenImages)
                         const tagsJson = JSON.stringify(note.tags || [])
 
-                        if (existingNote) {
+                        if (existingTarget && existingTarget.course_id === id) {
                             run(`
                                 UPDATE notes SET 
                                     video_id = ?, timestamp = ?, content = ?, 
                                     images = ?, tags = ?, updated_at = ?
-                                WHERE id = ?
+                                WHERE id = ? AND course_id = ?
                             `, [
                                 matchedVideo.id, note.timestamp || 0, rewrittenContent,
-                                imagesJson, tagsJson, note.updatedAt || now, note.id
+                                imagesJson, tagsJson, note.updatedAt || now, targetNoteId, id
                             ])
                         } else {
                             run(`
@@ -495,7 +506,7 @@ router.post('/:id/hydrate-vault', (req, res) => {
                                     id, video_id, course_id, timestamp, content, images, tags, created_at, updated_at
                                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                             `, [
-                                note.id, matchedVideo.id, id, note.timestamp || 0,
+                                targetNoteId, matchedVideo.id, id, note.timestamp || 0,
                                 rewrittenContent, imagesJson, tagsJson,
                                 note.createdAt || now, note.updatedAt || now
                             ])
@@ -507,21 +518,81 @@ router.post('/:id/hydrate-vault', (req, res) => {
 
             // 3. Hydrate Canvas (supports both Canvas v2 and legacy Canvas v1 vaults)
             if (rawVaultCanvas) {
+                const scopeCanvasId = (table, rawId, map) => {
+                    if (!rawId) return rawId
+                    const owner = getOne(`SELECT course_id FROM ${table} WHERE id = ?`, [rawId])
+                    if (owner && owner.course_id !== id) {
+                        const scoped = `${id}_${rawId}`
+                        map.set(rawId, scoped)
+                        return scoped
+                    }
+                    return rawId
+                }
+                const rekeyedGroupIds = new Map()
+                const rekeyedCardIds = new Map()
+
+                const hydratedGroups = Array.isArray(rawVaultCanvas.groups)
+                    ? rawVaultCanvas.groups.map(g => ({
+                        ...g,
+                        id: scopeCanvasId('canvas_groups', g.id, rekeyedGroupIds),
+                    }))
+                    : undefined
+
+                const hydratedCards = Array.isArray(rawVaultCanvas.cards)
+                    ? rawVaultCanvas.cards.map(c => ({
+                        ...c,
+                        id: scopeCanvasId('canvas_nodes', c.id, rekeyedCardIds),
+                        noteId: c.noteId ? (rekeyedNoteIds.get(c.noteId) ?? c.noteId) : c.noteId,
+                        groupId: c.groupId ? (rekeyedGroupIds.get(c.groupId) ?? c.groupId) : c.groupId,
+                        htmlContent: rewriteMediaUrlCourseId(c.htmlContent || '', id),
+                        imageSrc: rewriteMediaUrlCourseId(c.imageSrc, id),
+                    }))
+                    : undefined
+
+                const hydratedLegacyNodes = Array.isArray(rawVaultCanvas.nodes)
+                    ? rawVaultCanvas.nodes.map(n => ({
+                        ...n,
+                        id: scopeCanvasId('canvas_nodes', n.id, rekeyedCardIds),
+                        noteId: n.noteId ? (rekeyedNoteIds.get(n.noteId) ?? n.noteId) : n.noteId,
+                        content: rewriteMediaUrlCourseId(n.content || '', id),
+                    }))
+                    : undefined
+
+                const hydratedEdges = Array.isArray(rawVaultCanvas.edges)
+                    ? rawVaultCanvas.edges.map(e => {
+                        const existingEdge = getOne('SELECT course_id FROM canvas_edges WHERE id = ?', [e.id])
+                        const edgeId = existingEdge && existingEdge.course_id !== id ? `${id}_${e.id}` : e.id
+                        const rawFrom = e.fromId || e.fromNodeId
+                        const rawTo = e.toId || e.toNodeId
+                        return {
+                            ...e,
+                            id: edgeId,
+                            fromId: rekeyedCardIds.get(rawFrom) ?? rawFrom,
+                            toId: rekeyedCardIds.get(rawTo) ?? rawTo,
+                        }
+                    })
+                    : undefined
+
+                const hydratedStrokes = Array.isArray(rawVaultCanvas.strokes)
+                    ? rawVaultCanvas.strokes.map(s => {
+                        const existingStroke = getOne('SELECT course_id FROM canvas_strokes WHERE id = ?', [s.id])
+                        return {
+                            ...s,
+                            id: existingStroke && existingStroke.course_id !== id ? `${id}_${s.id}` : s.id,
+                            parentGroupId: s.parentGroupId
+                                ? (rekeyedGroupIds.get(s.parentGroupId) ?? s.parentGroupId)
+                                : s.parentGroupId,
+                        }
+                    })
+                    : undefined
+
                 const canvasPayload = {
                     ...rawVaultCanvas,
-                    cards: Array.isArray(rawVaultCanvas.cards)
-                        ? rawVaultCanvas.cards.map(c => ({
-                            ...c,
-                            htmlContent: rewriteMediaUrlCourseId(c.htmlContent || '', id),
-                            imageSrc: rewriteMediaUrlCourseId(c.imageSrc, id),
-                        }))
-                        : undefined,
-                    nodes: Array.isArray(rawVaultCanvas.nodes)
-                        ? rawVaultCanvas.nodes.map(n => ({
-                            ...n,
-                            content: rewriteMediaUrlCourseId(n.content || '', id),
-                        }))
-                        : undefined,
+                    groups: hydratedGroups,
+                    cards: hydratedCards,
+                    edges: hydratedEdges,
+                    strokes: hydratedStrokes,
+                    nodes: hydratedLegacyNodes,
                 }
                 writeCanvasPayloadToDb(id, canvasPayload, { insideTransaction: true })
                 hydratedNodes = canvasPayload.cards?.length ?? canvasPayload.nodes?.length ?? 0

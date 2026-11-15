@@ -1,3 +1,5 @@
+import { rememberCopiedVaultImage } from "@/lib/media-store";
+
 export async function copyTextToClipboard(text: string): Promise<void> {
   if (navigator.clipboard?.writeText) {
     try {
@@ -47,6 +49,7 @@ async function renderImageToPngBlob(src: string): Promise<Blob> {
   const ctx = canvas.getContext("2d");
   if (!ctx) throw new Error("Canvas context unavailable.");
   ctx.drawImage(img, 0, 0);
+  rememberCopiedVaultImage(src, width, height, canvas);
 
   return await new Promise<Blob>((resolve, reject) => {
     canvas.toBlob((blob) => {

@@ -436,6 +436,8 @@ export function sanitizeClipboardHtml(rawHtml: string): string {
             el.removeAttribute(attr.name);
           }
           el.setAttribute("type", "checkbox");
+          el.setAttribute("data-task-checkbox", "true");
+          el.setAttribute("contenteditable", "false");
           if (checked) el.setAttribute("checked", "");
         } else {
           el.remove();
@@ -475,12 +477,30 @@ export function sanitizeClipboardHtml(rawHtml: string): string {
 
       if (SAFE_CLIPBOARD_BLOCK_TAGS.has(tag) || SAFE_CLIPBOARD_INLINE_TAGS.has(tag)) {
         const keepTaskList = tag === "ul" && el.hasAttribute("data-task-list");
-        const keepTaskItem = tag === "li" && el.hasAttribute("data-task-item");
+        const isTaskItem =
+          tag === "li" && (el.hasAttribute("data-task") || el.hasAttribute("data-task-item"));
+        const taskChecked =
+          isTaskItem &&
+          (el.getAttribute("data-checked") === "true" ||
+            Boolean(el.querySelector(':scope > input[type="checkbox"][checked]')));
+        const codeLang = tag === "code" ? el.getAttribute("data-lang") : null;
         for (const attr of Array.from(el.attributes)) {
           el.removeAttribute(attr.name);
         }
         if (keepTaskList) el.setAttribute("data-task-list", "true");
-        if (keepTaskItem) el.setAttribute("data-task-item", "true");
+        if (isTaskItem) {
+          el.setAttribute("data-task", "true");
+          el.setAttribute("data-checked", String(taskChecked));
+        }
+        if (codeLang) el.setAttribute("data-lang", codeLang);
+        continue;
+      }
+
+      if (tag === "span" && el.hasAttribute("data-task-content")) {
+        for (const attr of Array.from(el.attributes)) {
+          el.removeAttribute(attr.name);
+        }
+        el.setAttribute("data-task-content", "true");
         continue;
       }
 
@@ -526,4 +546,182 @@ export function sanitizeClipboardHtml(rawHtml: string): string {
   sanitizeChildren(doc.body);
   stripLiveSyntaxArtifacts(doc.body);
   return doc.body.innerHTML.trim();
+}
+
+const SAFE_STORED_NOTE_TAGS = new Set([
+  "h1",
+  "h2",
+  "h3",
+  "h4",
+  "h5",
+  "h6",
+  "p",
+  "div",
+  "blockquote",
+  "pre",
+  "code",
+  "ul",
+  "ol",
+  "li",
+  "hr",
+  "br",
+  "strong",
+  "b",
+  "em",
+  "i",
+  "u",
+  "s",
+  "del",
+  "strike",
+  "mark",
+  "sub",
+  "sup",
+  "kbd",
+  "span",
+  "a",
+  "img",
+  "input",
+  "table",
+  "thead",
+  "tbody",
+  "tr",
+  "th",
+  "td",
+]);
+
+const SAFE_STORED_ATTRS = new Set([
+  "alt",
+  "checked",
+  "class",
+  "contenteditable",
+  "data-checked",
+  "data-code-eol",
+  "data-image-tail",
+  "data-lang",
+  "data-media-uri",
+  "data-note-image-block",
+  "data-task",
+  "data-task-checkbox",
+  "data-task-content",
+  "data-task-list",
+  "disabled",
+  "draggable",
+  "height",
+  "href",
+  "rel",
+  "src",
+  "style",
+  "target",
+  "title",
+  "type",
+  "width",
+]);
+
+function isSafeStoredMediaSrc(rawSrc: string): boolean {
+  const trimmed = rawSrc.trim();
+  if (!trimmed) return false;
+  if (trimmed.startsWith("media://") || trimmed.startsWith("blob:")) return true;
+  if (trimmed.startsWith("/api/") && !trimmed.startsWith("//")) return true;
+  if (/^data:image\/(?:png|jpe?g|gif|webp|bmp|avif);base64,/i.test(trimmed)) return true;
+  return sanitizeHttpUrl(trimmed) !== null;
+}
+
+function isSafeStoredHref(rawHref: string): string | null {
+  const trimmed = rawHref.trim();
+  if (!trimmed) return null;
+  if (trimmed.startsWith("#")) return trimmed;
+  if (/^mailto:[^\s<>]+$/i.test(trimmed)) return trimmed;
+  return sanitizeHttpUrl(trimmed);
+}
+
+/**
+ * Sanitizes persisted note HTML before rendering or loading into the editor,
+ * blocking active XSS vectors while keeping note structure, task items, and media refs.
+ */
+export function sanitizeStoredNoteHtml(rawHtml: string): string {
+  if (!rawHtml) return "";
+
+  const doc = new DOMParser().parseFromString(rawHtml, "text/html");
+  doc.body
+    .querySelectorAll(
+      "script, style, noscript, iframe, object, embed, meta, link, title, base, form, svg, math",
+    )
+    .forEach((node) => node.remove());
+
+  const sanitizeNodeTree = (parent: HTMLElement): void => {
+    for (const child of Array.from(parent.childNodes)) {
+      if (child.nodeType === Node.COMMENT_NODE) {
+        child.remove();
+        continue;
+      }
+      if (child.nodeType !== Node.ELEMENT_NODE) continue;
+
+      const el = child as HTMLElement;
+      const tag = el.tagName.toLowerCase();
+      sanitizeNodeTree(el);
+
+      if (!SAFE_STORED_NOTE_TAGS.has(tag)) {
+        unwrapElement(el);
+        continue;
+      }
+
+      if (tag === "input") {
+        if (el.getAttribute("type")?.toLowerCase() !== "checkbox") {
+          el.remove();
+          continue;
+        }
+        el.setAttribute("data-task-checkbox", "true");
+        el.setAttribute("contenteditable", "false");
+      }
+
+      if (tag === "img") {
+        const src = el.getAttribute("src") || "";
+        const mediaUri = el.getAttribute("data-media-uri") || "";
+        if (!isSafeStoredMediaSrc(src) && !isSafeStoredMediaSrc(mediaUri)) {
+          el.remove();
+          continue;
+        }
+      }
+
+      if (tag === "a") {
+        const safeHref = isSafeStoredHref(el.getAttribute("href") || "");
+        if (!safeHref) {
+          unwrapElement(el);
+          continue;
+        }
+        el.setAttribute("href", safeHref);
+        el.setAttribute("target", "_blank");
+        el.setAttribute("rel", "noopener noreferrer");
+      }
+
+      for (const attr of Array.from(el.attributes)) {
+        const name = attr.name.toLowerCase();
+        if (name.startsWith("on") || name === "srcdoc" || !SAFE_STORED_ATTRS.has(name)) {
+          el.removeAttribute(attr.name);
+          continue;
+        }
+        if (name === "style") {
+          if (
+            /expression\s*\(|javascript:|vbscript:|behavior\s*:|-moz-binding|url\s*\(/i.test(
+              attr.value,
+            )
+          ) {
+            el.removeAttribute(attr.name);
+          }
+          continue;
+        }
+        if (name === "src" && !isSafeStoredMediaSrc(attr.value)) {
+          el.removeAttribute(attr.name);
+          continue;
+        }
+        if (name === "data-media-uri" && !isSafeStoredMediaSrc(attr.value)) {
+          el.removeAttribute(attr.name);
+        }
+      }
+    }
+  };
+
+  sanitizeNodeTree(doc.body);
+  stripLiveSyntaxArtifacts(doc.body);
+  return doc.body.innerHTML;
 }

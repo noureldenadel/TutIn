@@ -37,7 +37,7 @@ new ui/
 ├── CHANGELOG.md             # Release notes & version history for TutIn v6 (new ui)
 ├── server/                  # Express 5 + SQLite (sql.js) API & range-request video server (:9474)
 │   ├── index.js             # Entry point, /api/health (6.0.0), static SPA serving, route mounting
-│   ├── database.js          # SQLite persistence in %APPDATA%/TutIn/tutin.db (or TUTIN_DATA_DIR), migrations 001–007
+│   ├── database.js          # SQLite persistence in %APPDATA%/TutIn/tutin.db (or TUTIN_DATA_DIR), migrations 001–008
 │   ├── routes/              # REST API routes (/api/courses, /api/notes, /api/canvas, /api/fs, ...)
 │   ├── services/            # Course folder scanner, video range streamer, missing-path repair
 │   └── utils/               # Caption parser, .tutin vault helpers, MP4/TS duration parsers, FFmpeg helper
@@ -57,6 +57,6 @@ new ui/
 
 - [`CHANGELOG.md`](./CHANGELOG.md) — Version history for TutIn v6 (`new ui`).
 - [`docs/USER_GUIDE.md`](./docs/USER_GUIDE.md) — Walkthrough of course intake, playback, notes, canvas whiteboards, analytics, and backups.
-- [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) — Database schema (`001`–`007`), API routes, `.tutin/` vault layout, and sync architecture.
+- [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) — Database schema (`001`–`008`), API routes, `.tutin/` vault layout, and sync architecture.
 - [`docs/UI_UX_SYSTEM.md`](./docs/UI_UX_SYSTEM.md) — OKLCH design tokens, component conventions, and UI decision log.
 - [`client/README.md`](./client/README.md) — Client route map and frontend development scripts.

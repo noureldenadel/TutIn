@@ -1,6 +1,7 @@
 import {
   ChevronDown,
   ChevronUp,
+  Copy,
   CornerDownLeft,
   Group,
   LayoutGrid,
@@ -9,6 +10,7 @@ import {
   Trash2,
   Type,
 } from "lucide-react";
+import { toast } from "sonner";
 
 import {
   ContextMenuDivider,
@@ -16,8 +18,11 @@ import {
   ContextMenuSurface,
   EditorAndImageMenuSections,
 } from "@/components/notes/app-context-menu";
+import { noteHtmlToMarkdown } from "@/components/notes/note-markdown";
 import { CANVAS_ACCENT_OPTIONS } from "@/components/canvas/canvas-tokens";
+import { copyTextToClipboard } from "@/lib/clipboard";
 import type { CanvasCard, CanvasEdge, CanvasGroup } from "@/lib/course-canvas";
+import { stripHtmlToText } from "@/lib/course-notes";
 import type { ContextMenuTargetAnalysis } from "@/lib/spellcheck";
 import { cn } from "@/lib/utils";
 
@@ -69,6 +74,7 @@ function ColorSwatchRow({
             title="Default"
             aria-label="Default color"
             aria-pressed={activeIndex === undefined}
+            onMouseDown={(e) => e.preventDefault()}
             onClick={() => onSelect(undefined)}
             className={cn(
               "relative flex size-5 items-center justify-center rounded-full border border-border bg-secondary transition-transform hover:scale-110",
@@ -88,6 +94,7 @@ function ColorSwatchRow({
               title={opt.label}
               aria-label={opt.label}
               aria-pressed={isActive}
+              onMouseDown={(e) => e.preventDefault()}
               onClick={() => onSelect(opt.index)}
               className={cn(
                 "size-5 rounded-full border border-black/15 dark:border-white/15 transition-transform hover:scale-110",
@@ -206,14 +213,34 @@ export function CanvasContextMenu({
           <ContextMenuDivider />
 
           {canEditSingle && singleCard && (
-            <ContextMenuItem
-              icon={<Pencil />}
-              label="Edit"
-              onClick={() => {
-                onEditCard(singleCard.id);
-                onClose();
-              }}
-            />
+            <>
+              <ContextMenuItem
+                icon={<Pencil />}
+                label="Edit"
+                onClick={() => {
+                  onEditCard(singleCard.id);
+                  onClose();
+                }}
+              />
+              <ContextMenuItem
+                icon={<Copy />}
+                label="Copy note"
+                onClick={() => {
+                  const text =
+                    noteHtmlToMarkdown(singleCard.htmlContent) ||
+                    stripHtmlToText(singleCard.htmlContent);
+                  if (!text.trim()) {
+                    toast("Note is empty");
+                    onClose();
+                    return;
+                  }
+                  void copyTextToClipboard(text)
+                    .then(() => toast("Note copied"))
+                    .catch(() => toast.error("Failed to copy note"));
+                  onClose();
+                }}
+              />
+            </>
           )}
 
           {hasReturnableVideoNote && (

@@ -110,10 +110,6 @@ export const CANVAS_MIN_ZOOM = 0.25;
 export const CANVAS_MAX_ZOOM = 3;
 const HYSTERESIS_MARGIN = 18;
 
-export function getCanvasStorageKey(courseId: string): string {
-  return `${CANVAS_STORAGE_PREFIX}${courseId}`;
-}
-
 export function getVideoArtboardId(lessonIdx: number, courseId?: string): string {
   return courseId ? `vgroup-${courseId}-${lessonIdx}` : `vgroup-${lessonIdx}`;
 }
@@ -357,14 +353,21 @@ function normalizeViewport(raw: unknown): CanvasViewport {
   const obj = raw as Record<string, unknown>;
   const rawPan = obj["pan"];
   const pan = rawPan && typeof rawPan === "object" ? (rawPan as Record<string, unknown>) : null;
-  const x = Number(pan?.["x"] ?? obj["x"]) || 40;
-  const y = Number(pan?.["y"] ?? obj["y"]) || 30;
-  const zoom = Math.max(CANVAS_MIN_ZOOM, Math.min(CANVAS_MAX_ZOOM, Number(obj["zoom"]) || 1));
+  const rawX = Number(pan?.["x"] ?? obj["x"]);
+  const rawY = Number(pan?.["y"] ?? obj["y"]);
+  const rawZoom = Number(obj["zoom"]);
+  const x = Number.isFinite(rawX) ? rawX : 40;
+  const y = Number.isFinite(rawY) ? rawY : 30;
+  const zoom = Math.max(
+    CANVAS_MIN_ZOOM,
+    Math.min(CANVAS_MAX_ZOOM, Number.isFinite(rawZoom) && rawZoom > 0 ? rawZoom : 1),
+  );
   return { x, y, zoom };
 }
 
 const canvasMemoryCache = new Map<string, CourseCanvasState>();
 const pendingCanvasSaves = new Map<string, number>();
+const pendingViewportSaves = new Map<string, { timer: number; viewport: CanvasViewport }>();
 
 export async function fetchCourseCanvas(
   courseId: string,
@@ -387,6 +390,11 @@ export async function fetchCourseCanvas(
 
 export async function saveCourseCanvasToServer(state: CourseCanvasState): Promise<void> {
   if (typeof window === "undefined" || !state.courseId) return;
+  const pendingVp = pendingViewportSaves.get(state.courseId);
+  if (pendingVp !== undefined) {
+    window.clearTimeout(pendingVp.timer);
+    pendingViewportSaves.delete(state.courseId);
+  }
   const payload = { ...state, updatedAt: Date.now() };
   canvasMemoryCache.set(state.courseId, payload);
   try {
@@ -419,6 +427,11 @@ export function saveCourseCanvas(state: CourseCanvasState): void {
   if (existingTimer !== undefined) {
     window.clearTimeout(existingTimer);
   }
+  const pendingVp = pendingViewportSaves.get(state.courseId);
+  if (pendingVp !== undefined) {
+    window.clearTimeout(pendingVp.timer);
+    pendingViewportSaves.delete(state.courseId);
+  }
   const timer = window.setTimeout(() => {
     pendingCanvasSaves.delete(state.courseId);
     void saveCourseCanvasToServer(payload);
@@ -426,19 +439,64 @@ export function saveCourseCanvas(state: CourseCanvasState): void {
   pendingCanvasSaves.set(state.courseId, timer);
 }
 
+/**
+ * Persists pan/zoom changes via PATCH /viewport so camera movement never rewrites
+ * cards, strokes, or vault files on disk.
+ */
+export function saveCourseViewport(courseId: string, viewport: CanvasViewport): void {
+  if (typeof window === "undefined" || !courseId) return;
+  const cached = canvasMemoryCache.get(courseId);
+  if (cached) {
+    canvasMemoryCache.set(courseId, { ...cached, viewport });
+  }
+  const existing = pendingViewportSaves.get(courseId);
+  if (existing !== undefined) {
+    window.clearTimeout(existing.timer);
+  }
+  const timer = window.setTimeout(() => {
+    pendingViewportSaves.delete(courseId);
+    void fetch(`/api/canvas/${encodeURIComponent(courseId)}/viewport`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(viewport),
+    }).catch((err) => {
+      console.warn("[CourseCanvas] Failed to persist canvas viewport:", err);
+    });
+  }, 280);
+  pendingViewportSaves.set(courseId, { timer, viewport });
+}
+
 export function flushPendingCanvasSave(courseId: string): void {
   if (typeof window === "undefined") return;
   const timer = pendingCanvasSaves.get(courseId);
+  const pendingVp = pendingViewportSaves.get(courseId);
+
   if (timer !== undefined) {
     window.clearTimeout(timer);
     pendingCanvasSaves.delete(courseId);
+    if (pendingVp !== undefined) {
+      window.clearTimeout(pendingVp.timer);
+      pendingViewportSaves.delete(courseId);
+    }
+    const latest = canvasMemoryCache.get(courseId);
+    if (latest) {
+      void fetch(`/api/canvas/${encodeURIComponent(courseId)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...latest, updatedAt: Date.now() }),
+        keepalive: true,
+      }).catch(() => {});
+    }
+    return;
   }
-  const latest = canvasMemoryCache.get(courseId);
-  if (latest) {
-    void fetch(`/api/canvas/${encodeURIComponent(courseId)}`, {
-      method: "PUT",
+
+  if (pendingVp !== undefined) {
+    window.clearTimeout(pendingVp.timer);
+    pendingViewportSaves.delete(courseId);
+    void fetch(`/api/canvas/${encodeURIComponent(courseId)}/viewport`, {
+      method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...latest, updatedAt: Date.now() }),
+      body: JSON.stringify(pendingVp.viewport),
       keepalive: true,
     }).catch(() => {});
   }
@@ -806,10 +864,7 @@ export function reconcileCanvasWithNotes(
         groups: existingState.groups.map((g) => ({ ...g })),
         cards: existingState.cards.map((c) => ({ ...c })),
         edges: existingState.edges.map((e) => ({ ...e })),
-        strokes: existingState.strokes.map((s) => ({
-          ...s,
-          points: s.points.map((pt) => [...pt] as [number, number, number]),
-        })),
+        strokes: existingState.strokes.map((s) => ({ ...s })),
         dismissedNoteIds: [...existingState.dismissedNoteIds],
       }
     : createEmptyCanvasState(courseId);
@@ -817,10 +872,14 @@ export function reconcileCanvasWithNotes(
   const noteById = new Map(notes.map((n) => [n.id, n]));
   const dismissedSet = new Set(base.dismissedNoteIds.filter((id) => noteById.has(id)));
 
-  // 1. Remove synced cards whose Player note was actually deleted
+  // 1. Remove synced cards whose Player note was deleted (including legacy orphaned video-notes)
   const survivingCards: CanvasCard[] = [];
   for (const card of base.cards) {
-    if (card.type === "video-note" && card.noteId && !noteById.has(card.noteId)) {
+    if (
+      card.type === "video-note" &&
+      !card.isCanvasOnly &&
+      (!card.noteId || !noteById.has(card.noteId))
+    ) {
       continue;
     }
     survivingCards.push(card);

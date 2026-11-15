@@ -14,6 +14,8 @@ import path from 'path'
 import { getAll, run, transaction, saveDatabase, getDb, getDataDir } from '../database.js'
 import { parseMp4Duration } from '../utils/mp4Parser.js'
 import { recalculateCourseProgress } from './courses.js'
+import { syncCourseNotesToVault } from './notes.js'
+import { syncCourseCanvasToVault } from './canvas.js'
 
 const router = express.Router()
 
@@ -368,6 +370,27 @@ router.post('/import', (req, res) => {
         }
 
         saveDatabase()
+
+        const importedNoteCourseIds = new Set(
+            (Array.isArray(data.notes) ? data.notes : [])
+                .map(n => n?.course_id)
+                .filter(Boolean)
+        )
+        for (const cid of importedNoteCourseIds) {
+            syncCourseNotesToVault(cid)
+        }
+
+        const importedCanvasCourseIds = new Set([
+            ...(Array.isArray(data.canvas_groups) ? data.canvas_groups.map(r => r?.course_id) : []),
+            ...(Array.isArray(data.canvas_nodes) ? data.canvas_nodes.map(r => r?.course_id) : []),
+            ...(Array.isArray(data.canvas_edges) ? data.canvas_edges.map(r => r?.course_id) : []),
+            ...(Array.isArray(data.canvas_strokes) ? data.canvas_strokes.map(r => r?.course_id) : []),
+            ...(Array.isArray(data.canvas_course_meta) ? data.canvas_course_meta.map(r => r?.course_id) : []),
+        ].filter(Boolean))
+        for (const cid of importedCanvasCourseIds) {
+            syncCourseCanvasToVault(cid)
+        }
+
         res.json({ success: true })
     } catch (err) {
         res.status(500).json({ error: err.message })

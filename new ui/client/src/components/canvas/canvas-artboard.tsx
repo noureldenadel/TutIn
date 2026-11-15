@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { memo, useEffect, useRef, useState, type CSSProperties } from "react";
 import { ChevronDown, ChevronRight, Group, LayoutGrid, Trash2, Video } from "lucide-react";
 import { CANVAS_GROUP_HEADER_HEIGHT, type CanvasGroup } from "@/lib/course-canvas";
 import { getArtboardAccentVar } from "@/components/canvas/canvas-tokens";
@@ -43,7 +43,7 @@ const ARTBOARD_EDGE_STRIPS: ReadonlyArray<{ key: string; style: CSSProperties }>
   },
 ];
 
-export function CanvasArtboard({
+export const CanvasArtboard = memo(function CanvasArtboard({
   group,
   selected,
   isDropTarget,
@@ -66,15 +66,15 @@ export function CanvasArtboard({
   childCount: number;
   renameSignal?: number | undefined;
   pointerEventsDisabled: boolean;
-  onSelect: (e: React.PointerEvent) => void;
-  onStartDragHeader: (e: React.PointerEvent) => void;
-  onStartDragEdge: (e: React.PointerEvent) => void;
-  onStartResize: (e: React.PointerEvent) => void;
-  onRename: (nextTitle: string) => void;
-  onToggleCollapse: () => void;
-  onTidy: () => void;
-  onDelete: () => void;
-  onContextMenu?: ((e: React.MouseEvent) => void) | undefined;
+  onSelect: (groupId: string, e: React.PointerEvent) => void;
+  onStartDragHeader: (groupId: string, e: React.PointerEvent) => void;
+  onStartDragEdge: (groupId: string, e: React.PointerEvent) => void;
+  onStartResize: (groupId: string, e: React.PointerEvent) => void;
+  onRename: (groupId: string, nextTitle: string) => void;
+  onToggleCollapse: (groupId: string) => void;
+  onTidy: (groupId: string) => void;
+  onDelete: (groupId: string) => void;
+  onContextMenu?: ((groupId: string, e: React.MouseEvent) => void) | undefined;
 }) {
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [draftTitle, setDraftTitle] = useState(group.title);
@@ -103,7 +103,7 @@ export function CanvasArtboard({
     setIsEditingTitle(false);
     const trimmed = draftTitle.trim();
     if (trimmed && trimmed !== group.title) {
-      onRename(trimmed);
+      onRename(group.id, trimmed);
     } else {
       setDraftTitle(group.title);
     }
@@ -113,17 +113,17 @@ export function CanvasArtboard({
     if (pointerEventsDisabled || e.button === 1) return;
     if (e.button === 2) {
       e.stopPropagation();
-      onSelect(e);
+      onSelect(group.id, e);
       return;
     }
     if (e.button !== 0) return;
     e.stopPropagation();
     if (!selected) {
       // Obsidian-style: clicking an unselected group perimeter selects it without starting a drag.
-      onSelect(e);
+      onSelect(group.id, e);
       return;
     }
-    onStartDragEdge(e);
+    onStartDragEdge(group.id, e);
   };
 
   return (
@@ -150,7 +150,7 @@ export function CanvasArtboard({
         }
         e.preventDefault();
         e.stopPropagation();
-        onContextMenu?.(e);
+        onContextMenu?.(group.id, e);
       }}
     >
       {/* Perimeter Edge Hit Strips (Obsidian-style: select first, drag once selected) */}
@@ -186,11 +186,11 @@ export function CanvasArtboard({
           if (pointerEventsDisabled || isEditingTitle || e.button === 1) return;
           if (e.button === 2) {
             e.stopPropagation();
-            onSelect(e);
+            onSelect(group.id, e);
             return;
           }
           e.stopPropagation();
-          onStartDragHeader(e);
+          onStartDragHeader(group.id, e);
         }}
         className={cn(
           "flex items-center gap-2 rounded-t-xl px-3.5 text-xs",
@@ -204,7 +204,7 @@ export function CanvasArtboard({
           onPointerDown={(e) => e.stopPropagation()}
           onClick={(e) => {
             e.stopPropagation();
-            onToggleCollapse();
+            onToggleCollapse(group.id);
           }}
           aria-label={group.collapsed ? "Expand artboard" : "Collapse artboard"}
           className="flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground [&_svg]:stroke-[1.75]"
@@ -265,7 +265,7 @@ export function CanvasArtboard({
               type="button"
               onClick={(e) => {
                 e.stopPropagation();
-                onTidy();
+                onTidy(group.id);
               }}
               title="Sort chronologically"
               className="inline-flex h-6 items-center gap-1 rounded-sm bg-secondary/80 px-1.5 text-[11px] font-medium text-foreground transition-colors hover:bg-secondary"
@@ -285,7 +285,7 @@ export function CanvasArtboard({
             title="Remove artboard frame"
             onClick={(e) => {
               e.stopPropagation();
-              onDelete();
+              onDelete(group.id);
             }}
             className="flex size-6 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-opacity hover:bg-destructive/15 hover:text-destructive group-hover/artboard:opacity-100 focus-visible:opacity-100"
           >
@@ -300,7 +300,7 @@ export function CanvasArtboard({
           onPointerDown={(e) => {
             if (pointerEventsDisabled || e.button === 1) return;
             e.stopPropagation();
-            onStartResize(e);
+            onStartResize(group.id, e);
           }}
           title="Drag to resize artboard"
           className={cn(
@@ -314,4 +314,4 @@ export function CanvasArtboard({
       )}
     </div>
   );
-}
+});
