@@ -119,7 +119,7 @@
   --chart-1: oklch(0.56 0.16 278);
   --chart-2: oklch(0.58 0.14 235);
   --chart-3: oklch(0.66 0.16 75);
-  --chart-4: oklch(0.60 0.14 155);
+  --chart-4: oklch(0.6 0.14 155);
   --chart-5: oklch(0.62 0.15 15);
   --sidebar: oklch(0.984 0.003 247.858);
   --sidebar-foreground: oklch(0.129 0.042 264.695);
@@ -133,7 +133,7 @@
 
 .dark {
   --shell: oklch(0.155 0.004 270);
-  --background: oklch(0.190 0.005 270);
+  --background: oklch(0.19 0.005 270);
   --foreground: oklch(0.94 0.005 255);
   --card: oklch(0.232 0.005 270);
   --card-foreground: oklch(0.94 0.005 255);
@@ -165,7 +165,7 @@
   --shadow-workspace: 0 22px 60px oklch(0 0 0 / 0.24);
   --shadow-brand: 0 8px 24px oklch(0 0 0 / 0.2);
   --shadow-status: 0 0 0 4px oklch(0.7 0.004 255 / 0.12);
-  --chart-1: oklch(0.70 0.15 278);
+  --chart-1: oklch(0.7 0.15 278);
   --chart-2: oklch(0.72 0.13 235);
   --chart-3: oklch(0.76 0.15 75);
   --chart-4: oklch(0.72 0.13 155);
@@ -212,7 +212,6 @@
   ::-webkit-scrollbar-corner {
     background: transparent;
   }
-
 
   body {
     background-color: var(--color-background);
@@ -323,8 +322,7 @@ html.theme-transitioning *::after {
 }
 
 @utility course-art {
-  background:
-    linear-gradient(145deg, oklch(0.945 0.003 255), oklch(0.8 0.004 255));
+  background: linear-gradient(145deg, oklch(0.945 0.003 255), oklch(0.8 0.004 255));
 }
 
 @utility course-art-mint {
@@ -350,8 +348,16 @@ html.theme-transitioning *::after {
 
 @utility course-grid {
   background-image:
-    linear-gradient(to right, color-mix(in oklab, var(--course-ink) 14%, transparent) 1px, transparent 1px),
-    linear-gradient(to bottom, color-mix(in oklab, var(--course-ink) 14%, transparent) 1px, transparent 1px);
+    linear-gradient(
+      to right,
+      color-mix(in oklab, var(--course-ink) 14%, transparent) 1px,
+      transparent 1px
+    ),
+    linear-gradient(
+      to bottom,
+      color-mix(in oklab, var(--course-ink) 14%, transparent) 1px,
+      transparent 1px
+    );
   background-size: 28px 28px;
 }
 
@@ -364,13 +370,103 @@ html.theme-transitioning *::after {
 
 .note-editor img,
 .note-content img {
+  display: block;
+  width: auto;
   max-width: 100%;
   height: auto;
+  object-fit: contain;
   border-radius: 8px;
-  margin: 8px 0;
-  display: block;
+  margin: 8px auto;
   box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.08);
-  transition: box-shadow 0.15s ease, opacity 0.15s ease;
+  transition:
+    box-shadow 0.15s ease,
+    opacity 0.15s ease;
+}
+
+/* Keep inline screenshots centered & aspect-capped when scaling canvas cards */
+.canvas-card-note .note-editor img,
+.canvas-card-note .note-content img {
+  max-height: 380px;
+}
+
+.canvas-card-note .note-content > ul:not([data-task-list="true"]) > li > div:has(> img),
+.canvas-card-note .note-editor > ul:not([data-task-list="true"]) > li > div:has(> img),
+.canvas-card-note .note-content > ul:not([data-task-list="true"]) > li > p:has(> img),
+.canvas-card-note .note-editor > ul:not([data-task-list="true"]) > li > p:has(> img),
+.canvas-card-note .note-content > ol > li > div:has(> img),
+.canvas-card-note .note-editor > ol > li > div:has(> img),
+.canvas-card-note .note-content > ol > li > p:has(> img),
+.canvas-card-note .note-editor > ol > li > p:has(> img) {
+  margin-inline-start: -1.35em !important;
+  width: calc(100% + 1.35em);
+}
+
+.note-editor [data-note-image-block="true"],
+.note-content [data-note-image-block="true"] {
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: 8px 0;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.note-editor [data-note-image-block="true"] {
+  line-height: 0;
+  font-size: 0;
+  cursor: default;
+}
+
+.note-editor [data-note-image-block="true"] img,
+.note-content [data-note-image-block="true"] img {
+  margin: 0 auto;
+}
+
+.note-content > [data-note-image-block="true"]:last-child {
+  padding-bottom: 0;
+}
+
+.note-editor > p,
+.note-content > p,
+.note-editor > div:not([data-note-image-block="true"]),
+.note-content > div:not([data-note-image-block="true"]) {
+  margin: 0.6em 0;
+  min-height: 1.5em;
+}
+
+.note-editor > :first-child,
+.note-content > :first-child {
+  margin-top: 0;
+}
+
+.note-editor > :is(h1, h2, h3, h4, h5, h6) + :is(p, div:not([data-note-image-block="true"])),
+.note-content > :is(h1, h2, h3, h4, h5, h6) + :is(p, div:not([data-note-image-block="true"])) {
+  margin-top: 0.2rem;
+}
+
+.note-editor li > p,
+.note-content li > p,
+.note-editor li > div:not([data-note-image-block="true"]),
+.note-content li > div:not([data-note-image-block="true"]),
+.note-editor blockquote > p,
+.note-content blockquote > p,
+.note-editor blockquote > div:not([data-note-image-block="true"]),
+.note-content blockquote > div:not([data-note-image-block="true"]) {
+  margin: 0.25em 0;
+}
+
+.note-editor li > :first-child,
+.note-content li > :first-child,
+.note-editor blockquote > :first-child,
+.note-content blockquote > :first-child {
+  margin-top: 0;
+}
+
+.note-editor li > :last-child,
+.note-content li > :last-child,
+.note-editor blockquote > :last-child,
+.note-content blockquote > :last-child {
+  margin-bottom: 0;
 }
 
 .note-editor img {
@@ -406,13 +502,36 @@ html.theme-transitioning *::after {
 .note-content ul,
 .note-editor ol,
 .note-content ol {
-  padding-left: 1.35em;
-  margin: 4px 0;
+  padding-inline-start: 1.35em;
+  margin: 0.55em 0;
+}
+
+.note-editor li ul,
+.note-content li ul,
+.note-editor li ol,
+.note-content li ol {
+  margin: 0.28em 0;
+}
+
+.note-editor ul ul,
+.note-content ul ul,
+.note-editor ol ol,
+.note-content ol ol,
+.note-editor ul ol,
+.note-content ul ol,
+.note-editor ol ul,
+.note-content ol ul {
+  margin: 2px 0;
 }
 
 .note-editor ul,
 .note-content ul {
   list-style-type: none;
+}
+
+.note-editor ul[data-task-list="true"],
+.note-content ul[data-task-list="true"] {
+  padding-inline-start: 0.1em;
 }
 
 .note-editor ol,
@@ -422,55 +541,127 @@ html.theme-transitioning *::after {
 
 .note-editor li,
 .note-content li {
-  margin: 2px 0;
+  margin: 0.28em 0;
   position: relative;
 }
 
-.note-editor h1::before,
-.note-content h1::before {
-  content: "# ";
-  font-size: 1em;
+.note-editor [data-md-syntax] {
+  color: color-mix(in oklab, var(--color-muted-foreground) 64%, transparent);
   font-weight: 400;
-  color: var(--color-muted-foreground);
-  font-family: var(--font-mono);
-}
-
-.note-editor h2::before,
-.note-content h2::before {
-  content: "## ";
-  font-size: 1em;
-  font-weight: 400;
-  color: var(--color-muted-foreground);
-  font-family: var(--font-mono);
-}
-
-.note-editor h3::before,
-.note-content h3::before {
-  content: "### ";
-  font-size: 1em;
-  font-weight: 400;
-  color: var(--color-muted-foreground);
-  font-family: var(--font-mono);
-}
-
-.note-editor blockquote::before,
-.note-content blockquote::before {
-  content: "> ";
-  font-size: 1em;
-  font-weight: 400;
-  color: var(--color-muted-foreground);
-  font-family: var(--font-mono);
   font-style: normal;
+  letter-spacing: normal;
+}
+
+.note-editor h1 > [data-md-syntax="heading"],
+.note-editor h2 > [data-md-syntax="heading"],
+.note-editor h3 > [data-md-syntax="heading"],
+.note-editor h4 > [data-md-syntax="heading"],
+.note-editor h5 > [data-md-syntax="heading"],
+.note-editor h6 > [data-md-syntax="heading"] {
+  font-size: 1em;
+  font-weight: 500;
+  color: color-mix(in oklab, var(--color-muted-foreground) 62%, transparent);
+}
+
+.note-editor blockquote > [data-md-syntax="blockquote"] {
+  font-family: var(--font-mono);
+  font-weight: 400;
+  font-style: normal;
+  color: color-mix(in oklab, var(--color-muted-foreground) 66%, transparent);
+}
+
+.note-editor a > [data-md-syntax] {
+  text-decoration: none;
+}
+
+.note-editor [data-md-url="true"] {
+  color: color-mix(in oklab, var(--color-muted-foreground) 78%, transparent);
 }
 
 .note-editor ul > li::before,
 .note-content ul > li::before {
   content: "•";
   position: absolute;
-  left: -1.05em;
+  inset-inline-start: -1.05em;
   color: var(--color-muted-foreground);
   font-family: var(--font-mono);
   font-weight: 600;
+}
+
+.note-editor ul ul > li::before,
+.note-content ul ul > li::before {
+  content: "◦";
+}
+
+.note-editor ul ul ul > li::before,
+.note-content ul ul ul > li::before {
+  content: "▪";
+}
+
+.note-editor li[data-task="true"],
+.note-content li[data-task="true"] {
+  list-style: none;
+  padding-inline-start: 1.55em;
+}
+
+.note-editor li[data-task="true"]::before,
+.note-content li[data-task="true"]::before {
+  content: none;
+  display: none;
+}
+
+.note-editor li[data-task="true"] > ul[data-task-list="true"],
+.note-content li[data-task="true"] > ul[data-task-list="true"] {
+  padding-inline-start: 0.1em;
+}
+
+.note-editor input[data-task-checkbox="true"],
+.note-content input[data-task-checkbox="true"] {
+  appearance: none;
+  position: absolute;
+  inset-inline-start: 0.1em;
+  top: 0.34em;
+  width: 0.92rem;
+  height: 0.92rem;
+  margin: 0;
+  border-radius: 4px;
+  border: 1.5px solid color-mix(in oklab, var(--color-muted-foreground) 65%, transparent);
+  background: transparent;
+  cursor: pointer;
+  transition:
+    background-color 140ms ease,
+    border-color 140ms ease;
+}
+
+.note-editor input[data-task-checkbox="true"]:hover,
+.note-content input[data-task-checkbox="true"]:hover {
+  border-color: var(--color-primary);
+}
+
+.note-editor input[data-task-checkbox="true"]:checked,
+.note-content input[data-task-checkbox="true"]:checked {
+  background-color: var(--color-primary);
+  border-color: var(--color-primary);
+}
+
+.note-editor input[data-task-checkbox="true"]:checked::after,
+.note-content input[data-task-checkbox="true"]:checked::after {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: 1.5px;
+  width: 4px;
+  height: 7.5px;
+  border: solid var(--color-primary-foreground);
+  border-width: 0 1.75px 1.75px 0;
+  transform: rotate(42deg);
+}
+
+.note-editor li[data-checked="true"] > span[data-task-content="true"],
+.note-content li[data-checked="true"] > span[data-task-content="true"] {
+  text-decoration: line-through;
+  color: var(--color-muted-foreground);
+  opacity: 0.78;
 }
 
 .note-editor ol > li::marker,
@@ -484,7 +675,7 @@ html.theme-transitioning *::after {
 .note-content h1 {
   font-size: 1.2rem;
   font-weight: 700;
-  margin: 0.45rem 0 0.2rem 0;
+  margin: 0.65rem 0 0.2rem 0;
   line-height: 1.3;
 }
 
@@ -492,7 +683,7 @@ html.theme-transitioning *::after {
 .note-content h2 {
   font-size: 1.05rem;
   font-weight: 600;
-  margin: 0.4rem 0 0.2rem 0;
+  margin: 0.55rem 0 0.2rem 0;
   line-height: 1.35;
 }
 
@@ -500,15 +691,34 @@ html.theme-transitioning *::after {
 .note-content h3 {
   font-size: 0.95rem;
   font-weight: 600;
-  margin: 0.35rem 0 0.15rem 0;
+  margin: 0.5rem 0 0.15rem 0;
+  line-height: 1.4;
+}
+
+.note-editor h4,
+.note-content h4 {
+  font-size: 0.9rem;
+  font-weight: 600;
+  margin: 0.45rem 0 0.12rem 0;
+  line-height: 1.4;
+}
+
+.note-editor h5,
+.note-content h5,
+.note-editor h6,
+.note-content h6 {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--color-muted-foreground);
+  margin: 0.4rem 0 0.1rem 0;
   line-height: 1.4;
 }
 
 .note-editor blockquote,
 .note-content blockquote {
-  border-left: 2px solid var(--color-border);
-  padding-left: 0.65rem;
-  margin: 0.4rem 0;
+  border-inline-start: 2px solid var(--color-border);
+  padding-inline-start: 0.65rem;
+  margin: 0.55em 0;
   font-style: italic;
   color: var(--color-muted-foreground);
 }
@@ -528,6 +738,61 @@ html.theme-transitioning *::after {
   padding: 0.15em 0.35em;
   border-radius: 4px;
   color: var(--color-foreground);
+}
+
+.note-editor pre,
+.note-content pre {
+  background: var(--color-secondary);
+  border-radius: 6px;
+  padding: 0.55rem 0.75rem;
+  margin: 0.45rem 0;
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: 0.8em;
+  line-height: 1.55;
+  color: var(--color-foreground);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.note-editor pre code,
+.note-content pre code {
+  background: transparent;
+  padding: 0;
+  border-radius: 0;
+  font-size: inherit;
+  color: inherit;
+  display: block;
+}
+
+.note-editor pre code[data-lang]:not([data-lang=""])::before,
+.note-content pre code[data-lang]:not([data-lang=""])::before {
+  content: attr(data-lang);
+  display: block;
+  text-align: right;
+  font-size: 0.82em;
+  text-transform: lowercase;
+  color: var(--color-muted-foreground);
+  margin-bottom: 0.2rem;
+  pointer-events: none;
+  user-select: none;
+}
+
+.note-editor mark,
+.note-content mark {
+  background: color-mix(in oklab, var(--color-chart-3) 26%, transparent);
+  color: var(--color-foreground);
+  border-radius: 3px;
+  padding: 0.05em 0.25em;
+}
+
+.note-editor a,
+.note-content a {
+  color: var(--color-primary);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in oklab, var(--color-primary) 45%, transparent);
+  text-underline-offset: 2px;
+  cursor: pointer;
 }
 
 .no-spinner::-webkit-inner-spin-button,
@@ -673,7 +938,9 @@ html.theme-transitioning *::after {
   .ai-shimmer-row {
     animation: none !important;
   }
-  *, *::before, *::after {
+  *,
+  *::before,
+  *::after {
     scroll-behavior: auto !important;
     transition-duration: 0.01ms !important;
     animation-duration: 0.01ms !important;

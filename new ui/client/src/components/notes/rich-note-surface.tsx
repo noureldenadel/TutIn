@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from "react";
 import {
   ArrowDown,
   ArrowUp,
@@ -15,7 +22,51 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
+import {
+  StandaloneAppContextMenu,
+  type StandaloneContextMenuState,
+} from "@/components/notes/app-context-menu";
 import { Button } from "@/components/ui/button";
+import {
+  type CaretBookmark,
+  NOTE_IMAGE_BLOCK_ATTR,
+  NOTE_IMAGE_TAIL_ATTR,
+  applyInlineMarkdownAtCaret,
+  applyMarkdownOnBackspace,
+  applyMarkdownOnEnter,
+  applyMarkdownOnSpace,
+  applyMarkdownOnTab,
+  clearAllLiveMarkdownSyntax,
+  exitInlineMarkOnClick,
+  getCaretBookmark,
+  handleMarkdownDelimiterBackspace,
+  handleMarkdownDelimiterKeyDown,
+  isImageBlockElement,
+  isInsideMarkdownSyntax,
+  moveCaretOutOfImageBlock,
+  normalizeEditorImageBlocks,
+  normalizeEmptyEditorOnMount,
+  placeCaretAtEnd,
+  placeCaretAtStart,
+  placeCaretInEditableBlockAtY,
+  reconcileActiveMarkdownSyntax,
+  resolveArrowIntoImageBlock,
+  resolveImageBoundaryBeforeBackspace,
+  resolveImageBoundaryBeforeDelete,
+  resolveInlineBoundaryOnArrow,
+  restoreCaretBookmark,
+  sanitizeClipboardHtml,
+  sanitizeHttpUrl,
+  stripLiveSyntaxArtifacts,
+  stripSyntaxBeforeExecCommand,
+  syncImageTailParagraphs,
+  syncLiveMarkdownSyntax,
+  toggleInlineWrapperCommand,
+  toggleTaskCheckboxElement,
+  toggleTaskListCommand,
+  unwrapEmptyInlinePairOnSpace,
+  wrapSelectionAsLink,
+} from "@/components/notes/note-markdown";
 import {
   hydrateContainerMedia,
   isMediaUri,
@@ -25,6 +76,11 @@ import {
   serializeContainerMediaHtml,
   useResolvedNoteHtml,
 } from "@/lib/media-store";
+import {
+  inspectAppContextTarget,
+  preloadSpellChecker,
+  registerEditorContextHooks,
+} from "@/lib/spellcheck";
 import { cn } from "@/lib/utils";
 
 const MAX_CROP_WIDTH = 1200;
@@ -49,6 +105,8 @@ export interface RichNoteSurfaceProps {
   compactToolbar?: boolean | undefined;
   maxHeightClassName?: string | undefined;
   minHeightClassName?: string | undefined;
+  wrapperClassName?: string | undefined;
+  wrapperStyle?: CSSProperties | undefined;
   autoFocus?: boolean | undefined;
   className?: string | undefined;
 }
@@ -58,33 +116,104 @@ export function RichNoteHtmlContent({
   className,
   onDoubleClick,
   onImageClick,
+  onHtmlChange,
 }: {
   html: string;
   className?: string | undefined;
   onDoubleClick?: ((e: React.MouseEvent<HTMLDivElement>) => void) | undefined;
   onImageClick?: ((src: string, e: React.MouseEvent<HTMLDivElement>) => void) | undefined;
+  onHtmlChange?: ((nextHtml: string) => void) | undefined;
 }) {
   const resolvedHtml = useResolvedNoteHtml(html);
+  const contentRef = useRef<HTMLDivElement>(null);
+  const [contextMenu, setContextMenu] = useState<{
+    state: StandaloneContextMenuState;
+    sourceEvent: React.MouseEvent<HTMLDivElement>;
+  } | null>(null);
 
   return (
-    <div
-      className={cn("note-content select-text text-sm leading-6 text-foreground", className)}
-      dir="auto"
-      onDoubleClick={onDoubleClick}
-      onClick={(e) => {
-        if (!onImageClick) return;
-        const target = e.target as HTMLElement;
-        if (target.tagName === "IMG") {
-          const img = target as HTMLImageElement;
-          const src = img.currentSrc || img.src;
-          if (src) {
+    <>
+      <div
+        ref={contentRef}
+        className={cn("note-content select-text text-sm leading-[1.5] text-foreground", className)}
+        dir="auto"
+        onDoubleClick={onDoubleClick}
+        onPointerDown={(e) => {
+          const target = e.target as HTMLElement | null;
+          if (target?.closest("input[data-task-checkbox], a")) {
             e.stopPropagation();
-            onImageClick(src, e);
           }
-        }
-      }}
-      dangerouslySetInnerHTML={{ __html: resolvedHtml }}
-    />
+        }}
+        onContextMenu={(e) => {
+          if (e.currentTarget.closest("[data-canvas-card-id]")) return;
+          const analysis = inspectAppContextTarget({
+            clientX: e.clientX,
+            clientY: e.clientY,
+            target: e.target,
+          });
+          if (!analysis.imageSrc && !analysis.selectedText) return;
+          e.preventDefault();
+          e.stopPropagation();
+          setContextMenu({
+            state: {
+              clientX: e.clientX,
+              clientY: e.clientY,
+              analysis,
+            },
+            sourceEvent: e,
+          });
+        }}
+        onClick={(e) => {
+          const target = e.target as HTMLElement | null;
+          if (!target) return;
+
+          if (target.tagName === "INPUT" && target.hasAttribute("data-task-checkbox")) {
+            e.stopPropagation();
+            if (!onHtmlChange) {
+              e.preventDefault();
+              return;
+            }
+            toggleTaskCheckboxElement(target as HTMLInputElement);
+            if (contentRef.current) {
+              onHtmlChange(serializeContainerMediaHtml(contentRef.current));
+            }
+            return;
+          }
+
+          const anchor = target.closest("a");
+          if (anchor && contentRef.current?.contains(anchor)) {
+            e.preventDefault();
+            e.stopPropagation();
+            const safeHref = sanitizeHttpUrl(anchor.getAttribute("href") || "");
+            if (safeHref) {
+              window.open(safeHref, "_blank", "noopener,noreferrer");
+            }
+            return;
+          }
+
+          if (!onImageClick) return;
+          if (target.tagName === "IMG") {
+            const img = target as HTMLImageElement;
+            const src = img.currentSrc || img.src;
+            if (src) {
+              e.stopPropagation();
+              onImageClick(src, e);
+            }
+          }
+        }}
+        dangerouslySetInnerHTML={{ __html: resolvedHtml }}
+      />
+
+      {contextMenu && (
+        <StandaloneAppContextMenu
+          state={contextMenu.state}
+          onOpenImage={
+            onImageClick ? (src) => onImageClick(src, contextMenu.sourceEvent) : undefined
+          }
+          onClose={() => setContextMenu(null)}
+        />
+      )}
+    </>
   );
 }
 
@@ -113,83 +242,136 @@ function EditorToolBtn({
   );
 }
 
-function InlineImageCropper({
+type CropRectPct = { x: number; y: number; width: number; height: number };
+type CropDragMode = "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w" | "move" | "draw";
+
+const DEFAULT_CROP_RECT: CropRectPct = { x: 0, y: 0, width: 100, height: 100 };
+
+const CROP_HANDLES: ReadonlyArray<{
+  mode: Exclude<CropDragMode, "move" | "draw">;
+  cursor: string;
+  posClass: string;
+  barClass: string;
+}> = [
+  {
+    mode: "nw",
+    cursor: "cursor-nwse-resize",
+    posClass: "-left-2 -top-2 size-4",
+    barClass: "size-2.5 rounded-tl-[2px] border-l-2 border-t-2 border-white",
+  },
+  {
+    mode: "ne",
+    cursor: "cursor-nesw-resize",
+    posClass: "-right-2 -top-2 size-4",
+    barClass: "size-2.5 rounded-tr-[2px] border-r-2 border-t-2 border-white",
+  },
+  {
+    mode: "sw",
+    cursor: "cursor-nesw-resize",
+    posClass: "-bottom-2 -left-2 size-4",
+    barClass: "size-2.5 rounded-bl-[2px] border-b-2 border-l-2 border-white",
+  },
+  {
+    mode: "se",
+    cursor: "cursor-nwse-resize",
+    posClass: "-bottom-2 -right-2 size-4",
+    barClass: "size-2.5 rounded-br-[2px] border-b-2 border-r-2 border-white",
+  },
+  {
+    mode: "n",
+    cursor: "cursor-ns-resize",
+    posClass: "-top-2 left-1/2 h-4 w-7 -translate-x-1/2",
+    barClass: "h-1 w-5 rounded-full bg-white",
+  },
+  {
+    mode: "s",
+    cursor: "cursor-ns-resize",
+    posClass: "-bottom-2 left-1/2 h-4 w-7 -translate-x-1/2",
+    barClass: "h-1 w-5 rounded-full bg-white",
+  },
+  {
+    mode: "w",
+    cursor: "cursor-ew-resize",
+    posClass: "-left-2 top-1/2 h-7 w-4 -translate-y-1/2",
+    barClass: "h-5 w-1 rounded-full bg-white",
+  },
+  {
+    mode: "e",
+    cursor: "cursor-ew-resize",
+    posClass: "-right-2 top-1/2 h-7 w-4 -translate-y-1/2",
+    barClass: "h-5 w-1 rounded-full bg-white",
+  },
+];
+
+function isCropModified(crop: CropRectPct): boolean {
+  return crop.x > 0.25 || crop.y > 0.25 || crop.width < 99.5 || crop.height < 99.5;
+}
+
+function measureImageLocalRect(
+  imgEl: HTMLImageElement,
+  wrap: HTMLElement,
+): { top: number; left: number; width: number; height: number } {
+  const wrapRect = wrap.getBoundingClientRect();
+  const imgRect = imgEl.getBoundingClientRect();
+  const scaleX = wrap.offsetWidth > 0 && wrapRect.width > 0 ? wrapRect.width / wrap.offsetWidth : 1;
+  const scaleY =
+    wrap.offsetHeight > 0 && wrapRect.height > 0 ? wrapRect.height / wrap.offsetHeight : 1;
+  return {
+    top: (imgRect.top - wrapRect.top) / scaleY + wrap.scrollTop,
+    left: (imgRect.left - wrapRect.left) / scaleX + wrap.scrollLeft,
+    width: Math.max(24, imgRect.width / scaleX),
+    height: Math.max(24, imgRect.height / scaleY),
+  };
+}
+
+function InPlaceImageCropOverlay({
   imageSrc,
+  fallbackElement,
+  rect,
+  wrapperElement,
   onApplyCrop,
   onCancel,
 }: {
   imageSrc: string;
-  onApplyCrop: (dataUrl: string) => void;
+  fallbackElement: HTMLImageElement;
+  rect: { top: number; left: number; width: number; height: number };
+  wrapperElement: HTMLElement | null;
+  onApplyCrop: (dataUrl: string, didModify: boolean) => void;
   onCancel: () => void;
 }) {
-  const imgRef = useRef<HTMLImageElement>(null);
-  const [isLoaded, setIsLoaded] = useState(false);
-  const [crop, setCrop] = useState<{ x: number; y: number; width: number; height: number } | null>(
-    null,
-  );
-  const isDrawingRef = useRef(false);
-  const startPointRef = useRef({ x: 0, y: 0 });
+  const frameRef = useRef<HTMLDivElement>(null);
+  const sourceImgRef = useRef<HTMLImageElement>(null);
+  const [crop, setCrop] = useState<CropRectPct>(DEFAULT_CROP_RECT);
+  const [isDragging, setIsDragging] = useState(false);
+  const dragRef = useRef<{
+    mode: CropDragMode;
+    startClientX: number;
+    startClientY: number;
+    startPctX: number;
+    startPctY: number;
+    startCrop: CropRectPct;
+  } | null>(null);
 
-  const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (e.button !== 0 && e.pointerType === "mouse") return;
-    const img = imgRef.current;
-    if (!img) return;
-    const rect = img.getBoundingClientRect();
-    if (rect.width <= 0 || rect.height <= 0) return;
+  const modified = isCropModified(crop);
 
-    const startX = Math.max(0, Math.min(100, ((e.clientX - rect.left) / rect.width) * 100));
-    const startY = Math.max(0, Math.min(100, ((e.clientY - rect.top) / rect.height) * 100));
-
-    isDrawingRef.current = true;
-    startPointRef.current = { x: startX, y: startY };
-    setCrop({ x: startX, y: startY, width: 0, height: 0 });
-    try {
-      e.currentTarget.setPointerCapture(e.pointerId);
-    } catch {
-      // ignore
+  const handleApply = useCallback(() => {
+    if (!modified) {
+      onApplyCrop("", false);
+      return;
     }
-  };
 
-  const handlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (!isDrawingRef.current || !imgRef.current) return;
-    const rect = imgRef.current.getBoundingClientRect();
-    if (rect.width <= 0 || rect.height <= 0) return;
-
-    const currentX = Math.max(0, Math.min(100, ((e.clientX - rect.left) / rect.width) * 100));
-    const currentY = Math.max(0, Math.min(100, ((e.clientY - rect.top) / rect.height) * 100));
-    const start = startPointRef.current;
-
-    setCrop({
-      x: Math.min(start.x, currentX),
-      y: Math.min(start.y, currentY),
-      width: Math.abs(currentX - start.x),
-      height: Math.abs(currentY - start.y),
-    });
-  };
-
-  const handlePointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (!isDrawingRef.current) return;
-    isDrawingRef.current = false;
-    try {
-      e.currentTarget.releasePointerCapture(e.pointerId);
-    } catch {
-      // ignore
-    }
-    setCrop((prev) => (!prev || prev.width < 2 || prev.height < 2 ? null : prev));
-  };
-
-  const handleApply = () => {
-    const img = imgRef.current;
+    const img =
+      sourceImgRef.current && sourceImgRef.current.naturalWidth > 0
+        ? sourceImgRef.current
+        : fallbackElement;
     if (!img || !img.naturalWidth || !img.naturalHeight) return;
+
     const nw = img.naturalWidth;
     const nh = img.naturalHeight;
-    const hasDrawn = crop && crop.width >= 2 && crop.height >= 2;
-    const c = hasDrawn ? crop : { x: 0, y: 0, width: 100, height: 100 };
-
-    const srcX = Math.max(0, Math.round((c.x / 100) * nw));
-    const srcY = Math.max(0, Math.round((c.y / 100) * nh));
-    const srcW = Math.min(nw - srcX, Math.max(1, Math.round((c.width / 100) * nw)));
-    const srcH = Math.min(nh - srcY, Math.max(1, Math.round((c.height / 100) * nh)));
+    const srcX = Math.max(0, Math.round((crop.x / 100) * nw));
+    const srcY = Math.max(0, Math.round((crop.y / 100) * nh));
+    const srcW = Math.min(nw - srcX, Math.max(1, Math.round((crop.width / 100) * nw)));
+    const srcH = Math.min(nh - srcY, Math.max(1, Math.round((crop.height / 100) * nh)));
     if (srcW <= 0 || srcH <= 0) return;
 
     const scale = Math.min(1, MAX_CROP_WIDTH / srcW, MAX_CROP_HEIGHT / srcH);
@@ -204,81 +386,283 @@ function InlineImageCropper({
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = "high";
     ctx.drawImage(img, srcX, srcY, srcW, srcH, 0, 0, destW, destH);
-    onApplyCrop(canvas.toDataURL("image/jpeg", 0.85));
+    try {
+      onApplyCrop(canvas.toDataURL("image/jpeg", 0.9), true);
+    } catch {
+      toast.error("Cannot crop this external image due to origin restrictions.");
+    }
+  }, [crop, fallbackElement, modified, onApplyCrop]);
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        onCancel();
+      } else if (e.key === "Enter") {
+        e.preventDefault();
+        e.stopPropagation();
+        handleApply();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
+  }, [handleApply, onCancel]);
+
+  const startDrag = (mode: CropDragMode, e: React.PointerEvent<HTMLElement>) => {
+    if (e.button !== 0 && e.pointerType === "mouse") return;
+    const box = frameRef.current?.getBoundingClientRect();
+    if (!box || box.width <= 0 || box.height <= 0) return;
+
+    e.preventDefault();
+    e.stopPropagation();
+
+    const startPctX = Math.max(0, Math.min(100, ((e.clientX - box.left) / box.width) * 100));
+    const startPctY = Math.max(0, Math.min(100, ((e.clientY - box.top) / box.height) * 100));
+
+    dragRef.current = {
+      mode,
+      startClientX: e.clientX,
+      startClientY: e.clientY,
+      startPctX,
+      startPctY,
+      startCrop: { ...crop },
+    };
+    if (mode === "draw") {
+      setCrop({ x: startPctX, y: startPctY, width: 0, height: 0 });
+    }
+    setIsDragging(true);
+    try {
+      frameRef.current?.setPointerCapture(e.pointerId);
+    } catch {
+      // ignore
+    }
   };
 
-  const hasActiveCrop = Boolean(crop && crop.width >= 2 && crop.height >= 2);
+  const handlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const d = dragRef.current;
+    const box = frameRef.current?.getBoundingClientRect();
+    if (!d || !box || box.width <= 0 || box.height <= 0) return;
+
+    const curPctX = Math.max(0, Math.min(100, ((e.clientX - box.left) / box.width) * 100));
+    const curPctY = Math.max(0, Math.min(100, ((e.clientY - box.top) / box.height) * 100));
+
+    if (d.mode === "draw") {
+      setCrop({
+        x: Math.min(d.startPctX, curPctX),
+        y: Math.min(d.startPctY, curPctY),
+        width: Math.abs(curPctX - d.startPctX),
+        height: Math.abs(curPctY - d.startPctY),
+      });
+      return;
+    }
+
+    const dxPct = ((e.clientX - d.startClientX) / box.width) * 100;
+    const dyPct = ((e.clientY - d.startClientY) / box.height) * 100;
+
+    if (d.mode === "move") {
+      const nextX = Math.max(0, Math.min(100 - d.startCrop.width, d.startCrop.x + dxPct));
+      const nextY = Math.max(0, Math.min(100 - d.startCrop.height, d.startCrop.y + dyPct));
+      setCrop({ ...d.startCrop, x: nextX, y: nextY });
+      return;
+    }
+
+    const minSize = 5;
+    let left = d.startCrop.x;
+    let right = d.startCrop.x + d.startCrop.width;
+    let top = d.startCrop.y;
+    let bottom = d.startCrop.y + d.startCrop.height;
+
+    if (d.mode.includes("w")) {
+      left = Math.max(0, Math.min(right - minSize, d.startCrop.x + dxPct));
+    }
+    if (d.mode.includes("e")) {
+      right = Math.min(100, Math.max(left + minSize, d.startCrop.x + d.startCrop.width + dxPct));
+    }
+    if (d.mode.includes("n")) {
+      top = Math.max(0, Math.min(bottom - minSize, d.startCrop.y + dyPct));
+    }
+    if (d.mode.includes("s")) {
+      bottom = Math.min(100, Math.max(top + minSize, d.startCrop.y + d.startCrop.height + dyPct));
+    }
+
+    if (e.shiftKey && (d.mode === "nw" || d.mode === "ne" || d.mode === "sw" || d.mode === "se")) {
+      const ratio = d.startCrop.width / Math.max(1, d.startCrop.height);
+      const w = right - left;
+      const h = bottom - top;
+      const targetH = Math.max(minSize, w / ratio);
+      const maxH = d.mode.includes("n") ? bottom : 100 - top;
+      const clampedH = Math.min(targetH, maxH);
+      const clampedW = clampedH * ratio;
+      if (d.mode.includes("n")) top = bottom - clampedH;
+      else bottom = top + clampedH;
+      if (d.mode.includes("w")) left = right - Math.min(clampedW, right);
+      else right = left + Math.min(clampedW, 100 - left);
+      if (Math.abs(h - clampedH) < 0.01 && Math.abs(w - (right - left)) < 0.01) {
+        // already balanced
+      }
+    }
+
+    setCrop({
+      x: left,
+      y: top,
+      width: Math.max(minSize, right - left),
+      height: Math.max(minSize, bottom - top),
+    });
+  };
+
+  const handlePointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!dragRef.current) return;
+    const mode = dragRef.current.mode;
+    dragRef.current = null;
+    setIsDragging(false);
+    try {
+      if (frameRef.current?.hasPointerCapture(e.pointerId)) {
+        frameRef.current.releasePointerCapture(e.pointerId);
+      }
+    } catch {
+      // ignore
+    }
+    if (mode === "draw") {
+      setCrop((prev) => (prev.width < 3 || prev.height < 3 ? DEFAULT_CROP_RECT : prev));
+    }
+  };
+
+  // Position the compact action bar cleanly below the image unless clipped at bottom
+  const wrapScrollTop = wrapperElement?.scrollTop ?? 0;
+  const wrapClientHeight = wrapperElement?.clientHeight ?? 0;
+  const viewBottom = wrapScrollTop + wrapClientHeight;
+  const spaceBelow = wrapClientHeight > 0 ? viewBottom - (rect.top + rect.height) : 48;
+  const spaceAbove = wrapClientHeight > 0 ? rect.top - wrapScrollTop : 48;
+  const barPlacementClass =
+    spaceBelow >= 40
+      ? "top-[calc(100%+8px)]"
+      : spaceAbove >= 40
+        ? "bottom-[calc(100%+8px)]"
+        : "bottom-2";
 
   return (
-    <div className="space-y-2.5 border-b border-border/50 bg-secondary/35 p-3">
-      <div className="flex items-center justify-between text-xs">
-        <span className="flex items-center gap-1.5 font-medium text-muted-foreground">
-          <Crop className="size-3.5 text-primary" /> Drag to crop
-        </span>
-        {hasActiveCrop && (
-          <button
-            type="button"
-            onClick={() => setCrop(null)}
-            className="text-[11px] font-medium text-primary hover:underline"
-          >
-            Reset
-          </button>
+    <div
+      className="in-place-image-cropper pointer-events-auto absolute z-30 select-none"
+      style={{
+        top: `${rect.top}px`,
+        left: `${rect.left}px`,
+        width: `${rect.width}px`,
+        height: `${rect.height}px`,
+      }}
+      onMouseDown={(e) => e.stopPropagation()}
+      onClick={(e) => e.stopPropagation()}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+      }}
+    >
+      <div
+        ref={frameRef}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        onPointerCancel={handlePointerUp}
+        onPointerDown={(e) => startDrag(modified ? "move" : "draw", e)}
+        className={cn(
+          "relative h-full w-full touch-none rounded-[8px]",
+          modified ? "cursor-move" : "cursor-crosshair",
         )}
-      </div>
+      >
+        <img
+          ref={sourceImgRef}
+          src={imageSrc}
+          crossOrigin="anonymous"
+          alt=""
+          className="pointer-events-none absolute inset-0 h-full w-full rounded-[8px] object-contain opacity-0"
+          draggable={false}
+        />
 
-      <div className="flex max-h-[240px] min-h-[140px] items-center justify-center overflow-hidden rounded-lg bg-player p-1">
+        {/* Dim only the cropped-out regions within this image's bounds */}
         <div
-          onPointerDown={handlePointerDown}
-          onPointerMove={handlePointerMove}
-          onPointerUp={handlePointerUp}
-          className="relative inline-block max-h-[220px] cursor-crosshair select-none touch-none"
+          className="pointer-events-none absolute inset-x-0 top-0 rounded-t-[8px] bg-black/55"
+          style={{ height: `${crop.y}%` }}
+        />
+        <div
+          className="pointer-events-none absolute inset-x-0 bottom-0 rounded-b-[8px] bg-black/55"
+          style={{ height: `${Math.max(0, 100 - (crop.y + crop.height))}%` }}
+        />
+        <div
+          className="pointer-events-none absolute left-0 bg-black/55"
+          style={{
+            top: `${crop.y}%`,
+            width: `${crop.x}%`,
+            height: `${crop.height}%`,
+          }}
+        />
+        <div
+          className="pointer-events-none absolute right-0 bg-black/55"
+          style={{
+            top: `${crop.y}%`,
+            width: `${Math.max(0, 100 - (crop.x + crop.width))}%`,
+            height: `${crop.height}%`,
+          }}
+        />
+
+        {/* Active Crop Box + Handles */}
+        <div
+          className="pointer-events-none absolute border border-white/95 shadow-[0_0_0_1px_rgba(0,0,0,0.45)]"
+          style={{
+            top: `${crop.y}%`,
+            left: `${crop.x}%`,
+            width: `${crop.width}%`,
+            height: `${crop.height}%`,
+          }}
         >
-          <img
-            ref={imgRef}
-            src={imageSrc}
-            crossOrigin="anonymous"
-            alt="Crop target"
-            onLoad={() => setIsLoaded(true)}
-            className="pointer-events-none block max-h-[220px] w-auto max-w-full select-none rounded-sm object-contain"
-            draggable={false}
-          />
-          {isLoaded && hasActiveCrop && crop && (
+          {isDragging && (
             <>
-              <div
-                className="pointer-events-none absolute inset-x-0 top-0 bg-black/65"
-                style={{ height: `${crop.y}%` }}
-              />
-              <div
-                className="pointer-events-none absolute inset-x-0 bottom-0 bg-black/65"
-                style={{ height: `${100 - (crop.y + crop.height)}%` }}
-              />
-              <div
-                className="pointer-events-none absolute left-0 bg-black/65"
-                style={{ top: `${crop.y}%`, width: `${crop.x}%`, height: `${crop.height}%` }}
-              />
-              <div
-                className="pointer-events-none absolute right-0 bg-black/65"
-                style={{
-                  top: `${crop.y}%`,
-                  width: `${100 - (crop.x + crop.width)}%`,
-                  height: `${crop.height}%`,
-                }}
-              />
-              <div
-                className="pointer-events-none absolute border-2 border-primary ring-1 ring-white/80"
-                style={{
-                  top: `${crop.y}%`,
-                  left: `${crop.x}%`,
-                  width: `${crop.width}%`,
-                  height: `${crop.height}%`,
-                }}
-              />
+              <div className="absolute inset-y-0 left-1/3 w-px bg-white/30" />
+              <div className="absolute inset-y-0 left-2/3 w-px bg-white/30" />
+              <div className="absolute inset-x-0 top-1/3 h-px bg-white/30" />
+              <div className="absolute inset-x-0 top-2/3 h-px bg-white/30" />
             </>
           )}
+
+          {CROP_HANDLES.map((h) => (
+            <div
+              key={h.mode}
+              onPointerDown={(e) => startDrag(h.mode, e)}
+              className={cn(
+                "pointer-events-auto absolute flex items-center justify-center",
+                h.posClass,
+                h.cursor,
+              )}
+            >
+              <span
+                className={cn(
+                  "pointer-events-none block shadow-[0_0_2px_rgba(0,0,0,0.65)]",
+                  h.barClass,
+                )}
+              />
+            </div>
+          ))}
         </div>
       </div>
 
-      <div className="flex items-center justify-end gap-2">
+      {/* Floating Commit / Cancel Action Bar (fades out during handle drag so edges stay unobstructed) */}
+      <div
+        onPointerDown={(e) => e.stopPropagation()}
+        className={cn(
+          "absolute left-1/2 z-40 flex w-max -translate-x-1/2 items-center gap-1 rounded-lg border border-border/50 bg-popover/95 p-1 text-popover-foreground shadow-workspace backdrop-blur-sm transition-opacity duration-150",
+          barPlacementClass,
+          isDragging && "pointer-events-none opacity-0",
+        )}
+      >
+        {modified && (
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            className="h-7 rounded-md px-2 text-xs text-muted-foreground hover:text-foreground"
+            onClick={() => setCrop(DEFAULT_CROP_RECT)}
+          >
+            Reset
+          </Button>
+        )}
         <Button
           type="button"
           size="sm"
@@ -294,11 +678,153 @@ function InlineImageCropper({
           className="h-7 rounded-md px-2.5 text-xs"
           onClick={handleApply}
         >
-          <Check className="size-3.5" /> {hasActiveCrop ? "Apply" : "Keep full"}
+          <Check className="size-3.5" /> Apply
         </Button>
       </div>
     </div>
   );
+}
+
+function getTopLevelEditorChild(node: Node | null, editor: HTMLElement): HTMLElement | null {
+  let curr: Node | null = node;
+  while (curr && curr.parentNode !== editor) {
+    curr = curr.parentNode;
+  }
+  return curr && curr.nodeType === Node.ELEMENT_NODE ? (curr as HTMLElement) : null;
+}
+
+function isBlockEmptyForImage(el: Element | null): boolean {
+  if (!el) return false;
+  if (el.tagName === "HR" || el.hasAttribute(NOTE_IMAGE_BLOCK_ATTR)) return false;
+  if (el.querySelector("img, hr, pre, ul, ol")) return false;
+  return !(el.textContent || "")
+    .replace(/\u00A0/g, "")
+    .replace(/\u200B/g, "")
+    .trim();
+}
+
+function createImageTailParagraph(): HTMLParagraphElement {
+  const pTail = document.createElement("p");
+  pTail.setAttribute(NOTE_IMAGE_TAIL_ATTR, "true");
+  pTail.appendChild(document.createElement("br"));
+  return pTail;
+}
+
+function resolvePostImageCaretTarget(ed: HTMLElement, imgWrapper: HTMLElement): HTMLElement | null {
+  const nextEl = imgWrapper.nextElementSibling as HTMLElement | null;
+  if (!nextEl) {
+    const pTail = createImageTailParagraph();
+    ed.appendChild(pTail);
+    return pTail;
+  }
+  return isBlockEmptyForImage(nextEl) ? nextEl : null;
+}
+
+function insertImageBlockCleanly(
+  ed: HTMLElement,
+  range: Range,
+  imgWrapper: HTMLElement,
+): { caretTarget: HTMLElement | null } {
+  range.deleteContents();
+  const topBlock = getTopLevelEditorChild(range.startContainer, ed);
+
+  // Break out of lists so images sit centered across the card rather than indented under list markers
+  if (topBlock && (topBlock.tagName === "UL" || topBlock.tagName === "OL")) {
+    let curLi: Node | null = range.startContainer;
+    while (curLi && curLi !== topBlock && (curLi as Element).tagName !== "LI") {
+      curLi = curLi.parentNode;
+    }
+
+    if (curLi && (curLi as Element).tagName === "LI" && curLi.parentNode === topBlock) {
+      const liEl = curLi as HTMLLIElement;
+      const afterRange = document.createRange();
+      afterRange.setStart(range.endContainer, range.endOffset);
+      afterRange.setEnd(liEl, liEl.childNodes.length);
+      const trailingLiFrag = afterRange.extractContents();
+
+      const trailingSiblings: HTMLLIElement[] = [];
+      let sib = liEl.nextElementSibling;
+      while (sib) {
+        const next = sib.nextElementSibling;
+        if (sib.tagName === "LI") {
+          trailingSiblings.push(sib as HTMLLIElement);
+        }
+        sib = next;
+      }
+
+      const liHasContent =
+        Boolean(liEl.textContent?.replace(/\u200B/g, "").trim()) ||
+        Boolean(liEl.querySelector("img"));
+      if (!liHasContent) {
+        liEl.remove();
+      }
+
+      const insertAnchor = topBlock.nextSibling;
+      ed.insertBefore(imgWrapper, insertAnchor);
+
+      const trailingHasContent =
+        Boolean(trailingLiFrag.textContent?.replace(/\u200B/g, "").trim()) ||
+        Boolean(trailingLiFrag.querySelector("img"));
+      let contList: HTMLElement | null = null;
+      if (trailingHasContent || trailingSiblings.length > 0) {
+        contList = document.createElement(topBlock.tagName.toLowerCase());
+        if (topBlock.hasAttribute("data-task-list")) {
+          contList.setAttribute("data-task-list", "true");
+        }
+        if (trailingHasContent) {
+          const newLi = document.createElement("li");
+          newLi.appendChild(trailingLiFrag);
+          contList.appendChild(newLi);
+        }
+        for (const t of trailingSiblings) {
+          contList.appendChild(t);
+        }
+        ed.insertBefore(contList, insertAnchor);
+      }
+
+      if (!topBlock.querySelector("li")) {
+        topBlock.remove();
+      }
+
+      if (contList) {
+        return { caretTarget: (contList.querySelector("li") as HTMLElement | null) ?? contList };
+      }
+      return { caretTarget: resolvePostImageCaretTarget(ed, imgWrapper) };
+    }
+  }
+
+  if (topBlock && topBlock.parentNode === ed) {
+    const afterRange = document.createRange();
+    afterRange.setStart(range.endContainer, range.endOffset);
+    afterRange.setEnd(topBlock, topBlock.childNodes.length);
+    const trailingFrag = afterRange.extractContents();
+    const blockHasContent =
+      Boolean(topBlock.textContent?.replace(/\u200B/g, "").trim()) ||
+      Boolean(topBlock.querySelector("img"));
+    const trailingHasContent =
+      Boolean(trailingFrag.textContent?.replace(/\u200B/g, "").trim()) ||
+      Boolean(trailingFrag.querySelector("img"));
+
+    const insertAnchor = topBlock.nextSibling;
+    if (!blockHasContent) {
+      topBlock.remove();
+    }
+    ed.insertBefore(imgWrapper, insertAnchor);
+    if (trailingHasContent) {
+      const topTag = topBlock.tagName.toLowerCase();
+      const trailingTag = ["h1", "h2", "h3", "h4", "h5", "h6", "blockquote"].includes(topTag)
+        ? topTag
+        : "p";
+      const trailingBlock = document.createElement(trailingTag);
+      trailingBlock.appendChild(trailingFrag);
+      ed.insertBefore(trailingBlock, insertAnchor);
+      return { caretTarget: trailingBlock };
+    }
+    return { caretTarget: resolvePostImageCaretTarget(ed, imgWrapper) };
+  }
+
+  range.insertNode(imgWrapper);
+  return { caretTarget: resolvePostImageCaretTarget(ed, imgWrapper) };
 }
 
 export function RichNoteSurface({
@@ -315,6 +841,8 @@ export function RichNoteSurface({
   compactToolbar = false,
   maxHeightClassName = "max-h-[280px]",
   minHeightClassName = "min-h-[100px]",
+  wrapperClassName,
+  wrapperStyle,
   autoFocus = true,
   className,
 }: RichNoteSurfaceProps) {
@@ -322,14 +850,26 @@ export function RichNoteSurface({
   courseIdRef.current = courseId;
   const editorRef = useRef<HTMLDivElement>(null);
   const wrapperRef = useRef<HTMLDivElement>(null);
+  const toolbarRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const isInitializedRef = useRef(false);
   const draggingBlockRef = useRef<HTMLElement | null>(null);
   const ghostSpanRef = useRef<HTMLSpanElement | null>(null);
+  const undoStackRef = useRef<{ html: string; bookmark: CaretBookmark | null }[]>([]);
+  const redoStackRef = useRef<{ html: string; bookmark: CaretBookmark | null }[]>([]);
+  const lastUndoAtRef = useRef(0);
+  const beforeInputSnapRef = useRef<{ html: string; bookmark: CaretBookmark | null } | null>(null);
+  const handledSpaceKeyDownRef = useRef(false);
+  const contextMenuOpenRef = useRef(false);
+  const forcePlainPasteRef = useRef(false);
 
   const [croppingImage, setCroppingImage] = useState<{
     element: HTMLImageElement;
     src: string;
+    top: number;
+    left: number;
+    width: number;
+    height: number;
   } | null>(null);
   const [selectedImg, setSelectedImg] = useState<{
     element: HTMLImageElement;
@@ -337,6 +877,8 @@ export function RichNoteSurface({
     top: number;
     left: number;
   } | null>(null);
+  const [contextMenu, setContextMenu] = useState<StandaloneContextMenuState | null>(null);
+  contextMenuOpenRef.current = Boolean(contextMenu);
   const [ghostSuggestion, setGhostSuggestion] = useState<{
     completion: string;
     fullPhrase: string;
@@ -355,11 +897,32 @@ export function RichNoteSurface({
     const ed = editorRef.current;
     if (!ed || isInitializedRef.current) return;
     ed.innerHTML = content || "";
+    normalizeEmptyEditorOnMount(ed);
+    normalizeEditorImageBlocks(ed);
     isInitializedRef.current = true;
+    undoStackRef.current = [
+      {
+        html: serializeContainerMediaHtml(ed),
+        bookmark: null,
+      },
+    ];
+    redoStackRef.current = [];
     void hydrateContainerMedia(ed);
     if (autoFocus) {
-      ed.focus();
+      const firstChild = ed.firstElementChild as HTMLElement | null;
+      if (firstChild && isImageBlockElement(firstChild)) {
+        const firstImg = firstChild.querySelector("img");
+        ed.focus({ preventScroll: true });
+        window.getSelection()?.removeAllRanges();
+        if (firstImg) {
+          requestAnimationFrame(() => updateSelectedImgPos(firstImg));
+        }
+      } else {
+        ed.focus();
+        syncLiveMarkdownSyntax(ed);
+      }
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoFocus, content]);
 
   const handleInput = useCallback(() => {
@@ -371,6 +934,83 @@ export function RichNoteSurface({
   const triggerWritingActivity = useCallback(() => {
     onWritingActivityRef.current?.();
   }, []);
+
+  const captureUndoSnapshot = useCallback(
+    (force = false, explicit?: { html: string; bookmark: CaretBookmark | null }) => {
+      const ed = editorRef.current;
+      if (!ed) return;
+      const now = Date.now();
+      if (!force && now - lastUndoAtRef.current < 450 && undoStackRef.current.length > 0) {
+        return;
+      }
+      const snap = explicit ?? {
+        html: serializeContainerMediaHtml(ed),
+        bookmark: getCaretBookmark(ed),
+      };
+      const stack = undoStackRef.current;
+      const top = stack[stack.length - 1];
+      if (top && top.html === snap.html) return;
+      stack.push(snap);
+      if (stack.length > 80) stack.shift();
+      redoStackRef.current = [];
+      lastUndoAtRef.current = now;
+    },
+    [],
+  );
+
+  const performUndo = useCallback(() => {
+    const ed = editorRef.current;
+    if (!ed || undoStackRef.current.length === 0) return false;
+    const currentHtml = serializeContainerMediaHtml(ed);
+    const currentBookmark = getCaretBookmark(ed);
+
+    let prev = undoStackRef.current.pop();
+    while (prev && prev.html === currentHtml && undoStackRef.current.length > 0) {
+      prev = undoStackRef.current.pop();
+    }
+    if (!prev || prev.html === currentHtml) return false;
+
+    redoStackRef.current.push({ html: currentHtml, bookmark: currentBookmark });
+    ed.innerHTML = prev.html;
+    normalizeEditorImageBlocks(ed);
+    void hydrateContainerMedia(ed);
+    ed.focus();
+    if (!restoreCaretBookmark(ed, prev.bookmark)) {
+      const r = document.createRange();
+      r.selectNodeContents(ed);
+      r.collapse(false);
+      const s = window.getSelection();
+      s?.removeAllRanges();
+      s?.addRange(r);
+    }
+    syncLiveMarkdownSyntax(ed);
+    setSelectedImg(null);
+    handleInput();
+    triggerWritingActivity();
+    return true;
+  }, [handleInput, triggerWritingActivity]);
+
+  const performRedo = useCallback(() => {
+    const ed = editorRef.current;
+    if (!ed || redoStackRef.current.length === 0) return false;
+    const next = redoStackRef.current.pop();
+    if (!next) return false;
+
+    undoStackRef.current.push({
+      html: serializeContainerMediaHtml(ed),
+      bookmark: getCaretBookmark(ed),
+    });
+    ed.innerHTML = next.html;
+    normalizeEditorImageBlocks(ed);
+    void hydrateContainerMedia(ed);
+    ed.focus();
+    restoreCaretBookmark(ed, next.bookmark);
+    syncLiveMarkdownSyntax(ed);
+    setSelectedImg(null);
+    handleInput();
+    triggerWritingActivity();
+    return true;
+  }, [handleInput, triggerWritingActivity]);
 
   const removeGhostSpan = useCallback(() => {
     if (ghostSpanRef.current && ghostSpanRef.current.isConnected) {
@@ -424,7 +1064,11 @@ export function RichNoteSurface({
     }
     const range = sel.getRangeAt(0);
     const node = range.startContainer;
-    if (!editorRef.current.contains(node) || node === ghostSpanRef.current) {
+    if (
+      !editorRef.current.contains(node) ||
+      node === ghostSpanRef.current ||
+      isInsideMarkdownSyntax(node, editorRef.current)
+    ) {
       removeGhostSpan();
       setGhostSuggestion(null);
       return;
@@ -475,174 +1119,6 @@ export function RichNoteSurface({
     triggerWritingActivity();
   };
 
-  const getClosestBlock = useCallback((node: Node | null): HTMLElement | null => {
-    let curr: Node | null = node;
-    while (curr && curr !== editorRef.current) {
-      if (curr.nodeType === Node.ELEMENT_NODE) {
-        const el = curr as HTMLElement;
-        const tag = el.tagName.toLowerCase();
-        if (["p", "div", "h1", "h2", "h3", "blockquote", "li", "pre"].includes(tag)) {
-          return el;
-        }
-      }
-      curr = curr.parentNode;
-    }
-    return null;
-  }, []);
-
-  const ensureBlockWrapper = useCallback((node: Node | null): HTMLElement | null => {
-    if (!editorRef.current || !node) return null;
-    let directChild: Node | null = node;
-    while (directChild && directChild.parentNode !== editorRef.current) {
-      directChild = directChild.parentNode;
-    }
-    if (!directChild || directChild === editorRef.current) return null;
-    if (directChild.nodeType === Node.ELEMENT_NODE) {
-      const el = directChild as HTMLElement;
-      const t = el.tagName.toLowerCase();
-      if (["p", "div", "h1", "h2", "h3", "blockquote", "li", "pre", "ul", "ol"].includes(t)) {
-        return el;
-      }
-    }
-    if (directChild.nodeType === Node.TEXT_NODE) {
-      const p = document.createElement("p");
-      editorRef.current.insertBefore(p, directChild);
-      p.appendChild(directChild);
-      return p;
-    }
-    return null;
-  }, []);
-
-  const setCaretInside = useCallback((el: HTMLElement) => {
-    try {
-      const range = document.createRange();
-      const sel = window.getSelection();
-      if (el.firstChild) {
-        if (el.firstChild.nodeType === Node.TEXT_NODE) {
-          range.setStart(el.firstChild, 0);
-        } else {
-          range.setStart(el, 0);
-        }
-      } else {
-        range.selectNodeContents(el);
-      }
-      range.collapse(true);
-      sel?.removeAllRanges();
-      sel?.addRange(range);
-      el.focus?.();
-    } catch {
-      // ignore
-    }
-  }, []);
-
-  const getCurrentBlockText = useCallback((block: HTMLElement | null) => {
-    if (!block) return "";
-    const clone = block.cloneNode(true) as HTMLElement;
-    clone.querySelectorAll("[data-ghost]").forEach((s) => s.remove());
-    return clone.textContent || "";
-  }, []);
-
-  const applyMarkdownOnSpace = useCallback(() => {
-    const sel = window.getSelection();
-    if (!sel || sel.rangeCount === 0 || !editorRef.current) return false;
-    const range = sel.getRangeAt(0);
-    if (!range.collapsed) return false;
-
-    const node = range.startContainer;
-    let block = getClosestBlock(node);
-    if (!block || !editorRef.current.contains(block)) {
-      block = ensureBlockWrapper(node);
-    }
-    if (!block || !editorRef.current.contains(block)) return false;
-
-    const tag = block.tagName.toLowerCase();
-    const text = getCurrentBlockText(block).trim();
-
-    const replaceBlockWith = (newEl: HTMLElement, targetInside?: HTMLElement) => {
-      const parent = block!.parentNode || editorRef.current!;
-      if (parent.contains(block!)) {
-        parent.replaceChild(newEl, block!);
-      } else {
-        editorRef.current!.appendChild(newEl);
-      }
-      setCaretInside(targetInside || newEl);
-      handleInput();
-      return true;
-    };
-
-    if (!["h1", "h2", "h3"].includes(tag)) {
-      if (text === "###") {
-        const h = document.createElement("h3");
-        h.innerHTML = "<br>";
-        return replaceBlockWith(h);
-      }
-      if (text === "##") {
-        const h = document.createElement("h2");
-        h.innerHTML = "<br>";
-        return replaceBlockWith(h);
-      }
-      if (text === "#") {
-        const h = document.createElement("h1");
-        h.innerHTML = "<br>";
-        return replaceBlockWith(h);
-      }
-    }
-    if (tag !== "blockquote" && text === ">") {
-      const bq = document.createElement("blockquote");
-      bq.innerHTML = "<br>";
-      return replaceBlockWith(bq);
-    }
-    if (tag !== "li" && (text === "-" || text === "*")) {
-      const ul = document.createElement("ul");
-      const li = document.createElement("li");
-      li.innerHTML = "<br>";
-      ul.appendChild(li);
-      return replaceBlockWith(ul, li);
-    }
-    if (tag !== "li" && (text === "1." || text === "1")) {
-      const ol = document.createElement("ol");
-      const li = document.createElement("li");
-      li.innerHTML = "<br>";
-      ol.appendChild(li);
-      return replaceBlockWith(ol, li);
-    }
-    return false;
-  }, [ensureBlockWrapper, getClosestBlock, getCurrentBlockText, handleInput, setCaretInside]);
-
-  const processInlineCode = useCallback(() => {
-    const sel = window.getSelection();
-    if (!sel || sel.rangeCount === 0 || !editorRef.current) return;
-    const range = sel.getRangeAt(0);
-    const node = range.startContainer;
-    if (node.nodeType !== Node.TEXT_NODE) return;
-    const val = node.nodeValue || "";
-    const codeMatch = /`([^`\n]+)`/.exec(val);
-    if (codeMatch && range.startOffset >= codeMatch.index + codeMatch[0].length) {
-      const codeText = codeMatch[1]!;
-      const startIdx = codeMatch.index;
-      const endIdx = startIdx + codeMatch[0].length;
-      const beforeText = val.slice(0, startIdx);
-      const afterText = val.slice(endIdx);
-
-      const codeEl = document.createElement("code");
-      codeEl.textContent = codeText;
-      const parent = node.parentNode;
-      if (parent) {
-        if (beforeText) parent.insertBefore(document.createTextNode(beforeText), node);
-        parent.insertBefore(codeEl, node);
-        const afterNode = document.createTextNode(afterText || "\u00A0");
-        parent.insertBefore(afterNode, node);
-        parent.removeChild(node);
-        const newRange = document.createRange();
-        newRange.setStart(afterNode, afterText ? 0 : 1);
-        newRange.collapse(true);
-        sel.removeAllRanges();
-        sel.addRange(newRange);
-        handleInput();
-      }
-    }
-  }, [handleInput]);
-
   const getDirectEditorChild = useCallback((node: Node | null): HTMLElement | null => {
     if (!editorRef.current || !node) return null;
     let curr: Node | null = node;
@@ -663,7 +1139,8 @@ export function RichNoteSurface({
   );
 
   const updateSelectedImgPos = useCallback((imgEl: HTMLImageElement) => {
-    if (!wrapperRef.current || !imgEl.isConnected) {
+    const wrap = wrapperRef.current;
+    if (!wrap || !imgEl.isConnected) {
       setSelectedImg(null);
       return;
     }
@@ -674,46 +1151,121 @@ export function RichNoteSurface({
     }
     imgEl.classList.add("is-selected");
 
-    const wrapRect = wrapperRef.current.getBoundingClientRect();
+    const wrapRect = wrap.getBoundingClientRect();
     const imgRect = imgEl.getBoundingClientRect();
-    const toolbarWidth = 164;
-    const top = imgRect.top - wrapRect.top + wrapperRef.current.scrollTop + 8;
-    const left = Math.max(
-      8,
-      imgRect.left -
-        wrapRect.left +
-        wrapperRef.current.scrollLeft +
-        imgRect.width -
-        toolbarWidth -
-        8,
-    );
-    setSelectedImg({
-      element: imgEl,
-      src: imgEl.currentSrc || imgEl.src,
-      top,
-      left,
+    // Account for CSS transform scaling (e.g. Workspace Canvas 25%-300% zoom) so
+    // unscaled CSS top/left match the wrapper's local coordinate space.
+    const scaleX =
+      wrap.offsetWidth > 0 && wrapRect.width > 0 ? wrapRect.width / wrap.offsetWidth : 1;
+    const scaleY =
+      wrap.offsetHeight > 0 && wrapRect.height > 0 ? wrapRect.height / wrap.offsetHeight : 1;
+    const toolbarW = toolbarRef.current?.offsetWidth || 188;
+    const toolbarH = toolbarRef.current?.offsetHeight || 32;
+
+    const imgTop = (imgRect.top - wrapRect.top) / scaleY + wrap.scrollTop;
+    const imgHeight = imgRect.height / scaleY;
+    const imgLeft = (imgRect.left - wrapRect.left) / scaleX + wrap.scrollLeft;
+    const imgWidth = imgRect.width / scaleX;
+
+    const rawTop = imgTop + 8;
+    const minVisibleTop = wrap.scrollTop + 6;
+    const maxImgTop = Math.max(rawTop, imgTop + imgHeight - toolbarH - 6);
+    const top = Math.min(Math.max(rawTop, minVisibleTop), maxImgTop);
+
+    const desiredLeft = imgLeft + imgWidth - toolbarW - 8;
+    const maxLeft = Math.max(8, wrap.scrollLeft + wrap.clientWidth - toolbarW - 8);
+    const left = Math.max(8, Math.min(desiredLeft, maxLeft));
+    const nextSrc = imgEl.currentSrc || imgEl.src;
+
+    setSelectedImg((prev) => {
+      if (
+        prev &&
+        prev.element === imgEl &&
+        prev.src === nextSrc &&
+        Math.abs(prev.top - top) < 1 &&
+        Math.abs(prev.left - left) < 1
+      ) {
+        return prev;
+      }
+      return {
+        element: imgEl,
+        src: nextSrc,
+        top,
+        left,
+      };
     });
   }, []);
 
+  const clearSelectedImage = useCallback(() => {
+    setSelectedImg((prev) => {
+      if (prev) prev.element.classList.remove("is-selected");
+      return null;
+    });
+    if (editorRef.current) {
+      editorRef.current.querySelectorAll("img.is-selected").forEach((img) => {
+        img.classList.remove("is-selected");
+      });
+    }
+  }, []);
+
+  const selectImageElement = useCallback(
+    (imgEl: HTMLImageElement, clearSelection = true) => {
+      imgEl.draggable = false;
+      imgEl.setAttribute("draggable", "false");
+      if (clearSelection) {
+        editorRef.current?.focus({ preventScroll: true });
+        window.getSelection()?.removeAllRanges();
+      }
+      updateSelectedImgPos(imgEl);
+    },
+    [updateSelectedImgPos],
+  );
+
+  const findImageBlockAtClientY = useCallback(
+    (ed: HTMLElement, clientY: number): HTMLElement | null => {
+      const blocks = ed.querySelectorAll(`[${NOTE_IMAGE_BLOCK_ATTR}="true"]`);
+      for (const block of Array.from(blocks)) {
+        const rect = block.getBoundingClientRect();
+        if (clientY >= rect.top && clientY <= rect.bottom) {
+          return block as HTMLElement;
+        }
+      }
+      return null;
+    },
+    [],
+  );
+
   const moveImageBlock = useCallback(
     (imgEl: HTMLImageElement, direction: "up" | "down") => {
-      if (!editorRef.current || !imgEl.isConnected) return;
+      const ed = editorRef.current;
+      if (!ed || !imgEl.isConnected) return;
       const block = getImageBlock(imgEl);
       if (!block || !block.parentElement) return;
 
       if (direction === "up") {
         const prev = block.previousElementSibling;
         if (prev) {
-          editorRef.current.insertBefore(block, prev);
+          captureUndoSnapshot(true);
+          ed.insertBefore(block, prev);
+          normalizeEditorImageBlocks(ed);
           handleInput();
           triggerWritingActivity();
           block.scrollIntoView({ block: "nearest", behavior: "smooth" });
           requestAnimationFrame(() => updateSelectedImgPos(imgEl));
         }
       } else {
-        const next = block.nextElementSibling;
-        if (next) {
-          editorRef.current.insertBefore(block, next.nextElementSibling);
+        const next = block.nextElementSibling as HTMLElement | null;
+        const isEmptyTailSpacer =
+          next?.hasAttribute(NOTE_IMAGE_TAIL_ATTR) &&
+          !next.textContent
+            ?.replace(/\u00A0/g, "")
+            .replace(/\u200B/g, "")
+            .trim() &&
+          !next.querySelector("img, hr, pre, ul, ol");
+        if (next && !isEmptyTailSpacer) {
+          captureUndoSnapshot(true);
+          ed.insertBefore(block, next.nextElementSibling);
+          normalizeEditorImageBlocks(ed);
           handleInput();
           triggerWritingActivity();
           block.scrollIntoView({ block: "nearest", behavior: "smooth" });
@@ -721,37 +1273,74 @@ export function RichNoteSurface({
         }
       }
     },
-    [getImageBlock, handleInput, triggerWritingActivity, updateSelectedImgPos],
+    [captureUndoSnapshot, getImageBlock, handleInput, triggerWritingActivity, updateSelectedImgPos],
   );
 
   const handleRemoveImage = useCallback(
     (imgEl: HTMLImageElement) => {
+      const ed = editorRef.current;
+      captureUndoSnapshot(true);
       imgEl.classList.remove("is-selected");
-      const parent = imgEl.parentElement;
-      if (
-        parent &&
-        parent !== editorRef.current &&
-        (parent.tagName === "DIV" || parent.tagName === "P") &&
-        parent.children.length === 1 &&
-        !parent.textContent?.trim()
-      ) {
-        parent.remove();
+      const block = getImageBlock(imgEl);
+      const prevSib = block?.previousElementSibling as HTMLElement | null;
+      const nextSib = block?.nextElementSibling as HTMLElement | null;
+
+      if (block && block !== ed && block.contains(imgEl)) {
+        if (block.hasAttribute(NOTE_IMAGE_BLOCK_ATTR) || !block.textContent?.trim()) {
+          block.remove();
+        } else {
+          imgEl.remove();
+        }
       } else {
         imgEl.remove();
       }
       setSelectedImg(null);
+
+      if (ed) {
+        normalizeEmptyEditorOnMount(ed);
+        normalizeEditorImageBlocks(ed);
+        handleInput();
+        triggerWritingActivity();
+
+        if (prevSib && prevSib.isConnected && !isImageBlockElement(prevSib)) {
+          ed.focus({ preventScroll: true });
+          const target =
+            prevSib.tagName === "UL" || prevSib.tagName === "OL"
+              ? ((prevSib.querySelector("li:last-child") as HTMLElement | null) ?? prevSib)
+              : prevSib;
+          placeCaretAtEnd(target);
+        } else if (nextSib && nextSib.isConnected && !isImageBlockElement(nextSib)) {
+          ed.focus({ preventScroll: true });
+          const target =
+            nextSib.tagName === "UL" || nextSib.tagName === "OL"
+              ? ((nextSib.querySelector("li") as HTMLElement | null) ?? nextSib)
+              : nextSib;
+          placeCaretAtStart(target);
+        } else if (ed.children.length === 0) {
+          ed.focus();
+        } else {
+          placeCaretInEditableBlockAtY(ed, ed.getBoundingClientRect().top);
+        }
+        return;
+      }
+
       handleInput();
       triggerWritingActivity();
-      editorRef.current?.focus();
     },
-    [handleInput, triggerWritingActivity],
+    [captureUndoSnapshot, getImageBlock, handleInput, triggerWritingActivity],
   );
 
   const handleImageInsert = useCallback(
     async (rawSrcOrFile: string | File) => {
       const ed = editorRef.current;
       if (!ed) return;
-      ed.focus();
+      const selBefore = window.getSelection();
+      const preAwaitRange =
+        selBefore && selBefore.rangeCount > 0 && ed.contains(selBefore.getRangeAt(0).startContainer)
+          ? selBefore.getRangeAt(0).cloneRange()
+          : null;
+      ed.focus({ preventScroll: true });
+      captureUndoSnapshot(true);
 
       const storedUri =
         typeof rawSrcOrFile === "string"
@@ -760,7 +1349,8 @@ export function RichNoteSurface({
       const displayUrl = isMediaUri(storedUri) ? await resolveMediaUrl(storedUri) : storedUri;
 
       const imgWrapper = document.createElement("div");
-      imgWrapper.style.margin = "8px 0";
+      imgWrapper.setAttribute(NOTE_IMAGE_BLOCK_ATTR, "true");
+      imgWrapper.contentEditable = "false";
       const img = document.createElement("img");
       img.src = displayUrl;
       if (isMediaUri(storedUri)) {
@@ -771,66 +1361,167 @@ export function RichNoteSurface({
       img.setAttribute("draggable", "false");
       imgWrapper.appendChild(img);
 
-      const pAfter = document.createElement("p");
-      pAfter.appendChild(document.createElement("br"));
-
       const sel = window.getSelection();
-      if (sel && sel.rangeCount > 0 && ed.contains(sel.getRangeAt(0).startContainer)) {
-        const range = sel.getRangeAt(0);
-        range.deleteContents();
-        range.insertNode(pAfter);
-        range.insertNode(imgWrapper);
-        const newRange = document.createRange();
-        newRange.setStart(pAfter, 0);
-        newRange.collapse(true);
-        sel.removeAllRanges();
-        sel.addRange(newRange);
+      const liveRange =
+        sel && sel.rangeCount > 0 && ed.contains(sel.getRangeAt(0).startContainer)
+          ? sel.getRangeAt(0)
+          : preAwaitRange &&
+              preAwaitRange.startContainer.isConnected &&
+              ed.contains(preAwaitRange.startContainer)
+            ? preAwaitRange
+            : null;
+
+      let caretTarget: HTMLElement | null = null;
+      if (liveRange) {
+        ({ caretTarget } = insertImageBlockCleanly(ed, liveRange, imgWrapper));
       } else {
-        ed.appendChild(imgWrapper);
-        ed.appendChild(pAfter);
-        const newRange = document.createRange();
-        newRange.setStart(pAfter, 0);
-        newRange.collapse(true);
-        const sel2 = window.getSelection();
-        sel2?.removeAllRanges();
-        sel2?.addRange(newRange);
+        const lastEl = ed.lastElementChild as HTMLElement | null;
+        if (lastEl && isBlockEmptyForImage(lastEl)) {
+          lastEl.replaceWith(imgWrapper);
+        } else {
+          ed.appendChild(imgWrapper);
+        }
+        caretTarget = resolvePostImageCaretTarget(ed, imgWrapper);
       }
+
+      normalizeEditorImageBlocks(ed);
+
+      if (caretTarget && caretTarget.isConnected) {
+        clearSelectedImage();
+        placeCaretAtStart(caretTarget);
+      } else {
+        selectImageElement(img);
+      }
+
       handleInput();
       triggerWritingActivity();
-      requestAnimationFrame(() => {
-        updateSelectedImgPos(img);
-      });
+      const syncInsertedImage = () => {
+        if (!img.isConnected) return;
+        img.scrollIntoView({ block: "nearest" });
+        if (!caretTarget || !caretTarget.isConnected) {
+          updateSelectedImgPos(img);
+        }
+      };
+      if (!img.complete || img.naturalWidth === 0) {
+        img.addEventListener("load", syncInsertedImage, { once: true });
+      }
+      requestAnimationFrame(syncInsertedImage);
     },
-    [handleInput, triggerWritingActivity, updateSelectedImgPos],
+    [
+      captureUndoSnapshot,
+      clearSelectedImage,
+      handleInput,
+      selectImageElement,
+      triggerWritingActivity,
+      updateSelectedImgPos,
+    ],
   );
 
-  const handleEditorKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
-    if (selectedImg && selectedImg.element.isConnected) {
+  useEffect(() => {
+    void preloadSpellChecker();
+    const ed = editorRef.current;
+    if (!ed) return;
+    registerEditorContextHooks(ed, {
+      onBeforeMutate: () => captureUndoSnapshot(true),
+      onAfterPaste: () => {
+        normalizeEditorImageBlocks(ed);
+        syncLiveMarkdownSyntax(ed);
+        handleInput();
+        triggerWritingActivity();
+      },
+      onPasteImage: (file) => handleImageInsert(file),
+    });
+  }, [captureUndoSnapshot, handleImageInsert, handleInput, triggerWritingActivity]);
+
+  const handleSelectedImageKeyDown = useCallback(
+    (e: KeyboardEvent | React.KeyboardEvent<HTMLDivElement>): boolean => {
+      if (!selectedImg || !selectedImg.element.isConnected) return false;
+      const ed = editorRef.current;
+      if (!ed) return false;
+
       if (e.altKey && (e.key === "ArrowUp" || e.key === "Up")) {
         e.preventDefault();
         e.stopPropagation();
         moveImageBlock(selectedImg.element, "up");
-        return;
+        return true;
       }
       if (e.altKey && (e.key === "ArrowDown" || e.key === "Down")) {
         e.preventDefault();
         e.stopPropagation();
         moveImageBlock(selectedImg.element, "down");
-        return;
+        return true;
       }
+
+      const sel = window.getSelection();
+      const hasTextCaret = Boolean(
+        sel && sel.rangeCount > 0 && ed.contains(sel.getRangeAt(0).startContainer),
+      );
+
       if (e.key === "Backspace" || e.key === "Delete") {
+        if (hasTextCaret) {
+          clearSelectedImage();
+          return false;
+        }
         e.preventDefault();
         e.stopPropagation();
         handleRemoveImage(selectedImg.element);
-        return;
+        return true;
       }
+
       if (e.key === "Escape") {
         e.preventDefault();
         e.stopPropagation();
-        selectedImg.element.classList.remove("is-selected");
-        setSelectedImg(null);
-        return;
+        clearSelectedImage();
+        return true;
       }
+
+      if (!hasTextCaret && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
+        const direction =
+          e.key === "Enter"
+            ? ("enter" as const)
+            : e.key === "ArrowDown" || e.key === "ArrowRight"
+              ? ("after" as const)
+              : e.key === "ArrowUp" || e.key === "ArrowLeft"
+                ? ("before" as const)
+                : null;
+        if (direction) {
+          e.preventDefault();
+          e.stopPropagation();
+          const { nextSelectedImage, mutatedDom } = moveCaretOutOfImageBlock(
+            ed,
+            selectedImg.element,
+            direction,
+          );
+          if (nextSelectedImage) {
+            selectImageElement(nextSelectedImage);
+          } else {
+            clearSelectedImage();
+          }
+          if (mutatedDom) {
+            handleInput();
+            triggerWritingActivity();
+          }
+          return true;
+        }
+      }
+
+      return false;
+    },
+    [
+      clearSelectedImage,
+      handleInput,
+      handleRemoveImage,
+      moveImageBlock,
+      selectImageElement,
+      selectedImg,
+      triggerWritingActivity,
+    ],
+  );
+
+  const handleEditorKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    const ed = editorRef.current;
+    if (handleSelectedImageKeyDown(e)) {
+      return;
     }
 
     if ((e.ctrlKey || e.metaKey) && e.key === "Enter" && onSubmit) {
@@ -864,8 +1555,82 @@ export function RichNoteSurface({
       }
       e.preventDefault();
       e.stopPropagation();
+      captureUndoSnapshot(true);
       acceptGhostSuggestion();
       return;
+    }
+
+    if (ed && (e.ctrlKey || e.metaKey) && !e.altKey) {
+      const lower = e.key.toLowerCase();
+      if (lower === "z" && !e.shiftKey) {
+        if (performUndo()) {
+          e.preventDefault();
+          e.stopPropagation();
+        }
+        return;
+      }
+      if ((lower === "z" && e.shiftKey) || (lower === "y" && !e.shiftKey)) {
+        if (performRedo()) {
+          e.preventDefault();
+          e.stopPropagation();
+        }
+        return;
+      }
+      if (lower === "l" && !e.shiftKey) {
+        captureUndoSnapshot(true);
+        if (toggleTaskListCommand(ed)) {
+          e.preventDefault();
+          e.stopPropagation();
+          handleInput();
+          triggerWritingActivity();
+        }
+        return;
+      }
+      if (lower === "e" && !e.shiftKey) {
+        captureUndoSnapshot(true);
+        if (toggleInlineWrapperCommand(ed, "code")) {
+          e.preventDefault();
+          e.stopPropagation();
+          handleInput();
+          triggerWritingActivity();
+        }
+        return;
+      }
+      if (lower === "h" && e.shiftKey) {
+        captureUndoSnapshot(true);
+        if (toggleInlineWrapperCommand(ed, "mark")) {
+          e.preventDefault();
+          e.stopPropagation();
+          handleInput();
+          triggerWritingActivity();
+        }
+        return;
+      }
+      if ((lower === "x" || lower === "s") && e.shiftKey) {
+        captureUndoSnapshot(true);
+        if (toggleInlineWrapperCommand(ed, "s")) {
+          e.preventDefault();
+          e.stopPropagation();
+          handleInput();
+          triggerWritingActivity();
+        }
+        return;
+      }
+      if (lower === "v" && e.shiftKey) {
+        forcePlainPasteRef.current = true;
+        return;
+      }
+      if ((lower === "b" || lower === "i") && !e.shiftKey) {
+        e.preventDefault();
+        e.stopPropagation();
+        captureUndoSnapshot(true);
+        stripSyntaxBeforeExecCommand(ed);
+        document.execCommand(lower === "b" ? "bold" : "italic", false);
+        syncLiveMarkdownSyntax(ed);
+        handleInput();
+        triggerWritingActivity();
+        return;
+      }
     }
 
     if (!["Control", "Shift", "Alt", "Meta", "CapsLock"].includes(e.key)) {
@@ -874,30 +1639,229 @@ export function RichNoteSurface({
       triggerWritingActivity();
     }
 
-    if (e.key === " " && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
-      if (applyMarkdownOnSpace()) {
+    if (e.nativeEvent.isComposing || !ed) return;
+
+    if (e.key === "Tab" && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      captureUndoSnapshot(true);
+      if (applyMarkdownOnTab(ed, e.shiftKey)) {
         e.preventDefault();
+        e.stopPropagation();
+        handleInput();
       }
+      return;
+    }
+
+    if (e.key === "Enter" && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      captureUndoSnapshot(true);
+      if (applyMarkdownOnEnter(ed, e.shiftKey)) {
+        e.preventDefault();
+        handleInput();
+      }
+      return;
+    }
+
+    if (e.key === "Backspace" && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
+      const snapBefore = {
+        html: serializeContainerMediaHtml(ed),
+        bookmark: getCaretBookmark(ed),
+      };
+      if (handleMarkdownDelimiterBackspace(ed)) {
+        captureUndoSnapshot(true, snapBefore);
+        e.preventDefault();
+        e.stopPropagation();
+        handleInput();
+        return;
+      }
+      const boundaryImg = resolveImageBoundaryBeforeBackspace(ed);
+      if (boundaryImg) {
+        e.preventDefault();
+        e.stopPropagation();
+        selectImageElement(boundaryImg);
+        handleInput();
+        return;
+      }
+      captureUndoSnapshot(true);
+      if (applyMarkdownOnBackspace(ed)) {
+        e.preventDefault();
+        handleInput();
+      }
+      return;
+    }
+
+    if (e.key === "Delete" && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
+      const boundaryImg = resolveImageBoundaryBeforeDelete(ed);
+      if (boundaryImg) {
+        e.preventDefault();
+        e.stopPropagation();
+        selectImageElement(boundaryImg);
+      }
+      return;
+    }
+
+    if (
+      (e.key === "ArrowLeft" || e.key === "ArrowRight") &&
+      !e.ctrlKey &&
+      !e.metaKey &&
+      !e.altKey &&
+      !e.shiftKey
+    ) {
+      if (resolveInlineBoundaryOnArrow(ed, e.key)) {
+        e.preventDefault();
+        e.stopPropagation();
+        requestAnimationFrame(updateGhostSuggestion);
+        return;
+      }
+    }
+
+    if (
+      (e.key === "ArrowLeft" ||
+        e.key === "ArrowRight" ||
+        e.key === "ArrowUp" ||
+        e.key === "ArrowDown") &&
+      !e.ctrlKey &&
+      !e.metaKey &&
+      !e.altKey &&
+      !e.shiftKey
+    ) {
+      const targetImg = resolveArrowIntoImageBlock(ed, e.key);
+      if (targetImg) {
+        e.preventDefault();
+        e.stopPropagation();
+        selectImageElement(targetImg);
+        return;
+      }
+    }
+
+    const isSpaceKey = e.key === " " || e.code === "Space";
+    if (isSpaceKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      handledSpaceKeyDownRef.current = true;
+      captureUndoSnapshot(true);
+      unwrapEmptyInlinePairOnSpace(ed);
+      if (applyMarkdownOnSpace(ed)) {
+        e.preventDefault();
+        handleInput();
+      }
+      return;
+    }
+
+    if (
+      !e.ctrlKey &&
+      !e.metaKey &&
+      !e.altKey &&
+      ["(", ")", "[", "]", '"', "`", "*", "~", "="].includes(e.key)
+    ) {
+      const snapBefore = {
+        html: serializeContainerMediaHtml(ed),
+        bookmark: getCaretBookmark(ed),
+      };
+      if (handleMarkdownDelimiterKeyDown(ed, e.key)) {
+        captureUndoSnapshot(true, snapBefore);
+        e.preventDefault();
+        handleInput();
+        return;
+      }
+    }
+
+    if (
+      ![
+        "Control",
+        "Shift",
+        "Alt",
+        "Meta",
+        "CapsLock",
+        "ArrowLeft",
+        "ArrowRight",
+        "ArrowUp",
+        "ArrowDown",
+      ].includes(e.key)
+    ) {
+      captureUndoSnapshot(false);
     }
   };
 
   const handlePaste = async (e: React.ClipboardEvent<HTMLDivElement>) => {
+    const forcePlain = forcePlainPasteRef.current;
+    forcePlainPasteRef.current = false;
     triggerWritingActivity();
-    const items = e.clipboardData?.items;
-    if (!items) return;
-    for (const item of Array.from(items)) {
-      if (item.type.startsWith("image/")) {
-        e.preventDefault();
-        const file = item.getAsFile();
-        if (!file) continue;
-        try {
-          await handleImageInsert(file);
-        } catch (err: unknown) {
-          toast.error(err instanceof Error ? err.message : "Failed to paste image.");
+
+    if (!forcePlain) {
+      const items = e.clipboardData?.items;
+      if (items) {
+        for (const item of Array.from(items)) {
+          if (item.type.startsWith("image/")) {
+            e.preventDefault();
+            const file = item.getAsFile();
+            if (!file) continue;
+            try {
+              await handleImageInsert(file);
+            } catch (err: unknown) {
+              toast.error(err instanceof Error ? err.message : "Failed to paste image.");
+            }
+            return;
+          }
         }
-        return;
+      }
+
+      const ed = editorRef.current;
+      const plain = e.clipboardData?.getData("text/plain")?.trim();
+      if (ed && plain && /^https?:\/\/\S+$/i.test(plain)) {
+        const sel = window.getSelection();
+        if (sel && sel.rangeCount > 0 && !sel.getRangeAt(0).collapsed) {
+          const snapBefore = {
+            html: serializeContainerMediaHtml(ed),
+            bookmark: getCaretBookmark(ed),
+          };
+          if (wrapSelectionAsLink(ed, plain)) {
+            captureUndoSnapshot(true, snapBefore);
+            e.preventDefault();
+            handleInput();
+            return;
+          }
+        }
+      }
+
+      const rawHtml = e.clipboardData?.getData("text/html");
+      if (ed && rawHtml) {
+        const cleanHtml = sanitizeClipboardHtml(rawHtml);
+        if (cleanHtml) {
+          e.preventDefault();
+          captureUndoSnapshot(true);
+          if (typeof document.execCommand === "function") {
+            document.execCommand("insertHTML", false, cleanHtml);
+          }
+          normalizeEditorImageBlocks(ed);
+          syncLiveMarkdownSyntax(ed);
+          handleInput();
+          return;
+        }
+      }
+      captureUndoSnapshot(true);
+      return;
+    }
+
+    const ed = editorRef.current;
+    const plainText = e.clipboardData?.getData("text/plain") ?? "";
+    e.preventDefault();
+    if (!ed || !plainText) return;
+    captureUndoSnapshot(true);
+    const applied =
+      typeof document.execCommand === "function" &&
+      document.execCommand("insertText", false, plainText);
+    if (!applied) {
+      const sel = window.getSelection();
+      if (sel && sel.rangeCount > 0) {
+        const range = sel.getRangeAt(0);
+        range.deleteContents();
+        const textNode = document.createTextNode(plainText);
+        range.insertNode(textNode);
+        range.setStart(textNode, plainText.length);
+        range.collapse(true);
+        sel.removeAllRanges();
+        sel.addRange(range);
       }
     }
+    syncLiveMarkdownSyntax(ed);
+    handleInput();
   };
 
   const handleDrop = async (e: React.DragEvent<HTMLDivElement>) => {
@@ -907,6 +1871,7 @@ export function RichNoteSurface({
     if (!files) return;
     for (const file of Array.from(files)) {
       if (file.type.startsWith("image/")) {
+        e.stopPropagation();
         try {
           await handleImageInsert(file);
         } catch (err: unknown) {
@@ -919,21 +1884,47 @@ export function RichNoteSurface({
 
   const handleEditorClick = (e: React.MouseEvent<HTMLDivElement>) => {
     const target = e.target as HTMLElement;
+    if (target.tagName === "INPUT" && target.hasAttribute("data-task-checkbox")) {
+      e.stopPropagation();
+      captureUndoSnapshot(true);
+      toggleTaskCheckboxElement(target as HTMLInputElement);
+      handleInput();
+      triggerWritingActivity();
+      return;
+    }
+    const anchor = target.closest("a");
+    if (anchor && editorRef.current?.contains(anchor) && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      e.stopPropagation();
+      const safeHref = sanitizeHttpUrl(anchor.getAttribute("href") || "");
+      if (safeHref) {
+        window.open(safeHref, "_blank", "noopener,noreferrer");
+      }
+      return;
+    }
+    if (editorRef.current && target.tagName !== "IMG") {
+      exitInlineMarkOnClick(editorRef.current, e.clientX);
+    }
+    const imgBlock = target.closest(`[${NOTE_IMAGE_BLOCK_ATTR}="true"]`) as HTMLElement | null;
+    if (imgBlock && editorRef.current?.contains(imgBlock)) {
+      e.stopPropagation();
+      const imgEl = imgBlock.querySelector("img");
+      if (imgEl) selectImageElement(imgEl);
+      return;
+    }
     if (target.tagName === "IMG") {
       e.stopPropagation();
-      const imgEl = target as HTMLImageElement;
-      imgEl.draggable = false;
-      imgEl.setAttribute("draggable", "false");
-      updateSelectedImgPos(imgEl);
+      selectImageElement(target as HTMLImageElement);
       return;
     }
     if (target.closest(".image-action-toolbar")) return;
     if (selectedImg) {
-      selectedImg.element.classList.remove("is-selected");
-      setSelectedImg(null);
+      clearSelectedImage();
     }
     if (target === wrapperRef.current && editorRef.current) {
       const ed = editorRef.current;
+      if (findImageBlockAtClientY(ed, e.clientY)) return;
+      if (ed.querySelector(`[${NOTE_IMAGE_BLOCK_ATTR}="true"]`)) return;
       ed.focus();
       const sel = window.getSelection();
       if (sel) {
@@ -947,12 +1938,72 @@ export function RichNoteSurface({
   };
 
   useEffect(() => {
+    if (croppingImage) return;
+    const handleSelectionChange = () => {
+      const ed = editorRef.current;
+      if (!ed) return;
+      const sel = window.getSelection();
+      if (!sel || sel.rangeCount === 0) return;
+      const range = sel.getRangeAt(0);
+      if (!ed.contains(range.startContainer)) return;
+
+      syncLiveMarkdownSyntax(ed);
+
+      if (!range.collapsed) return;
+
+      const startEl =
+        range.startContainer.nodeType === Node.ELEMENT_NODE
+          ? (range.startContainer as HTMLElement)
+          : range.startContainer.parentElement;
+      const insideImgBlock = startEl?.closest(`[${NOTE_IMAGE_BLOCK_ATTR}="true"]`);
+      if (insideImgBlock && ed.contains(insideImgBlock)) {
+        const img = insideImgBlock.querySelector("img");
+        sel.removeAllRanges();
+        if (img) updateSelectedImgPos(img);
+        return;
+      }
+
+      if (range.startContainer === ed && ed.children.length > 0) {
+        const before = ed.childNodes[range.startOffset - 1] ?? null;
+        const after = ed.childNodes[range.startOffset] ?? null;
+        if (after && isImageBlockElement(after)) {
+          const img = (after as HTMLElement).querySelector("img");
+          sel.removeAllRanges();
+          if (img) updateSelectedImgPos(img);
+          return;
+        }
+        if (before && isImageBlockElement(before)) {
+          if (after && after.nodeType === Node.ELEMENT_NODE && !isImageBlockElement(after)) {
+            const afterEl = after as HTMLElement;
+            const target =
+              afterEl.tagName === "UL" || afterEl.tagName === "OL"
+                ? ((afterEl.querySelector("li") as HTMLElement | null) ?? afterEl)
+                : afterEl;
+            placeCaretAtStart(target);
+          } else {
+            const img = (before as HTMLElement).querySelector("img");
+            sel.removeAllRanges();
+            if (img) updateSelectedImgPos(img);
+          }
+        }
+      }
+    };
+
+    document.addEventListener("selectionchange", handleSelectionChange);
+    return () => document.removeEventListener("selectionchange", handleSelectionChange);
+  }, [croppingImage, updateSelectedImgPos]);
+
+  useEffect(() => {
     if (!selectedImg) return;
     const onDocClick = (e: MouseEvent) => {
       const target = e.target as HTMLElement | null;
-      if (!target?.closest(".image-action-toolbar") && target !== selectedImg.element) {
-        selectedImg.element.classList.remove("is-selected");
-        setSelectedImg(null);
+      const targetImgBlock = target?.closest(`[${NOTE_IMAGE_BLOCK_ATTR}="true"]`);
+      if (
+        !target?.closest(".image-action-toolbar") &&
+        target !== selectedImg.element &&
+        !targetImgBlock?.contains(selectedImg.element)
+      ) {
+        clearSelectedImage();
       }
     };
     const onKeyDown = (e: KeyboardEvent) => {
@@ -960,76 +2011,127 @@ export function RichNoteSurface({
         setSelectedImg(null);
         return;
       }
-      if (e.altKey && (e.key === "ArrowUp" || e.key === "Up")) {
-        e.preventDefault();
-        e.stopPropagation();
-        moveImageBlock(selectedImg.element, "up");
-        return;
-      }
-      if (e.altKey && (e.key === "ArrowDown" || e.key === "Down")) {
-        e.preventDefault();
-        e.stopPropagation();
-        moveImageBlock(selectedImg.element, "down");
-        return;
-      }
-      if (e.key === "Backspace" || e.key === "Delete") {
-        e.preventDefault();
-        e.stopPropagation();
-        handleRemoveImage(selectedImg.element);
-        return;
-      }
-      if (e.key === "Escape") {
-        e.preventDefault();
-        e.stopPropagation();
-        selectedImg.element.classList.remove("is-selected");
-        setSelectedImg(null);
-      }
+      handleSelectedImageKeyDown(e);
     };
 
     document.addEventListener("mousedown", onDocClick);
     document.addEventListener("keydown", onKeyDown);
+    const rafId = requestAnimationFrame(() => updateSelectedImgPos(selectedImg.element));
+
+    const wrap = wrapperRef.current;
+    const onWrapScroll = () => updateSelectedImgPos(selectedImg.element);
+    wrap?.addEventListener("scroll", onWrapScroll, { passive: true });
+
+    let ro: ResizeObserver | null = null;
+    if (typeof ResizeObserver !== "undefined") {
+      ro = new ResizeObserver(() => {
+        updateSelectedImgPos(selectedImg.element);
+      });
+      ro.observe(selectedImg.element);
+      if (wrap) ro.observe(wrap);
+      if (toolbarRef.current) ro.observe(toolbarRef.current);
+    }
+
     return () => {
+      cancelAnimationFrame(rafId);
+      wrap?.removeEventListener("scroll", onWrapScroll);
+      ro?.disconnect();
       document.removeEventListener("mousedown", onDocClick);
       document.removeEventListener("keydown", onKeyDown);
     };
-  }, [selectedImg, moveImageBlock, handleRemoveImage]);
+  }, [selectedImg, clearSelectedImage, handleSelectedImageKeyDown, updateSelectedImgPos]);
 
-  const handleApplyCrop = async (croppedDataUrl: string) => {
-    if (croppingImage) {
-      const storedUri = await saveMediaDataUrl(croppedDataUrl, courseIdRef.current);
-      const displayUrl = isMediaUri(storedUri) ? await resolveMediaUrl(storedUri) : storedUri;
-      const updateImg = (img: HTMLImageElement) => {
-        img.src = displayUrl;
-        if (isMediaUri(storedUri)) img.setAttribute("data-media-uri", storedUri);
-        else img.removeAttribute("data-media-uri");
-      };
+  useEffect(() => {
+    if (!croppingImage) return;
+    const syncRect = () => {
+      const wrap = wrapperRef.current;
+      const imgEl = croppingImage.element;
+      if (!wrap || !imgEl.isConnected) {
+        setCroppingImage(null);
+        return;
+      }
+      const next = measureImageLocalRect(imgEl, wrap);
+      setCroppingImage((prev) => {
+        if (!prev || prev.element !== imgEl) return prev;
+        if (
+          Math.abs(prev.top - next.top) < 0.5 &&
+          Math.abs(prev.left - next.left) < 0.5 &&
+          Math.abs(prev.width - next.width) < 0.5 &&
+          Math.abs(prev.height - next.height) < 0.5
+        ) {
+          return prev;
+        }
+        return { ...prev, ...next };
+      });
+    };
 
-      if (croppingImage.element.isConnected) {
-        updateImg(croppingImage.element);
-      } else if (editorRef.current) {
-        const imgs = editorRef.current.querySelectorAll("img");
-        for (const img of Array.from(imgs)) {
-          if (img.src === croppingImage.src) {
-            updateImg(img);
-            break;
-          }
+    const rafId = requestAnimationFrame(syncRect);
+    const wrap = wrapperRef.current;
+    let ro: ResizeObserver | null = null;
+    if (typeof ResizeObserver !== "undefined") {
+      ro = new ResizeObserver(syncRect);
+      ro.observe(croppingImage.element);
+      if (wrap) ro.observe(wrap);
+    }
+    window.addEventListener("resize", syncRect);
+    return () => {
+      cancelAnimationFrame(rafId);
+      ro?.disconnect();
+      window.removeEventListener("resize", syncRect);
+    };
+  }, [croppingImage]);
+
+  const handleApplyCrop = async (croppedDataUrl: string, didModify: boolean) => {
+    const activeCrop = croppingImage;
+    setCroppingImage(null);
+    if (!activeCrop) return;
+
+    let targetImg: HTMLImageElement | null = activeCrop.element.isConnected
+      ? activeCrop.element
+      : null;
+    if (!targetImg && editorRef.current) {
+      for (const img of Array.from(editorRef.current.querySelectorAll("img"))) {
+        if (img.src === activeCrop.src) {
+          targetImg = img;
+          break;
         }
       }
-      handleInput();
     }
-    setCroppingImage(null);
-    setSelectedImg(null);
-    triggerWritingActivity();
+
+    if (didModify && croppedDataUrl && targetImg) {
+      captureUndoSnapshot(true);
+      const storedUri = await saveMediaDataUrl(croppedDataUrl, courseIdRef.current);
+      const displayUrl = isMediaUri(storedUri) ? await resolveMediaUrl(storedUri) : storedUri;
+      targetImg.src = displayUrl;
+      if (isMediaUri(storedUri)) targetImg.setAttribute("data-media-uri", storedUri);
+      else targetImg.removeAttribute("data-media-uri");
+
+      if (editorRef.current) {
+        normalizeEditorImageBlocks(editorRef.current);
+      }
+      handleInput();
+      triggerWritingActivity();
+    }
+
+    if (targetImg && targetImg.isConnected) {
+      selectImageElement(targetImg);
+    } else {
+      setSelectedImg(null);
+    }
   };
 
   const execCmd = (cmd: string) => {
+    const ed = editorRef.current;
+    captureUndoSnapshot(true);
+    if (ed) stripSyntaxBeforeExecCommand(ed);
     document.execCommand(cmd, false);
+    if (ed) syncLiveMarkdownSyntax(ed);
     handleInput();
     triggerWritingActivity();
   };
 
   return (
-    <div className={cn("relative overflow-hidden", className)}>
+    <div className={cn("relative flex flex-col overflow-hidden", className)}>
       <div
         className={cn(
           "flex items-center gap-0.5 border-b border-border/50 bg-secondary/30",
@@ -1082,39 +2184,177 @@ export function RichNoteSurface({
         />
       </div>
 
-      {croppingImage && (
-        <InlineImageCropper
-          imageSrc={croppingImage.src}
-          onApplyCrop={handleApplyCrop}
-          onCancel={() => {
-            setCroppingImage(null);
-            setSelectedImg(null);
-          }}
-        />
-      )}
-
       <div
         ref={wrapperRef}
         onClick={handleEditorClick}
+        onContextMenu={(e) => {
+          if (e.currentTarget.closest("[data-canvas-card-id]")) return;
+          e.preventDefault();
+          e.stopPropagation();
+          setContextMenu({
+            clientX: e.clientX,
+            clientY: e.clientY,
+            analysis: inspectAppContextTarget({
+              clientX: e.clientX,
+              clientY: e.clientY,
+              target: e.target,
+            }),
+          });
+        }}
+        onMouseDown={(e) => {
+          if (e.button !== 0) return;
+          const target = e.target as HTMLElement | null;
+          if (
+            !target ||
+            target.closest(".image-action-toolbar") ||
+            target.closest(".in-place-image-cropper")
+          ) {
+            return;
+          }
+
+          if (croppingImage) {
+            setCroppingImage(null);
+          }
+
+          const imgBlock = target.closest(
+            `[${NOTE_IMAGE_BLOCK_ATTR}="true"]`,
+          ) as HTMLElement | null;
+          if (imgBlock && editorRef.current?.contains(imgBlock)) {
+            e.preventDefault();
+            e.stopPropagation();
+            const img = imgBlock.querySelector("img");
+            if (img) selectImageElement(img);
+            return;
+          }
+
+          if (target.tagName === "IMG" && editorRef.current?.contains(target)) {
+            e.preventDefault();
+            e.stopPropagation();
+            selectImageElement(target as HTMLImageElement);
+            return;
+          }
+
+          const ed = editorRef.current;
+          if (!ed) return;
+          if (target === wrapperRef.current || target === ed) {
+            const bandImgBlock = findImageBlockAtClientY(ed, e.clientY);
+            if (bandImgBlock) {
+              e.preventDefault();
+              e.stopPropagation();
+              const img = bandImgBlock.querySelector("img");
+              if (img) selectImageElement(img);
+              return;
+            }
+            const lastChild = ed.lastElementChild as HTMLElement | null;
+            const clickedBelowContent =
+              target === wrapperRef.current ||
+              !lastChild ||
+              e.clientY > lastChild.getBoundingClientRect().bottom;
+            if (clickedBelowContent || ed.querySelector(`[${NOTE_IMAGE_BLOCK_ATTR}="true"]`)) {
+              e.preventDefault();
+              clearSelectedImage();
+              placeCaretInEditableBlockAtY(ed, e.clientY);
+            }
+          }
+        }}
         onScroll={() => {
           updateGhostSuggestion();
           if (selectedImg) updateSelectedImgPos(selectedImg.element);
         }}
+        style={{ scrollbarGutter: "stable", ...wrapperStyle }}
         className={cn(
           "relative w-full cursor-text overflow-y-auto px-3.5 py-3 pb-8 custom-scrollbar-sm",
           maxHeightClassName,
           minHeightClassName,
-          croppingImage && "hidden",
+          wrapperClassName,
         )}
       >
         <div
           ref={editorRef}
-          contentEditable
+          contentEditable={!croppingImage}
+          spellCheck
           suppressContentEditableWarning
-          onInput={() => {
+          onBeforeInput={() => {
+            const ed = editorRef.current;
+            if (ed) {
+              beforeInputSnapRef.current = {
+                html: serializeContainerMediaHtml(ed),
+                bookmark: getCaretBookmark(ed),
+              };
+            }
+          }}
+          onInput={(e) => {
             removeGhostSpan();
             setGhostSuggestion(null);
-            processInlineCode();
+            if (selectedImg) {
+              clearSelectedImage();
+            }
+            const ed = editorRef.current;
+            const nativeEv = e.nativeEvent as InputEvent;
+            const isComposing = Boolean(nativeEv.isComposing);
+            const insertedSpaceViaIme =
+              !handledSpaceKeyDownRef.current &&
+              !isComposing &&
+              nativeEv.inputType === "insertText" &&
+              nativeEv.data === " ";
+            handledSpaceKeyDownRef.current = false;
+
+            if (ed && !isComposing) {
+              syncImageTailParagraphs(ed);
+              const hasLooseImg = Array.from(ed.querySelectorAll("img")).some(
+                (img) => !img.closest(`[${NOTE_IMAGE_BLOCK_ATTR}="true"]`),
+              );
+              if (hasLooseImg) {
+                normalizeEditorImageBlocks(ed);
+              }
+              if (insertedSpaceViaIme) {
+                const sel = window.getSelection();
+                if (sel && sel.rangeCount > 0 && sel.isCollapsed) {
+                  const r = sel.getRangeAt(0);
+                  if (
+                    r.startContainer.nodeType === Node.TEXT_NODE &&
+                    r.startOffset > 0 &&
+                    (r.startContainer.nodeValue || "").charAt(r.startOffset - 1) === " "
+                  ) {
+                    const tn = r.startContainer as Text;
+                    const off = r.startOffset;
+                    const val = tn.nodeValue || "";
+                    tn.nodeValue = val.slice(0, off - 1) + val.slice(off);
+                    const nextR = document.createRange();
+                    nextR.setStart(tn, off - 1);
+                    nextR.collapse(true);
+                    sel.removeAllRanges();
+                    sel.addRange(nextR);
+                    unwrapEmptyInlinePairOnSpace(ed);
+                    if (applyMarkdownOnSpace(ed)) {
+                      if (beforeInputSnapRef.current) {
+                        captureUndoSnapshot(true, beforeInputSnapRef.current);
+                      }
+                      beforeInputSnapRef.current = null;
+                      handleInput();
+                      triggerWritingActivity();
+                      requestAnimationFrame(updateGhostSuggestion);
+                      return;
+                    }
+                    // Restore space if no block trigger matched
+                    const curVal = tn.nodeValue || "";
+                    tn.nodeValue = curVal.slice(0, off - 1) + " " + curVal.slice(off - 1);
+                    const restoreR = document.createRange();
+                    restoreR.setStart(tn, off);
+                    restoreR.collapse(true);
+                    sel.removeAllRanges();
+                    sel.addRange(restoreR);
+                  }
+                }
+              }
+
+              reconcileActiveMarkdownSyntax(ed);
+              if (applyInlineMarkdownAtCaret(ed) && beforeInputSnapRef.current) {
+                captureUndoSnapshot(true, beforeInputSnapRef.current);
+              }
+              syncLiveMarkdownSyntax(ed);
+            }
+            beforeInputSnapRef.current = null;
             handleInput();
             triggerWritingActivity();
             requestAnimationFrame(updateGhostSuggestion);
@@ -1129,7 +2369,38 @@ export function RichNoteSurface({
             setTimeout(() => {
               removeGhostSpan();
               setGhostSuggestion(null);
+              const ed = editorRef.current;
+              if (
+                ed &&
+                !contextMenuOpenRef.current &&
+                document.activeElement !== ed &&
+                !ed.contains(document.activeElement)
+              ) {
+                clearAllLiveMarkdownSyntax(ed);
+              }
             }, 150);
+          }}
+          onCopy={(e) => {
+            const sel = window.getSelection();
+            const ed = editorRef.current;
+            if (!sel || sel.rangeCount === 0 || !ed) return;
+            const range = sel.getRangeAt(0);
+            if (range.collapsed || !ed.contains(range.commonAncestorContainer)) return;
+            const div = document.createElement("div");
+            div.appendChild(range.cloneContents());
+            stripLiveSyntaxArtifacts(div);
+            const html = div.innerHTML.replace(/\u200B/g, "");
+            const plain = (div.textContent || "").replace(/\u200B/g, "");
+            e.preventDefault();
+            e.clipboardData.setData("text/html", html);
+            e.clipboardData.setData("text/plain", plain);
+          }}
+          onFocus={() => {
+            try {
+              document.execCommand("defaultParagraphSeparator", false, "p");
+            } catch {
+              // ignore unsupported browsers
+            }
           }}
           onKeyDown={handleEditorKeyDown}
           onPaste={handlePaste}
@@ -1178,7 +2449,7 @@ export function RichNoteSurface({
             }
             void handleDrop(e);
           }}
-          className="note-editor min-h-[68px] w-full text-sm leading-6 outline-none"
+          className="note-editor min-h-[68px] w-full text-sm leading-[1.5] outline-none"
           data-placeholder={placeholder}
           dir="auto"
         />
@@ -1191,8 +2462,31 @@ export function RichNoteSurface({
           </div>
         )}
 
-        {selectedImg && (
+        {croppingImage && (
+          <InPlaceImageCropOverlay
+            imageSrc={croppingImage.src}
+            fallbackElement={croppingImage.element}
+            rect={{
+              top: croppingImage.top,
+              left: croppingImage.left,
+              width: croppingImage.width,
+              height: croppingImage.height,
+            }}
+            wrapperElement={wrapperRef.current}
+            onApplyCrop={handleApplyCrop}
+            onCancel={() => {
+              const targetImg = croppingImage.element;
+              setCroppingImage(null);
+              if (targetImg.isConnected) {
+                selectImageElement(targetImg);
+              }
+            }}
+          />
+        )}
+
+        {selectedImg && !croppingImage && (
           <div
+            ref={toolbarRef}
             className="image-action-toolbar pointer-events-auto absolute z-20 flex items-center gap-0.5 rounded-lg bg-popover/95 p-1 text-popover-foreground shadow-workspace backdrop-blur-sm animate-in fade-in zoom-in-95 duration-150"
             style={{
               top: `${Math.max(6, selectedImg.top)}px`,
@@ -1250,8 +2544,14 @@ export function RichNoteSurface({
                 e.stopPropagation();
                 handleInput();
                 onSuspendSmartTimers?.();
-                setCroppingImage({ element: selectedImg.element, src: selectedImg.src });
-                selectedImg.element.classList.remove("is-selected");
+                const imgEl = selectedImg.element;
+                const wrap = wrapperRef.current;
+                imgEl.scrollIntoView({ block: "nearest", behavior: "smooth" });
+                const rect = wrap
+                  ? measureImageLocalRect(imgEl, wrap)
+                  : { top: 0, left: 0, width: imgEl.width || 200, height: imgEl.height || 140 };
+                setCroppingImage({ element: imgEl, src: selectedImg.src, ...rect });
+                imgEl.classList.remove("is-selected");
                 setSelectedImg(null);
               }}
               className="flex items-center gap-1 rounded-md px-1.5 py-1 text-[11px] font-medium text-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
@@ -1278,6 +2578,10 @@ export function RichNoteSurface({
           </div>
         )}
       </div>
+
+      {contextMenu && (
+        <StandaloneAppContextMenu state={contextMenu} onClose={() => setContextMenu(null)} />
+      )}
     </div>
   );
 }

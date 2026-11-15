@@ -33,6 +33,20 @@ export const ARTBOARD_ACCENT_VARS = [
   "var(--chart-5)",
 ] as const;
 
+export interface CanvasAccentOption {
+  index: number;
+  label: string;
+  cssColor: string;
+}
+
+export const CANVAS_ACCENT_OPTIONS: CanvasAccentOption[] = [
+  { index: 0, label: "Violet", cssColor: ARTBOARD_ACCENT_VARS[0] },
+  { index: 1, label: "Sky", cssColor: ARTBOARD_ACCENT_VARS[1] },
+  { index: 2, label: "Amber", cssColor: ARTBOARD_ACCENT_VARS[2] },
+  { index: 3, label: "Emerald", cssColor: ARTBOARD_ACCENT_VARS[3] },
+  { index: 4, label: "Rose", cssColor: ARTBOARD_ACCENT_VARS[4] },
+];
+
 export function getArtboardAccentVar(tintIndex: number): string {
   const safe =
     ((tintIndex % ARTBOARD_ACCENT_VARS.length) + ARTBOARD_ACCENT_VARS.length) %

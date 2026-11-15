@@ -111,7 +111,10 @@ const SHORTCUT_GROUPS: ShortcutGroup[] = [
     items: [
       { action: "Select or pan tool", keys: "V / H" },
       { action: "Temporary hand pan", keys: "Space + Drag" },
+      { action: "Zoom in or out", keys: "Alt+Scroll / Alt+Middle-Drag" },
       { action: "New note or text card", keys: "N / T" },
+      { action: "Edit selected card", keys: "Click / Enter" },
+      { action: "Exit card edit (auto-saved)", keys: "Esc / Click away" },
       { action: "Connect cards", keys: "A" },
       { action: "Pen, highlighter, or eraser", keys: "P / M / E" },
       { action: "Upload image or new artboard", keys: "I / G" },
@@ -124,6 +127,11 @@ const SHORTCUT_GROUPS: ShortcutGroup[] = [
     title: "Notes editor",
     items: [
       { action: "Save note", keys: "Ctrl + Enter" },
+      { action: "Bold / Italic", keys: "Ctrl + B / I" },
+      { action: "Code / Strikethrough / Highlight", keys: "Ctrl + E / Shift + X / H" },
+      { action: "Toggle task checkbox", keys: "Ctrl + L" },
+      { action: "Indent / Outdent list item", keys: "Tab / Shift + Tab" },
+      { action: "Undo / Redo", keys: "Ctrl + Z / Shift + Z" },
       { action: "Accept autocomplete", keys: "Tab / Right" },
       { action: "Move selected image", keys: "Alt + Up / Down" },
       { action: "Remove selected image", keys: "Del / Backspace" },

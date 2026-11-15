@@ -44,9 +44,9 @@ export function formatClockShort(seconds: number): string {
 /** Human-readable duration (`1h 24m` or `18m`). */
 export function formatDurationLabel(seconds?: number): string {
   if (seconds === undefined || !Number.isFinite(seconds) || seconds <= 0) return "0m";
-  const rounded = Math.round(seconds);
-  const hrs = Math.floor(rounded / 3600);
-  const mins = Math.round((rounded % 3600) / 60);
+  const totalMins = Math.max(1, Math.round(seconds / 60));
+  const hrs = Math.floor(totalMins / 60);
+  const mins = totalMins % 60;
   return hrs > 0 ? `${hrs}h ${mins}m` : `${mins}m`;
 }
 

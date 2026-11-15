@@ -36,9 +36,11 @@ export function CanvasEdgesLayer({
   cards,
   selectedEdgeId,
   connectingFrom,
+  connectingSnapTarget,
   interactive,
   onSelectEdge,
   onDeleteEdge,
+  onContextMenuEdge,
 }: {
   edges: CanvasEdge[];
   cards: CanvasCard[];
@@ -48,9 +50,11 @@ export function CanvasEdgesLayer({
     fromSide?: CanvasSide | undefined;
     pointerWorld: { x: number; y: number };
   } | null;
+  connectingSnapTarget?: { cardId: string; toSide: CanvasSide } | null | undefined;
   interactive: boolean;
   onSelectEdge: (edgeId: string) => void;
   onDeleteEdge: (edgeId: string) => void;
+  onContextMenuEdge?: ((edgeId: string, e: React.MouseEvent) => void) | undefined;
 }) {
   const cardById = useMemo(() => new Map(cards.map((c) => [c.id, c])), [cards]);
 
@@ -58,11 +62,24 @@ export function CanvasEdgesLayer({
     if (!connectingFrom) return null;
     const fromCard = cardById.get(connectingFrom.cardId);
     if (!fromCard) return null;
+
+    const snapCard = connectingSnapTarget ? cardById.get(connectingSnapTarget.cardId) : undefined;
+    if (snapCard && connectingSnapTarget) {
+      const { fromPoint, toPoint } = getDetachedSideAnchors(
+        fromCard,
+        snapCard,
+        connectingFrom.fromSide,
+        connectingSnapTarget.toSide,
+      );
+      const { c1x, c1y, c2x, c2y } = getBezierPoints(fromPoint, toPoint);
+      return `M ${fromPoint.x} ${fromPoint.y} C ${c1x} ${c1y}, ${c2x} ${c2y}, ${toPoint.x} ${toPoint.y}`;
+    }
+
     const targetRect = {
       x: connectingFrom.pointerWorld.x,
       y: connectingFrom.pointerWorld.y,
-      width: 2,
-      height: 2,
+      width: 1,
+      height: 1,
     };
     const { fromPoint, toPoint } = getDetachedSideAnchors(
       fromCard,
@@ -71,7 +88,7 @@ export function CanvasEdgesLayer({
     );
     const { c1x, c1y, c2x, c2y } = getBezierPoints(fromPoint, toPoint);
     return `M ${fromPoint.x} ${fromPoint.y} C ${c1x} ${c1y}, ${c2x} ${c2y}, ${toPoint.x} ${toPoint.y}`;
-  }, [connectingFrom, cardById]);
+  }, [connectingFrom, connectingSnapTarget, cardById]);
 
   return (
     <svg
@@ -157,6 +174,12 @@ export function CanvasEdgesLayer({
                   if (!interactive) return;
                   e.stopPropagation();
                   onSelectEdge(edge.id);
+                }}
+                onContextMenu={(e) => {
+                  if (!interactive) return;
+                  e.preventDefault();
+                  e.stopPropagation();
+                  onContextMenuEdge?.(edge.id, e);
                 }}
               />
             )}

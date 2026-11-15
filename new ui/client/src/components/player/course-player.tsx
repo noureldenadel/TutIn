@@ -47,6 +47,8 @@ import {
 import { toast } from "sonner";
 import mpegts from "mpegts.js";
 
+import { ImageLightboxModal } from "@/components/notes/image-lightbox-modal";
+import { noteHtmlToMarkdown } from "@/components/notes/note-markdown";
 import { RichNoteHtmlContent, RichNoteSurface } from "@/components/notes/rich-note-surface";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -72,6 +74,7 @@ import {
 import { apiRequest, apiUrl } from "@/lib/api";
 import {
   formatClockShort as fmtTime,
+  formatDurationLabel,
   formatTimestamp as fmt,
   parseTimestampToSeconds as parseTs,
 } from "@/lib/format";
@@ -88,7 +91,12 @@ import {
   type NoteItem,
 } from "@/lib/course-notes";
 import { cn } from "@/lib/utils";
-import { generateId, videoStreamUrl, type Course } from "@/lib/courses";
+import {
+  calculateCourseCompletionPercentage,
+  generateId,
+  videoStreamUrl,
+  type Course,
+} from "@/lib/courses";
 import { InstructorAvatar, normalizeInstructorSlug } from "@/components/layout/instructor-avatar";
 import {
   SmartCaptionsModal,
@@ -958,9 +966,7 @@ export function CoursePlayer({
           ? Math.max(0, Math.min(options.minLockTime, maxDur))
           : undefined;
       seekGuardRef.current =
-        floorTime !== undefined
-          ? { floorTime, expiresAt: performance.now() + 500 }
-          : null;
+        floorTime !== undefined ? { floorTime, expiresAt: performance.now() + 500 } : null;
       v.currentTime = target;
       const dubEl = dubAudioRef.current;
       if (dubEl && selectedDubLang !== "original" && target < (dubEl.duration || Infinity)) {
@@ -2694,6 +2700,44 @@ function PlaylistTab({
   doneRef.current = done;
   const count = done.filter(Boolean).length;
   const allDone = done.length > 0 && count === done.length;
+  const [progressMode, setProgressMode] = useState<"videos" | "duration">(
+    () => readAppSettings().progressCalculationMode,
+  );
+
+  useEffect(() => {
+    const syncProgressMode = () => {
+      setProgressMode(readAppSettings().progressCalculationMode);
+    };
+    window.addEventListener(SETTINGS_CHANGED_EVENT, syncProgressMode);
+    return () => window.removeEventListener(SETTINGS_CHANGED_EVENT, syncProgressMode);
+  }, []);
+
+  const progressPct = useMemo(
+    () =>
+      calculateCourseCompletionPercentage(
+        done.map((isCompleted, idx) => ({
+          isCompleted,
+          duration: allLessons[idx] ? getLessonDurationSeconds(allLessons[idx]!) : 0,
+        })),
+        progressMode,
+      ),
+    [allLessons, done, progressMode],
+  );
+
+  const { totalDurationSecs, remainingDurationSecs } = useMemo(() => {
+    let total = 0;
+    let remaining = 0;
+    for (let i = 0; i < allLessons.length; i += 1) {
+      const lesson = allLessons[i];
+      if (!lesson) continue;
+      const secs = getLessonDurationSeconds(lesson);
+      total += secs;
+      if (!done[i]) {
+        remaining += secs;
+      }
+    }
+    return { totalDurationSecs: total, remainingDurationSecs: remaining };
+  }, [allLessons, done]);
 
   useEffect(() => {
     setOpenMods((prev) =>
@@ -2768,15 +2812,18 @@ function PlaylistTab({
     <div className={cn("flex h-full flex-col", dragState && "select-none")}>
       <div className="px-3 pb-4 pt-1">
         <div className="flex items-center justify-between gap-2">
-          <p className="text-sm font-semibold">
+          <p className="min-w-0 text-sm font-semibold">
             Progress{" "}
             <span
               className={cn(
-                "font-normal text-muted-foreground",
+                "text-xs font-normal tabular-nums text-muted-foreground",
                 allDone && "font-medium text-chart-4",
               )}
             >
               • {count} / {done.length} done
+              {totalDurationSecs > 0 && remainingDurationSecs > 0
+                ? ` • ${formatDurationLabel(remainingDurationSecs)} left`
+                : ""}
             </span>
           </p>
           <Button
@@ -2796,7 +2843,7 @@ function PlaylistTab({
               "h-full rounded-full transition-all duration-500",
               allDone ? "bg-chart-4" : "bg-primary",
             )}
-            style={{ width: `${done.length > 0 ? (count / done.length) * 100 : 0}%` }}
+            style={{ width: `${progressPct}%` }}
           />
         </div>
       </div>
@@ -3244,7 +3291,7 @@ function NotesTab({
   };
 
   const handleCopyNote = (html: string) => {
-    navigator.clipboard?.writeText(stripHtmlToText(html));
+    navigator.clipboard?.writeText(noteHtmlToMarkdown(html) || stripHtmlToText(html));
     toast("Note copied");
   };
 
@@ -3261,9 +3308,7 @@ function NotesTab({
     const markdown = lessonNotes
       .map((note) => {
         const ts = fmt(note.timestamp);
-        const tmp = document.createElement("div");
-        tmp.innerHTML = note.content;
-        const text = (tmp.textContent || tmp.innerText || "").trim();
+        const text = noteHtmlToMarkdown(note.content) || stripHtmlToText(note.content);
         const imgCount = note.images.length;
         const imgSuffix = imgCount > 0 ? `\n[${imgCount} screenshot(s) attached]` : "";
         return `## ${ts}\n${text}${imgSuffix}\n`;
@@ -3620,6 +3665,9 @@ function NotesTab({
 
                     <RichNoteHtmlContent
                       html={note.content}
+                      onHtmlChange={(nextHtml) => {
+                        setNotes(updateCourseNoteContent(courseId, note.id, nextHtml));
+                      }}
                       onDoubleClick={() => {
                         setShowAddNote(false);
                         setEditingNoteId(note.id);
@@ -3644,52 +3692,12 @@ function NotesTab({
 
       {/* Fullscreen Screenshot Lightbox */}
       {previewImage && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm"
-          onClick={() => setPreviewImage(null)}
-        >
-          <div
-            className="flex max-h-[90dvh] w-full max-w-4xl flex-col overflow-hidden rounded-xl bg-card shadow-workspace"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-center justify-between border-b border-border/50 px-4 py-3">
-              <div className="flex min-w-0 items-center gap-2 text-sm font-semibold">
-                <Camera className="size-4 shrink-0 text-primary" />
-                <span className="truncate">{previewImage.videoTitle}</span>
-                <span className="shrink-0 rounded-full bg-secondary px-2.5 py-0.5 font-mono text-xs tabular-nums text-muted-foreground">
-                  {fmt(previewImage.timestamp)}
-                </span>
-              </div>
-              <div className="flex shrink-0 items-center gap-1">
-                <a
-                  href={previewImage.src}
-                  download={`screenshot-${fmt(previewImage.timestamp).replace(":", "-")}.jpg`}
-                  aria-label="Download screenshot"
-                  title="Download screenshot"
-                  className="flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
-                >
-                  <Download className="size-4" />
-                </a>
-                <button
-                  type="button"
-                  aria-label="Close preview"
-                  title="Close (Esc)"
-                  onClick={() => setPreviewImage(null)}
-                  className="flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
-                >
-                  <X className="size-4" />
-                </button>
-              </div>
-            </div>
-            <div className="flex min-h-[220px] flex-1 items-center justify-center overflow-auto bg-player p-4">
-              <img
-                src={previewImage.src}
-                alt="Note screenshot preview"
-                className="max-h-[75dvh] max-w-full rounded-lg object-contain"
-              />
-            </div>
-          </div>
-        </div>
+        <ImageLightboxModal
+          src={previewImage.src}
+          alt="Note screenshot preview"
+          downloadName={`screenshot-${fmt(previewImage.timestamp).replace(":", "-")}.png`}
+          onClose={() => setPreviewImage(null)}
+        />
       )}
     </div>
   );
@@ -3885,9 +3893,7 @@ function TranscriptTab({
   const isJobActive = Boolean(
     activeJob && (activeJob.status === "running" || activeJob.status === "queued"),
   );
-  const activeJobTrackLabel = activeJob
-    ? `${getLanguageName(activeJob.targetLanguage)} · AI`
-    : "";
+  const activeJobTrackLabel = activeJob ? `${getLanguageName(activeJob.targetLanguage)} · AI` : "";
 
   return (
     <div className="flex h-full flex-col">
@@ -3951,10 +3957,7 @@ function TranscriptTab({
                   >
                     <span className="flex min-w-0 flex-1 items-center gap-1.5 truncate">
                       <Check
-                        className={cn(
-                          "size-3.5 shrink-0 text-primary",
-                          !isSelected && "opacity-0",
-                        )}
+                        className={cn("size-3.5 shrink-0 text-primary", !isSelected && "opacity-0")}
                       />
                       <span className="truncate">{tr.label}</span>
                     </span>
@@ -4128,10 +4131,7 @@ function TranscriptTab({
                   >
                     <span className="flex min-w-0 flex-1 items-center gap-1.5 truncate">
                       <Check
-                        className={cn(
-                          "size-3.5 shrink-0 text-primary",
-                          !isSelected && "opacity-0",
-                        )}
+                        className={cn("size-3.5 shrink-0 text-primary", !isSelected && "opacity-0")}
                       />
                       <span className="truncate">{getLanguageName(lang)} · Dub</span>
                     </span>

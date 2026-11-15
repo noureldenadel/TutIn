@@ -39,12 +39,22 @@ router.get('/pick-folder', async (req, res) => {
 // POST /api/fs/scan
 // Scans a course folder and returns structured module/video data
 router.post('/scan', async (req, res) => {
-    const { path: folderPath, autoDetectThumbnails } = req.body
+    const folderPath = req.body?.path || req.body?.folderPath
     if (!folderPath) {
         return res.status(400).json({ error: 'Missing path' })
     }
     if (!fs.existsSync(folderPath)) {
         return res.status(404).json({ error: 'Folder not found' })
+    }
+
+    let autoDetectThumbnails = req.body?.autoDetectThumbnails
+    if (typeof autoDetectThumbnails !== 'boolean') {
+        try {
+            const row = getOne("SELECT value FROM settings WHERE key = 'autoDetectThumbnails'")
+            autoDetectThumbnails = row ? Boolean(JSON.parse(row.value)) : true
+        } catch {
+            autoDetectThumbnails = true
+        }
     }
 
     try {

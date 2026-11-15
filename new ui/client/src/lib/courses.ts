@@ -69,6 +69,20 @@ export function videoStreamUrl(filePath?: string | null): string {
   return apiUrl(`/video/${encodeURIComponent(filePath)}`);
 }
 
+function pickLatestIsoTimestamp(...values: unknown[]): string | null {
+  let bestStr: string | null = null;
+  let bestMs = -Infinity;
+  for (const val of values) {
+    if (typeof val !== "string" || !val) continue;
+    const ms = Date.parse(val);
+    if (!Number.isNaN(ms) && ms > bestMs) {
+      bestMs = ms;
+      bestStr = val;
+    }
+  }
+  return bestStr;
+}
+
 export function mapApiCourse(raw: Record<string, unknown>): Course {
   const id = String(raw["id"] ?? "");
   const totalDuration = Number(raw["totalDuration"] ?? 0) || 0;
@@ -133,7 +147,11 @@ export function mapApiCourse(raw: Record<string, unknown>): Course {
     thumbnailUrl: rawThumbUrl ?? rawThumbData,
     thumbnailData: rawThumbData ?? null,
     dateAdded: typeof raw["dateAdded"] === "string" ? raw["dateAdded"] : undefined,
-    lastAccessedAt: typeof raw["lastAccessedAt"] === "string" ? raw["lastAccessedAt"] : null,
+    lastAccessedAt: pickLatestIsoTimestamp(
+      raw["lastAccessedAt"],
+      raw["lastAccessed"],
+      raw["lastAccessedClickTime"],
+    ),
     completedAt: typeof raw["completedAt"] === "string" ? raw["completedAt"] : null,
     order: typeof raw["order"] === "number" ? raw["order"] : undefined,
     courseUrl: typeof raw["courseUrl"] === "string" ? raw["courseUrl"] : undefined,
@@ -430,6 +448,42 @@ export function useSavedCourseQuery(courseId: string): {
 
 export function useSavedCourse(courseId: string): Course | null {
   return useSavedCourseQuery(courseId).course;
+}
+
+export function calculateCourseCompletionPercentage(
+  items: ReadonlyArray<{ isCompleted: boolean; duration?: number | undefined }>,
+  mode: "videos" | "duration",
+): number {
+  const totalVideos = items.length;
+  if (totalVideos === 0) return 0;
+
+  const completedVideos = items.filter((item) => item.isCompleted).length;
+  if (completedVideos === totalVideos) return 100;
+
+  if (mode === "duration") {
+    let totalDuration = 0;
+    let completedDuration = 0;
+    let hasIncompleteWithoutDuration = false;
+
+    for (const item of items) {
+      const dur = Math.max(0, Number(item.duration) || 0);
+      totalDuration += dur;
+      if (item.isCompleted) {
+        completedDuration += dur;
+      } else if (dur === 0) {
+        hasIncompleteWithoutDuration = true;
+      }
+    }
+
+    if (totalDuration > 0) {
+      const pct = (completedDuration / totalDuration) * 100;
+      if (hasIncompleteWithoutDuration && pct >= 100) return 99;
+      if (pct >= 100) return 99.9;
+      return Math.min(100, Math.max(0, pct));
+    }
+  }
+
+  return Math.min(100, Math.max(0, (completedVideos / totalVideos) * 100));
 }
 
 export const COURSE_SORT_OPTIONS = ["Recent", "Progress", "A–Z"] as const;

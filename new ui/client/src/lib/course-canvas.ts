@@ -106,6 +106,8 @@ export const CANVAS_CARD_GAP = 24;
 export const CANVAS_COL_GAP = 52;
 export const CANVAS_START_X = 80;
 export const CANVAS_START_Y = 96;
+export const CANVAS_MIN_ZOOM = 0.25;
+export const CANVAS_MAX_ZOOM = 3;
 const HYSTERESIS_MARGIN = 18;
 
 export function getCanvasStorageKey(courseId: string): string {
@@ -183,18 +185,24 @@ export function createCanvasId(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 }
 
-export function estimateVideoNoteCardHeight(html: string, imageCount: number): number {
+export function estimateVideoNoteCardHeight(
+  html: string,
+  imageCount: number,
+  cardWidth = CANVAS_CARD_WIDTH,
+): number {
   const plainText = stripHtmlToText(html);
   const blockBreaks = (html.match(/<(?:p|div|li|h[1-6]|blockquote|tr|br)\b/gi) ?? []).length;
+  const charsPerLine = Math.max(26, Math.round((cardWidth - 28) / 7.8));
   const lineEstimate = Math.max(
     plainText.length > 0 ? 1 : 0,
-    Math.ceil(plainText.length / 34) + Math.floor(blockBreaks * 0.45),
+    Math.ceil(plainText.length / charsPerLine) + Math.floor(blockBreaks * 0.45),
   );
   const textHeight = plainText.length > 0 ? 58 + lineEstimate * 22 : 48;
   const imgTags = (html.match(/<img\b/gi) ?? []).length;
   const effectiveImages = Math.max(imageCount, imgTags);
-  // Embedded screenshots scale cleanly inside a ~278px column (~156px at 16:9 + spacing)
-  const mediaHeight = effectiveImages * 172;
+  // Embedded screenshots scale cleanly inside the card column (capped at 380px high)
+  const estImgHeight = Math.min(380, Math.round((cardWidth - 28) * (9 / 16))) + 16;
+  const mediaHeight = effectiveImages * estImgHeight;
   return Math.max(128, Math.min(2200, textHeight + mediaHeight));
 }
 
@@ -351,7 +359,7 @@ function normalizeViewport(raw: unknown): CanvasViewport {
   const pan = rawPan && typeof rawPan === "object" ? (rawPan as Record<string, unknown>) : null;
   const x = Number(pan?.["x"] ?? obj["x"]) || 40;
   const y = Number(pan?.["y"] ?? obj["y"]) || 30;
-  const zoom = Math.max(0.25, Math.min(2, Number(obj["zoom"]) || 1));
+  const zoom = Math.max(CANVAS_MIN_ZOOM, Math.min(CANVAS_MAX_ZOOM, Number(obj["zoom"]) || 1));
   return { x, y, zoom };
 }
 
@@ -1197,7 +1205,7 @@ export function applyCardHeightUpdate(
   const target = state.cards.find((c) => c.id === cardId);
   if (!target) return state;
 
-  const clampedHeight = Math.max(target.height, Math.min(2800, Math.ceil(nextHeight)));
+  const clampedHeight = Math.max(target.height, Math.min(12000, Math.ceil(nextHeight)));
   const contentChanged = htmlContent !== undefined && htmlContent !== target.htmlContent;
   const heightChanged = clampedHeight > target.height;
   if (!contentChanged && !heightChanged) return state;
@@ -1269,6 +1277,83 @@ export function tidyVideoArtboard(state: CourseCanvasState, groupId: string): Co
       180,
       inGroup.length > 0 ? cy - CANVAS_CARD_GAP + CANVAS_PADDING_BOTTOM - target.y : 180,
     );
+  }
+
+  fitArtboardsToChildren(nextGroups, nextCards);
+
+  return {
+    ...state,
+    groups: nextGroups,
+    cards: nextCards,
+    edges: rebuildAllAutoChronoEdges(nextGroups, nextCards, state.edges),
+  };
+}
+
+export function tidySelectedCards(state: CourseCanvasState, cardIds: string[]): CourseCanvasState {
+  if (cardIds.length < 2) return state;
+  const idSet = new Set(cardIds);
+  const nextGroups = state.groups.map((g) => ({ ...g }));
+  const nextCards = state.cards.map((c) => ({ ...c }));
+  const selected = nextCards.filter((c) => idSet.has(c.id));
+  if (selected.length < 2) return state;
+
+  const minX = Math.min(...selected.map((c) => c.x));
+  const minY = Math.min(...selected.map((c) => c.y));
+  const maxRight = Math.max(...selected.map((c) => c.x + c.width));
+  const maxBottom = Math.max(...selected.map((c) => c.y + c.height));
+  const spanW = maxRight - minX;
+  const spanH = maxBottom - minY;
+
+  const sharedGroupId = selected.every((c) => c.groupId && c.groupId === selected[0]!.groupId)
+    ? selected[0]!.groupId
+    : null;
+
+  if (!sharedGroupId && spanW > spanH * 1.25) {
+    // Grid/row arrangement when selected cards are spread wider horizontally than vertically
+    const cols = Math.min(selected.length, Math.max(2, Math.ceil(Math.sqrt(selected.length))));
+    const ordered = [...selected].sort((a, b) => (a.y !== b.y ? a.y - b.y : a.x - b.x));
+    const colWidths = new Array<number>(cols).fill(0);
+    const rowHeights: number[] = [];
+
+    ordered.forEach((c, idx) => {
+      const col = idx % cols;
+      const row = Math.floor(idx / cols);
+      colWidths[col] = Math.max(colWidths[col]!, c.width);
+      rowHeights[row] = Math.max(rowHeights[row] ?? 0, c.height);
+    });
+
+    const colXs: number[] = [];
+    let cx = minX;
+    for (let col = 0; col < cols; col += 1) {
+      colXs.push(cx);
+      cx += colWidths[col]! + CANVAS_CARD_GAP;
+    }
+
+    const rowYs: number[] = [];
+    let cy = minY;
+    for (let row = 0; row < rowHeights.length; row += 1) {
+      rowYs.push(cy);
+      cy += rowHeights[row]! + CANVAS_CARD_GAP;
+    }
+
+    ordered.forEach((c, idx) => {
+      const col = idx % cols;
+      const row = Math.floor(idx / cols);
+      c.x = colXs[col]!;
+      c.y = rowYs[row]!;
+    });
+  } else {
+    const ordered = [...selected].sort((a, b) => (a.y !== b.y ? a.y - b.y : a.x - b.x));
+    const targetX = sharedGroupId
+      ? (nextGroups.find((g) => g.id === sharedGroupId)?.x ?? minX - CANVAS_PADDING_X) +
+        CANVAS_PADDING_X
+      : minX;
+    let cy = minY;
+    for (const c of ordered) {
+      c.x = targetX;
+      c.y = cy;
+      cy += c.height + CANVAS_CARD_GAP;
+    }
   }
 
   fitArtboardsToChildren(nextGroups, nextCards);
@@ -1685,6 +1770,100 @@ export function resetCanvasArrangement(
   });
 }
 
+export function getPointForCardSide(
+  rect: { x: number; y: number; width: number; height: number },
+  side: CanvasSide,
+): { x: number; y: number; side: CanvasSide } {
+  switch (side) {
+    case "top":
+      return { x: rect.x + rect.width / 2, y: rect.y, side };
+    case "right":
+      return { x: rect.x + rect.width, y: rect.y + rect.height / 2, side };
+    case "bottom":
+      return { x: rect.x + rect.width / 2, y: rect.y + rect.height, side };
+    case "left":
+      return { x: rect.x, y: rect.y + rect.height / 2, side };
+  }
+}
+
+export function resolveNearestSideOnRect(
+  rect: { x: number; y: number; width: number; height: number },
+  worldPt: { x: number; y: number },
+): CanvasSide {
+  const dists: [CanvasSide, number][] = [
+    ["top", Math.abs(worldPt.y - rect.y)],
+    ["right", Math.abs(rect.x + rect.width - worldPt.x)],
+    ["bottom", Math.abs(rect.y + rect.height - worldPt.y)],
+    ["left", Math.abs(worldPt.x - rect.x)],
+  ];
+  dists.sort((a, b) => a[1] - b[1]);
+  return dists[0]![0];
+}
+
+export function resolveTargetConnectionSide(
+  fromRect: { x: number; y: number; width: number; height: number },
+  fromSide: CanvasSide | undefined,
+  toRect: { x: number; y: number; width: number; height: number },
+  pointerWorld: { x: number; y: number },
+): CanvasSide {
+  const EDGE_SNAP_PX = 28;
+  const dists: [CanvasSide, number][] = [
+    ["top", Math.abs(pointerWorld.y - toRect.y)],
+    ["right", Math.abs(toRect.x + toRect.width - pointerWorld.x)],
+    ["bottom", Math.abs(toRect.y + toRect.height - pointerWorld.y)],
+    ["left", Math.abs(pointerWorld.x - toRect.x)],
+  ];
+  dists.sort((a, b) => a[1] - b[1]);
+  if (dists[0]![1] <= EDGE_SNAP_PX) {
+    return dists[0]![0];
+  }
+
+  const anchor = fromSide
+    ? getPointForCardSide(fromRect, fromSide)
+    : { x: fromRect.x + fromRect.width / 2, y: fromRect.y + fromRect.height / 2 };
+  const dx = toRect.x + toRect.width / 2 - anchor.x;
+  const dy = toRect.y + toRect.height / 2 - anchor.y;
+  if (Math.abs(dx) > Math.abs(dy) * 1.15) {
+    return dx >= 0 ? "left" : "right";
+  }
+  return dy >= 0 ? "top" : "bottom";
+}
+
+export function findConnectionTargetCard(
+  cards: CanvasCard[],
+  collapsedGroupIds: Set<string>,
+  sourceCardId: string,
+  worldPt: { x: number; y: number },
+): CanvasCard | undefined {
+  const candidates = cards.filter(
+    (c) => c.id !== sourceCardId && (!c.groupId || !collapsedGroupIds.has(c.groupId)),
+  );
+  for (let i = candidates.length - 1; i >= 0; i--) {
+    const c = candidates[i]!;
+    if (
+      worldPt.x >= c.x &&
+      worldPt.x <= c.x + c.width &&
+      worldPt.y >= c.y &&
+      worldPt.y <= c.y + c.height
+    ) {
+      return c;
+    }
+  }
+  const pad = 12;
+  for (let i = candidates.length - 1; i >= 0; i--) {
+    const c = candidates[i]!;
+    if (
+      worldPt.x >= c.x - pad &&
+      worldPt.x <= c.x + c.width + pad &&
+      worldPt.y >= c.y - pad &&
+      worldPt.y <= c.y + c.height + pad
+    ) {
+      return c;
+    }
+  }
+  return undefined;
+}
+
 export function getDetachedSideAnchors(
   from: { x: number; y: number; width: number; height: number },
   to: { x: number; y: number; width: number; height: number },
@@ -1698,41 +1877,45 @@ export function getDetachedSideAnchors(
   const fromCy = from.y + from.height / 2;
   const toCx = to.x + to.width / 2;
   const toCy = to.y + to.height / 2;
-  const dx = toCx - fromCx;
-  const dy = toCy - fromCy;
+  const dxCenter = toCx - fromCx;
+  const dyCenter = toCy - fromCy;
 
-  let fromSide: CanvasSide = explicitFrom ?? "bottom";
-  let toSide: CanvasSide = explicitTo ?? "top";
-
-  if (!explicitFrom || !explicitTo) {
-    if (Math.abs(dx) > Math.abs(dy) * 1.15) {
-      fromSide = dx >= 0 ? "right" : "left";
-      toSide = dx >= 0 ? "left" : "right";
-    } else {
-      fromSide = dy >= 0 ? "bottom" : "top";
-      toSide = dy >= 0 ? "top" : "bottom";
-    }
+  let autoFrom: CanvasSide;
+  if (Math.abs(dxCenter) > Math.abs(dyCenter) * 1.15) {
+    autoFrom = dxCenter >= 0 ? "right" : "left";
+  } else {
+    autoFrom = dyCenter >= 0 ? "bottom" : "top";
   }
 
-  const pointForSide = (
-    rect: { x: number; y: number; width: number; height: number },
-    side: CanvasSide,
-  ) => {
-    switch (side) {
-      case "top":
-        return { x: rect.x + rect.width / 2, y: rect.y, side };
-      case "right":
-        return { x: rect.x + rect.width, y: rect.y + rect.height / 2, side };
-      case "bottom":
-        return { x: rect.x + rect.width / 2, y: rect.y + rect.height, side };
-      case "left":
-        return { x: rect.x, y: rect.y + rect.height / 2, side };
+  // Never overwrite an explicitly anchored starting side
+  const fromSide: CanvasSide = explicitFrom ?? autoFrom;
+  const fromPoint = getPointForCardSide(from, fromSide);
+
+  let toSide: CanvasSide;
+  if (explicitTo) {
+    toSide = explicitTo;
+  } else if (explicitFrom) {
+    const dx = toCx - fromPoint.x;
+    const dy = toCy - fromPoint.y;
+    if (Math.abs(dx) > Math.abs(dy) * 1.15) {
+      toSide = dx >= 0 ? "left" : "right";
+    } else {
+      toSide = dy >= 0 ? "top" : "bottom";
     }
-  };
+  } else {
+    toSide =
+      autoFrom === "right"
+        ? "left"
+        : autoFrom === "left"
+          ? "right"
+          : autoFrom === "bottom"
+            ? "top"
+            : "bottom";
+  }
 
   return {
-    fromPoint: pointForSide(from, fromSide),
-    toPoint: pointForSide(to, toSide),
+    fromPoint,
+    toPoint: getPointForCardSide(to, toSide),
   };
 }
 

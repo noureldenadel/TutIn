@@ -17,6 +17,23 @@ function rewriteMediaUrlCourseId(value, targetCourseId) {
 }
 
 /**
+ * Pick the most recent valid ISO timestamp from the candidate values.
+ */
+function pickLatestIsoTimestamp(...values) {
+    let bestStr = null
+    let bestMs = -Infinity
+    for (const val of values) {
+        if (typeof val !== 'string' || !val) continue
+        const ms = Date.parse(val)
+        if (!Number.isNaN(ms) && ms > bestMs) {
+            bestMs = ms
+            bestStr = val
+        }
+    }
+    return bestStr
+}
+
+/**
  * Map a raw SQLite course row (snake_case) to a camelCase API response object.
  */
 function mapCourseRow(course) {
@@ -37,6 +54,12 @@ function mapCourseRow(course) {
         }
     }
 
+    const effectiveLastAccessed = pickLatestIsoTimestamp(
+        course.last_accessed,
+        course.last_accessed_click_time,
+        course.latest_video_watched_at
+    )
+
     return {
         id: course.id,
         title: course.title,
@@ -51,7 +74,8 @@ function mapCourseRow(course) {
         language: course.language || 'en',
         dateAdded: course.date_added,
         dateModified: course.date_modified,
-        lastAccessed: course.last_accessed,
+        lastAccessed: effectiveLastAccessed,
+        lastAccessedAt: effectiveLastAccessed,
         lastAccessedClickTime: course.last_accessed_click_time,
         totalDuration: course.total_duration,
         totalVideos: course.total_videos,
@@ -69,6 +93,7 @@ router.get('/', (req, res) => {
             SELECT id, title, original_title, description, instructor, tags, 
                    folder_path, source_type, course_url, language, 
                    date_added, date_modified, last_accessed, last_accessed_click_time, 
+                   (SELECT MAX(v.last_watched_at) FROM videos v WHERE v.course_id = courses.id) AS latest_video_watched_at,
                    total_duration, total_videos, completed_videos, completion_percentage, 
                    custom_metadata, "order",
                    CASE WHEN thumbnail_data IS NOT NULL THEN 1 ELSE 0 END as has_thumbnail,
@@ -96,7 +121,13 @@ router.get('/', (req, res) => {
 // GET /api/courses/:id
 router.get('/:id', (req, res) => {
     try {
-        const course = getOne('SELECT * FROM courses WHERE id = ?', [req.params.id])
+        const course = getOne(
+            `SELECT c.*,
+                    (SELECT MAX(v.last_watched_at) FROM videos v WHERE v.course_id = c.id) AS latest_video_watched_at
+             FROM courses c
+             WHERE c.id = ?`,
+            [req.params.id]
+        )
         if (!course) return res.status(404).json({ error: 'Course not found' })
 
         res.json(mapCourseRow(course))
@@ -273,14 +304,24 @@ export function recalculateCourseProgress(courseId, dbMode = null) {
 
 // POST /api/courses/recalculate-progress — MUST be before PUT /:id
 router.post('/recalculate-progress', (req, res) => {
-    const { mode } = req.body // 'videos' | 'duration'
+    const { mode } = req.body || {} // 'videos' | 'duration'
 
     try {
         const courses = getAll('SELECT id FROM courses')
 
         transaction(() => {
+            if (mode === 'videos' || mode === 'duration') {
+                const now = new Date().toISOString()
+                run(`
+                    INSERT INTO settings (key, value, updated_at)
+                    VALUES ('progressCalculationMode', ?, ?)
+                    ON CONFLICT(key) DO UPDATE SET
+                        value = excluded.value,
+                        updated_at = excluded.updated_at
+                `, [JSON.stringify(mode), now])
+            }
             for (const course of courses) {
-                recalculateCourseProgress(course.id, mode)
+                recalculateCourseProgress(course.id, mode || null)
             }
         })
 

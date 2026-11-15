@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Crosshair, Plus, Search, X } from "lucide-react";
+import { LocateFixed, Plus, Search, X } from "lucide-react";
 
 import { formatTimestamp, type CourseLessonItem } from "@/lib/course-lessons";
 import { stripHtmlToText, type NoteItem } from "@/lib/course-notes";
@@ -95,14 +95,14 @@ export function CanvasNotesDrawer({
           aria-label="Close drawer"
           className="flex size-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
         >
-          <X className="size-3.5" />
+          <X className="size-3.5 stroke-[1.75]" />
         </button>
       </div>
 
       {/* Search + Segmented Filter */}
       <div className="space-y-2 border-b border-border/50 p-3">
         <div className="relative">
-          <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+          <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 stroke-[1.75] text-muted-foreground" />
           <input
             type="text"
             value={query}
@@ -189,7 +189,7 @@ export function CanvasNotesDrawer({
                         title="Add back to canvas"
                         className="inline-flex h-7 shrink-0 items-center gap-1 rounded-md bg-card px-2 text-[11px] font-medium text-foreground shadow-card transition-colors hover:bg-primary hover:text-primary-foreground"
                       >
-                        <Plus className="size-3" />
+                        <Plus className="size-3 stroke-[1.75]" />
                         <span>Add</span>
                       </button>
                     ) : (
@@ -198,9 +198,9 @@ export function CanvasNotesDrawer({
                         onClick={() => onFocusCard(card.id)}
                         title="Focus on canvas"
                         aria-label="Focus card"
-                        className="flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-card hover:text-foreground"
+                        className="flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-card hover:text-foreground [&_svg]:stroke-[1.75]"
                       >
-                        <Crosshair className="size-3.5" />
+                        <LocateFixed className="size-3.5" />
                       </button>
                     )}
                   </div>

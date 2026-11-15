@@ -13,6 +13,7 @@ import {
   updateCourseVideo,
 } from "@/lib/course-lessons";
 import {
+  calculateCourseCompletionPercentage,
   createCourse,
   fetchCourseById,
   fetchCourses,
@@ -22,6 +23,7 @@ import {
   updateCourse,
   type Course,
 } from "@/lib/courses";
+import { readAppSettings } from "@/lib/app-settings";
 import { normalizeLanguageCode } from "@/lib/languages";
 
 // ── Local Scan Types ──────────────────────────────────────────────────────────
@@ -122,10 +124,11 @@ export async function pickFolder(): Promise<{ name: string; path: string } | nul
 }
 
 export async function scanCourseFolder(folderPath: string): Promise<ScannedCourseData> {
+  const { autoDetectThumbnails } = readAppSettings();
   return apiJson<ScannedCourseData>("/api/fs/scan", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ folderPath }),
+    body: JSON.stringify({ path: folderPath, folderPath, autoDetectThumbnails }),
   });
 }
 
@@ -386,9 +389,15 @@ export async function computeSyncPreview(course: Course): Promise<SyncPreviewDat
     }
   }
 
+  const progressMode = readAppSettings().progressCalculationMode;
   const beforeTotal = curriculum.rawVideos.length;
   const beforeCompleted = curriculum.rawVideos.filter((v) => v.isCompleted).length;
-  const beforePct = beforeTotal > 0 ? Math.round((beforeCompleted / beforeTotal) * 100) : 0;
+  const beforePct = Math.round(
+    calculateCourseCompletionPercentage(
+      curriculum.rawVideos.map((v) => ({ isCompleted: v.isCompleted, duration: v.duration })),
+      progressMode,
+    ),
+  );
 
   if (!scanned) {
     return {
@@ -607,11 +616,19 @@ export async function computeSyncPreview(course: Course): Promise<SyncPreviewDat
     }));
 
   const removedSet = new Set(removed.map((r) => r.videoId));
-  const afterTotal = beforeTotal - removed.length + added.length;
-  const afterCompleted = existingVideos.filter(
-    (v) => v.isCompleted && !removedSet.has(v.id),
-  ).length;
-  const afterPct = afterTotal > 0 ? Math.round((afterCompleted / afterTotal) * 100) : 0;
+  const updatedById = new Map(updated.map((u) => [u.videoId, u]));
+  const afterItems = [
+    ...existingVideos
+      .filter((v) => !removedSet.has(v.id))
+      .map((v) => ({
+        isCompleted: v.isCompleted,
+        duration: updatedById.get(v.id)?.duration ?? v.duration,
+      })),
+    ...added.map((a) => ({ isCompleted: false, duration: a.duration })),
+  ];
+  const afterTotal = afterItems.length;
+  const afterCompleted = afterItems.filter((v) => v.isCompleted).length;
+  const afterPct = Math.round(calculateCourseCompletionPercentage(afterItems, progressMode));
 
   const removedModules = existingModules
     .filter((m) => !matchedDbModuleIds.has(m.id))

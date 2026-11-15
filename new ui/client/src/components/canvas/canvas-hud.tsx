@@ -1,22 +1,22 @@
 import { Link } from "@tanstack/react-router";
 import {
   ArrowLeft,
-  ArrowUpRight,
   Eraser,
+  Group,
   Hand,
   Highlighter,
-  ImagePlus,
-  Layers,
+  Image,
+  LayoutGrid,
+  Maximize,
   Minus,
-  MousePointer2,
+  MousePointer,
   PanelRightClose,
   PanelRightOpen,
-  Pen,
+  PenLine,
   Plus,
   Redo2,
-  RotateCcw,
-  Sparkles,
   StickyNote,
+  Spline,
   Type,
   Undo2,
 } from "lucide-react";
@@ -52,7 +52,7 @@ function HudBtn({
       aria-pressed={active}
       title={shortcut ? `${label} (${shortcut})` : label}
       className={cn(
-        "flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground disabled:pointer-events-none disabled:opacity-35 [&_svg]:size-4",
+        "flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground disabled:pointer-events-none disabled:opacity-35 [&_svg]:size-4 [&_svg]:stroke-[1.75]",
         active &&
           "bg-primary text-primary-foreground hover:bg-primary hover:text-primary-foreground",
       )}
@@ -78,7 +78,6 @@ export function CanvasHud({
   onChangeStrokeSize,
   onUndo,
   onRedo,
-  onTidyAll,
   onResetArrangement,
   onZoomIn,
   onZoomOut,
@@ -102,7 +101,6 @@ export function CanvasHud({
   onChangeStrokeSize: (size: number) => void;
   onUndo: () => void;
   onRedo: () => void;
-  onTidyAll: () => void;
   onResetArrangement: () => void;
   onZoomIn: () => void;
   onZoomOut: () => void;
@@ -127,7 +125,7 @@ export function CanvasHud({
         <Link
           to="/learn/$courseId"
           params={{ courseId }}
-          className="inline-flex h-8 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+          className="inline-flex h-8 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground [&_svg]:stroke-[1.75]"
         >
           <ArrowLeft className="size-3.5" />
           <span>Player</span>
@@ -149,7 +147,7 @@ export function CanvasHud({
           onClick={onToggleDrawer}
           title={drawerOpen ? "Hide notes drawer" : "Show notes drawer"}
           className={cn(
-            "inline-flex h-8 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground",
+            "inline-flex h-8 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground [&_svg]:stroke-[1.75]",
             drawerOpen && "bg-secondary text-foreground",
           )}
         >
@@ -167,7 +165,7 @@ export function CanvasHud({
         </button>
       </div>
 
-      {/* Top-Right History, Tidy & Zoom Bar */}
+      {/* Top-Right History, Reset & Zoom Bar */}
       <div
         data-canvas-ui="true"
         onPointerDown={(e) => e.stopPropagation()}
@@ -184,17 +182,8 @@ export function CanvasHud({
 
         <div className="mx-0.5 h-4 w-px bg-border" />
 
-        <button
-          type="button"
-          onClick={onTidyAll}
-          title="Tidy all lesson artboards"
-          className="inline-flex h-8 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium text-foreground transition-colors hover:bg-secondary"
-        >
-          <Sparkles className="size-3.5 text-primary" />
-          <span>Tidy</span>
-        </button>
         <HudBtn label="Reset arrangement" onClick={onResetArrangement}>
-          <RotateCcw />
+          <LayoutGrid />
         </HudBtn>
 
         <div className="mx-0.5 h-4 w-px bg-border" />
@@ -205,13 +194,16 @@ export function CanvasHud({
         <button
           type="button"
           onClick={onResetView}
-          title="Reset view"
+          title="Reset zoom"
           className="min-w-12 rounded-md px-1.5 py-1 font-mono text-xs font-medium tabular-nums text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
         >
           {Math.round(zoom * 100)}%
         </button>
         <HudBtn label="Zoom in" onClick={onZoomIn}>
           <Plus />
+        </HudBtn>
+        <HudBtn label="Reset view" onClick={onResetView}>
+          <Maximize />
         </HudBtn>
       </div>
 
@@ -274,7 +266,7 @@ export function CanvasHud({
             active={tool === "select"}
             onClick={() => onSelectTool("select")}
           >
-            <MousePointer2 />
+            <MousePointer />
           </HudBtn>
           <HudBtn
             label="Pan"
@@ -309,7 +301,7 @@ export function CanvasHud({
             active={tool === "connect"}
             onClick={() => onSelectTool("connect")}
           >
-            <ArrowUpRight />
+            <Spline />
           </HudBtn>
 
           <div className="mx-1 h-4 w-px bg-border" />
@@ -320,7 +312,7 @@ export function CanvasHud({
             active={tool === "pen"}
             onClick={() => onSelectTool("pen")}
           >
-            <Pen />
+            <PenLine />
           </HudBtn>
           <HudBtn
             label="Highlighter"
@@ -342,10 +334,10 @@ export function CanvasHud({
           <div className="mx-1 h-4 w-px bg-border" />
 
           <HudBtn label="Upload image" shortcut="I" onClick={onTriggerImageUpload}>
-            <ImagePlus />
+            <Image />
           </HudBtn>
           <HudBtn label="New artboard" shortcut="G" onClick={onCreateArtboard}>
-            <Layers />
+            <Group />
           </HudBtn>
         </div>
       </div>

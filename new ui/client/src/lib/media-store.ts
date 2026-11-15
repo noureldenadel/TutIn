@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { stripLiveSyntaxArtifacts } from "@/components/notes/markdown/note-dom";
 import { API_BASE_URL, apiJson, apiUrl } from "@/lib/api";
 
 const DB_NAME = "tutin_media_store";
@@ -253,7 +254,70 @@ export async function hydrateContainerMedia(container: HTMLElement): Promise<voi
 }
 
 export function serializeContainerMediaHtml(container: HTMLElement): string {
+  const liveInputs = Array.from(container.querySelectorAll('input[type="checkbox"]'));
   const clone = container.cloneNode(true) as HTMLElement;
+  clone.querySelectorAll("[data-ghost]").forEach((el) => el.remove());
+  stripLiveSyntaxArtifacts(clone);
+  clone.querySelectorAll("img.is-selected").forEach((img) => img.classList.remove("is-selected"));
+  clone.querySelectorAll("br[data-code-eol]").forEach((br) => br.remove());
+  clone.querySelectorAll("[data-note-image-block]").forEach((el) => {
+    el.removeAttribute("contenteditable");
+  });
+  clone.querySelectorAll('p[data-image-tail="true"]').forEach((p) => {
+    const text = (p.textContent || "")
+      .replace(/\u00A0/g, "")
+      .replace(/\u200B/g, "")
+      .trim();
+    const hasContent = Boolean(text) || Boolean(p.querySelector("img, hr, pre, ul, ol"));
+    if (!hasContent) {
+      p.remove();
+    } else {
+      p.removeAttribute("data-image-tail");
+    }
+  });
+
+  const clonedInputs = Array.from(clone.querySelectorAll('input[type="checkbox"]'));
+  clonedInputs.forEach((input, idx) => {
+    const live = liveInputs[idx] as HTMLInputElement | undefined;
+    const isChecked = live ? live.checked : (input as HTMLInputElement).hasAttribute("checked");
+    if (isChecked) {
+      input.setAttribute("checked", "");
+    } else {
+      input.removeAttribute("checked");
+    }
+    const li = input.closest("li[data-task]");
+    if (li) {
+      li.setAttribute("data-checked", String(isChecked));
+    }
+  });
+
+  const walker = document.createTreeWalker(clone, NodeFilter.SHOW_TEXT);
+  const toRemove: Node[] = [];
+  let textNode = walker.nextNode();
+  while (textNode) {
+    if (textNode.nodeValue && textNode.nodeValue.includes("\u200B")) {
+      const cleaned = textNode.nodeValue.replace(/\u200B/g, "");
+      if (cleaned === "") {
+        toRemove.push(textNode);
+      } else {
+        textNode.nodeValue = cleaned;
+      }
+    }
+    textNode = walker.nextNode();
+  }
+  toRemove.forEach((node) => {
+    const parent = node.parentElement;
+    node.parentNode?.removeChild(node);
+    if (
+      parent &&
+      parent !== clone &&
+      (parent.tagName === "P" || parent.tagName === "LI" || parent.tagName === "SPAN") &&
+      parent.childNodes.length === 0
+    ) {
+      parent.appendChild(document.createElement("br"));
+    }
+  });
+
   clone.querySelectorAll("img").forEach((img) => {
     const uri = img.getAttribute("data-media-uri");
     if (uri) {

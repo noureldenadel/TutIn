@@ -884,6 +884,28 @@ export function AppShell({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
+    if (mode !== "system") return;
+    const mq = window.matchMedia("(prefers-color-scheme: dark)");
+    const onSystemThemeChange = (e: MediaQueryListEvent) => {
+      const root = document.documentElement;
+      if (root.classList.contains("dark") !== e.matches) {
+        if (themeTimerRef.current !== null) {
+          window.clearTimeout(themeTimerRef.current);
+        }
+        root.classList.add("theme-transitioning");
+        themeTimerRef.current = window.setTimeout(() => {
+          root.classList.remove("theme-transitioning");
+          themeTimerRef.current = null;
+        }, 320);
+      }
+      setDark(e.matches);
+      root.classList.toggle("dark", e.matches);
+    };
+    mq.addEventListener("change", onSystemThemeChange);
+    return () => mq.removeEventListener("change", onSystemThemeChange);
+  }, [mode]);
+
+  useEffect(() => {
     const onRescanEvent = (e: Event) => {
       const custom = e as CustomEvent<{ course: Course }>;
       if (custom.detail?.course) {
