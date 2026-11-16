@@ -28,12 +28,15 @@ import {
   fitArtboardsToChildren,
   flushPendingCanvasSave,
   formatCanvasLessonCode,
+  getCardMinHeight,
+  getCardMinWidth,
   getVideoNoteCardId,
   hitTestStroke,
   loadCourseCanvas,
   rebuildAllAutoChronoEdges,
   reconcileCanvasWithNotes,
   resetCanvasArrangement,
+  resizeCardToFit,
   resolveCardGroupAtDrop,
   resolveNearestSideOnRect,
   resolveTargetConnectionSide,
@@ -257,6 +260,8 @@ export function CourseCanvasPage({ course }: { course: Course }) {
     kind: "card" | "group";
     id: string;
     axis: "both" | "width" | "height";
+    pointerId: number;
+    captured: boolean;
     startWorldX: number;
     startWorldY: number;
     origW: number;
@@ -383,7 +388,12 @@ export function CourseCanvasPage({ course }: { course: Course }) {
       if (pending) {
         const card = stateRef.current.cards.find((c) => c.id === pending.cardId);
         if (card && pending.html !== card.htmlContent) {
-          const estimatedHeight = estimateVideoNoteCardHeight(pending.html, 0, card.width);
+          const estimatedHeight = estimateVideoNoteCardHeight(
+            pending.html,
+            0,
+            card.width,
+            card.type,
+          );
           stateRef.current = applyCardHeightUpdate(
             stateRef.current,
             pending.cardId,
@@ -601,7 +611,7 @@ export function CourseCanvasPage({ course }: { course: Course }) {
 
       if (updateLayout) {
         if (!contentChanged) return;
-        const estimatedHeight = estimateVideoNoteCardHeight(html, 0, card.width);
+        const estimatedHeight = estimateVideoNoteCardHeight(html, 0, card.width, card.type);
         setCanvasState((prev) => applyCardHeightUpdate(prev, cardId, estimatedHeight, html));
       } else if (contentChanged) {
         const now = Date.now();
@@ -638,7 +648,9 @@ export function CourseCanvasPage({ course }: { course: Course }) {
     editingDraftRef.current = null;
 
     if (pending && pending.cardId === activeId) {
-      persistCardDraft(activeId, pending.html, { updateLayout: true });
+      // Live DOM measurement (`onMeasuredHeightGrow`) already keeps card height accurate while editing,
+      // so avoid inflating tidy/text cards back up to `estimateVideoNoteCardHeight` floors on blur.
+      persistCardDraft(activeId, pending.html, { updateLayout: false });
     }
     editSessionRef.current = null;
     setEditingCardId(null);
@@ -715,7 +727,7 @@ export function CourseCanvasPage({ course }: { course: Course }) {
     (type: "canvas-note" | "text", worldX: number, worldY: number) => {
       commitPendingEdit();
       const width = type === "text" ? 260 : CANVAS_CARD_WIDTH;
-      const height = type === "text" ? 72 : 148;
+      const height = type === "text" ? 72 : 112;
       const draftCard: CanvasCard = {
         id: createCanvasId(type === "text" ? "text" : "ccard"),
         type,
@@ -1577,12 +1589,28 @@ export function CourseCanvasPage({ course }: { course: Course }) {
       const wp = screenToWorld(e.clientX, e.clientY);
       const dw = wp.x - r.startWorldX;
       const dh = wp.y - r.startWorldY;
-      if (Math.hypot(dw, dh) > 2) r.changed = true;
+      if (Math.hypot(dw, dh) > 2) {
+        r.changed = true;
+        if (!r.captured) {
+          r.captured = true;
+          try {
+            containerRef.current?.setPointerCapture(r.pointerId);
+          } catch {
+            // ignore
+          }
+        }
+      }
+
+      if (!r.changed) return;
 
       if (r.kind === "card") {
-        const nextW = r.axis === "height" ? r.origW : Math.max(220, Math.round(r.origW + dw));
-        const nextH = r.axis === "width" ? r.origH : Math.max(96, Math.round(r.origH + dh));
         setCanvasState((prev) => {
+          const targetCard = prev.cards.find((c) => c.id === r.id);
+          if (!targetCard) return prev;
+          const minW = getCardMinWidth(targetCard.type);
+          const minH = getCardMinHeight(targetCard.type);
+          const nextW = r.axis === "height" ? r.origW : Math.max(minW, Math.round(r.origW + dw));
+          const nextH = r.axis === "width" ? r.origH : Math.max(minH, Math.round(r.origH + dh));
           const nextGroups = prev.groups.map((gr) => ({ ...gr }));
           const nextCards = prev.cards.map((c) =>
             c.id === r.id ? { ...c, width: nextW, height: nextH } : c,
@@ -1970,6 +1998,8 @@ export function CourseCanvasPage({ course }: { course: Course }) {
         kind,
         id,
         axis,
+        pointerId: e.pointerId,
+        captured: false,
         startWorldX: wp.x,
         startWorldY: wp.y,
         origW: target.width,
@@ -1977,11 +2007,6 @@ export function CourseCanvasPage({ course }: { course: Course }) {
         snapshotBefore: snapshotOf(stateRef.current),
         changed: false,
       };
-      try {
-        containerRef.current?.setPointerCapture(e.pointerId);
-      } catch {
-        // ignore
-      }
     },
     [screenToWorld],
   );
@@ -2094,6 +2119,13 @@ export function CourseCanvasPage({ course }: { course: Course }) {
     (cardId: string, ev: React.PointerEvent, axis?: "both" | "width" | "height") =>
       handleStartResize("card", cardId, ev, axis),
     [handleStartResize],
+  );
+
+  const handleFitCardDimensions = useCallback(
+    (cardId: string, nextWidth: number, nextHeight: number) => {
+      applyWithUndo((prev) => resizeCardToFit(prev, cardId, nextWidth, nextHeight));
+    },
+    [applyWithUndo],
   );
 
   const handleCommitCardHtml = useCallback(
@@ -2439,6 +2471,7 @@ export function CourseCanvasPage({ course }: { course: Course }) {
                 onSelect={handleSelectCard}
                 onStartDrag={handleStartDragCard}
                 onStartResize={handleStartCardResize}
+                onFitDimensions={handleFitCardDimensions}
                 onStartEdit={startEditingCard}
                 onFinishEdit={commitPendingEdit}
                 onDraftChange={handleDraftChange}

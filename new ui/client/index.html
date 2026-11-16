@@ -6,6 +6,30 @@
     <title>TutIn</title>
     <meta name="description" content="A local-first video learning workspace." />
     <link rel="icon" type="image/svg+xml" href="/tutin-icon.svg" />
+    <script>
+      (function () {
+        try {
+          var mode = localStorage.getItem("tutin-theme");
+          var settingsRaw = localStorage.getItem("tutin_settings");
+          var settings = settingsRaw ? JSON.parse(settingsRaw) : null;
+          if (!mode && settings && typeof settings.theme === "string") mode = settings.theme;
+          var isDark =
+            mode === "dark" ||
+            ((!mode || mode === "system") &&
+              window.matchMedia &&
+              window.matchMedia("(prefers-color-scheme: dark)").matches);
+          document.documentElement.classList.toggle("dark", Boolean(isDark));
+          var preset =
+            localStorage.getItem("tutin-theme-preset") ||
+            (settings && typeof settings.themePreset === "string"
+              ? settings.themePreset
+              : "obsidian");
+          var valid = ["obsidian", "zinc", "neutral", "stone", "graphite", "classic"];
+          document.documentElement.dataset.themePreset =
+            valid.indexOf(preset) !== -1 ? preset : "obsidian";
+        } catch (e) {}
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

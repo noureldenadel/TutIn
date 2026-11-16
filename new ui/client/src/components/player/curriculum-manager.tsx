@@ -39,6 +39,7 @@ import {
   TranscriptTranslateModal,
   type TranscriptModalLessonItem,
 } from "@/components/modals/transcript-translate-modal";
+import { AiJobTraceCard } from "@/components/shared/ai-job-trace";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -97,6 +98,54 @@ interface ManagedModule {
   lessons: CourseLessonItem[];
 }
 
+interface LessonDragState {
+  startIdx: number;
+  targetValue: boolean;
+}
+
+/**
+ * Shared pointer-drag range sweep across `[data-lesson-idx]` rows so lesson selection checkboxes
+ * and completion progress circles share identical drag hit-testing and cleanup.
+ */
+function useLessonDragRange(
+  dragState: LessonDragState | null,
+  onRange: (min: number, max: number, targetValue: boolean) => void,
+  onEnd: () => void,
+) {
+  const onRangeRef = useRef(onRange);
+  onRangeRef.current = onRange;
+  const onEndRef = useRef(onEnd);
+  onEndRef.current = onEnd;
+
+  useEffect(() => {
+    if (!dragState) return;
+
+    const handlePointerMove = (e: PointerEvent) => {
+      const row = document
+        .elementFromPoint(e.clientX, e.clientY)
+        ?.closest<HTMLElement>("[data-lesson-idx]");
+      if (!row) return;
+      const hoverIdx = Number(row.dataset["lessonIdx"]);
+      if (Number.isNaN(hoverIdx)) return;
+
+      const min = Math.min(dragState.startIdx, hoverIdx);
+      const max = Math.max(dragState.startIdx, hoverIdx);
+      onRangeRef.current(min, max, dragState.targetValue);
+    };
+
+    const stopDrag = () => onEndRef.current();
+
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", stopDrag);
+    window.addEventListener("pointercancel", stopDrag);
+    return () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", stopDrag);
+      window.removeEventListener("pointercancel", stopDrag);
+    };
+  }, [dragState]);
+}
+
 export function CurriculumManager({ course: initialCourse }: { course: Course }) {
   const [course, setCourse] = useState<Course>(initialCourse);
   const [modules, setModules] = useState<ManagedModule[]>([]);
@@ -140,6 +189,19 @@ export function CurriculumManager({ course: initialCourse }: { course: Course })
   const pendingCaptionLessonRef = useRef<CourseLessonItem | null>(null);
   const [uploadingCaptionId, setUploadingCaptionId] = useState<string | null>(null);
   const [selectedLessonIds, setSelectedLessonIds] = useState<Set<string>>(new Set());
+  const [selectDragState, setSelectDragState] = useState<{
+    startIdx: number;
+    targetValue: boolean;
+  } | null>(null);
+  const selectDragInitialRef = useRef<Set<string>>(new Set());
+  const [doneDragState, setDoneDragState] = useState<{
+    startIdx: number;
+    targetValue: boolean;
+  } | null>(null);
+  const doneDragInitialRef = useRef<Map<string, boolean>>(new Map());
+  const modulesRef = useRef(modules);
+  modulesRef.current = modules;
+  const [expandedJobVideoId, setExpandedJobVideoId] = useState<string | null>(null);
   const [aiModalState, setAiModalState] = useState<{
     open: boolean;
     mode: "transcribe" | "translate";
@@ -225,6 +287,71 @@ export function CurriculumManager({ course: initialCourse }: { course: Course })
   }, [loadCurriculum]);
 
   const allLessonsFlat = useMemo(() => modules.flatMap((m) => m.lessons), [modules]);
+
+  useLessonDragRange(
+    selectDragState,
+    (min, max, targetValue) => {
+      setSelectedLessonIds(() => {
+        const next = new Set(selectDragInitialRef.current);
+        for (let idx = min; idx <= max; idx += 1) {
+          const item = allLessonsFlat[idx];
+          if (!item) continue;
+          if (targetValue) next.add(item.lessonId);
+          else next.delete(item.lessonId);
+        }
+        return next;
+      });
+    },
+    () => setSelectDragState(null),
+  );
+
+  useLessonDragRange(
+    doneDragState,
+    (min, max, targetValue) => {
+      const initial = doneDragInitialRef.current;
+      setModules((prev) => {
+        let idx = 0;
+        let changed = false;
+        const next = prev.map((mod) => ({
+          ...mod,
+          lessons: mod.lessons.map((l) => {
+            const currentIdx = idx++;
+            const desired =
+              currentIdx >= min && currentIdx <= max
+                ? targetValue
+                : (initial.get(l.lessonId) ?? l.isCompleted);
+            if (desired !== l.isCompleted) {
+              changed = true;
+              return { ...l, isCompleted: desired };
+            }
+            return l;
+          }),
+        }));
+        return changed ? next : prev;
+      });
+    },
+    () => {
+      const initial = doneDragInitialRef.current;
+      const updates: Array<{ lessonId: string; done: boolean }> = [];
+      for (const mod of modulesRef.current) {
+        for (const l of mod.lessons) {
+          const prevDone = initial.get(l.lessonId);
+          if (prevDone !== undefined && prevDone !== l.isCompleted) {
+            updates.push({ lessonId: l.lessonId, done: l.isCompleted });
+          }
+        }
+      }
+      setDoneDragState(null);
+      if (updates.length > 0) {
+        void Promise.all(
+          updates.map(({ lessonId, done }) => markVideoComplete(lessonId, done, course.id)),
+        ).catch(() => {
+          toast.error("Failed to update lesson progress");
+          void loadCurriculum(true);
+        });
+      }
+    },
+  );
 
   const toModalLesson = useCallback(
     (lesson: CourseLessonItem): TranscriptModalLessonItem => ({
@@ -513,7 +640,12 @@ export function CurriculumManager({ course: initialCourse }: { course: Course })
   };
 
   return (
-    <div className="mx-auto max-w-5xl px-4 py-6 sm:px-6">
+    <div
+      className={cn(
+        "mx-auto max-w-5xl px-4 py-6 sm:px-6",
+        (selectDragState || doneDragState) && "select-none",
+      )}
+    >
       {/* Header */}
       <div className="flex flex-col gap-4 border-b border-border/60 pb-5 sm:flex-row sm:items-center sm:justify-between">
         <div className="min-w-0">
@@ -853,372 +985,414 @@ export function CurriculumManager({ course: initialCourse }: { course: Course })
                           lessonJob &&
                           (lessonJob.status === "running" || lessonJob.status === "queued");
                         const isSelected = selectedLessonIds.has(lesson.lessonId);
+                        const isJobExpanded =
+                          Boolean(isJobActive) && expandedJobVideoId === lesson.lessonId;
 
                         return (
                           <div
                             key={lesson.lessonId}
-                            className={cn(
-                              "flex items-center gap-3 px-4 py-2.5 transition-colors hover:bg-secondary/45",
-                              isSelected && "bg-primary-soft/25",
-                            )}
+                            data-lesson-idx={globalIdx}
+                            className={cn("transition-colors", isSelected && "bg-primary-soft/25")}
                           >
-                            <input
-                              type="checkbox"
-                              checked={isSelected}
-                              onChange={() => toggleLessonSelected(lesson.lessonId)}
-                              aria-label={`Select ${lesson.title}`}
-                              className="size-3.5 shrink-0 cursor-pointer rounded border-border accent-primary"
-                            />
-
-                            <button
-                              type="button"
-                              aria-label={
-                                lesson.isCompleted ? "Mark as incomplete" : "Mark as complete"
-                              }
-                              onClick={() => {
-                                void markVideoComplete(
-                                  lesson.lessonId,
-                                  !lesson.isCompleted,
-                                  course.id,
-                                );
-                              }}
-                              className={cn(
-                                "flex size-5 shrink-0 items-center justify-center rounded-full border-2 border-border transition-colors hover:border-chart-4/60",
-                                lesson.isCompleted &&
-                                  "border-chart-4 bg-chart-4 text-primary-foreground",
-                              )}
-                            >
-                              {lesson.isCompleted && <Check className="size-3" strokeWidth={3} />}
-                            </button>
-
-                            <div className="min-w-0 flex-1">
-                              {editingLessonId === lesson.lessonId ? (
-                                <input
-                                  autoFocus
-                                  value={editingLessonTitle}
-                                  onChange={(e) => setEditingLessonTitle(e.target.value)}
-                                  onBlur={() => void handleSaveLessonTitle(lesson.lessonId)}
-                                  onKeyDown={(e) => {
-                                    if (e.key === "Enter") {
-                                      void handleSaveLessonTitle(lesson.lessonId);
-                                    }
-                                    if (e.key === "Escape") setEditingLessonId(null);
-                                  }}
-                                  className="h-7 w-full rounded-md border border-border bg-background px-2 text-sm text-foreground outline-none"
+                            <div className="flex items-center gap-3 px-4 py-2.5 hover:bg-secondary/45">
+                              <button
+                                type="button"
+                                role="checkbox"
+                                aria-checked={isSelected}
+                                aria-label={`Select ${lesson.title}`}
+                                title="Click or drag to select lessons"
+                                onPointerDown={(e) => {
+                                  if (e.button !== 0) return;
+                                  e.preventDefault();
+                                  selectDragInitialRef.current = new Set(selectedLessonIds);
+                                  const targetValue = !isSelected;
+                                  setSelectDragState({ startIdx: globalIdx, targetValue });
+                                  setSelectedLessonIds((prev) => {
+                                    const next = new Set(prev);
+                                    if (targetValue) next.add(lesson.lessonId);
+                                    else next.delete(lesson.lessonId);
+                                    return next;
+                                  });
+                                }}
+                                onKeyDown={(e) => {
+                                  if (e.key === " " || e.key === "Enter") {
+                                    e.preventDefault();
+                                    toggleLessonSelected(lesson.lessonId);
+                                  }
+                                }}
+                                className={cn(
+                                  "flex size-[18px] shrink-0 touch-none items-center justify-center rounded-[5px] border-2 transition-all duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                                  isSelected
+                                    ? "border-primary bg-primary text-primary-foreground shadow-xs"
+                                    : "border-border/80 bg-background/60 hover:border-primary/65 hover:bg-primary/5",
+                                )}
+                              >
+                                <Check
+                                  className={cn(
+                                    "size-3 transition-transform duration-150",
+                                    isSelected ? "scale-100 opacity-100" : "scale-50 opacity-0",
+                                  )}
+                                  strokeWidth={3}
                                 />
-                              ) : (
-                                <Link
-                                  to="/learn/$courseId"
-                                  params={{ courseId: course.id }}
-                                  search={{ lesson: globalIdx }}
-                                  className="block truncate text-sm font-medium text-foreground hover:text-primary"
-                                >
-                                  {lesson.title}
-                                </Link>
-                              )}
-                            </div>
+                              </button>
 
-                            {isJobActive && lessonJob && (
-                              <div className="ai-shimmer-row t-resize flex shrink-0 items-center gap-1.5 rounded-md border border-primary/25 bg-primary-soft/40 px-2 py-0.5 text-[11px]">
-                                <span className="ai-shimmer-text max-w-[120px] truncate font-medium">
-                                  {getLanguageLabel(lessonJob.targetLanguage)} · AI
-                                </span>
-                                <span className="font-mono font-semibold text-primary tabular-nums">
-                                  {lessonJob.status === "queued" ? "Queued" : `${lessonJob.progress}%`}
-                                </span>
-                                <button
-                                  type="button"
-                                  onClick={() => cancelTranscriptJob(lesson.lessonId)}
-                                  title="Cancel job"
-                                  className="rounded p-0.5 text-muted-foreground hover:bg-secondary hover:text-foreground"
-                                >
-                                  <X className="size-3" />
-                                </button>
-                              </div>
-                            )}
-
-                            {captionCount > 0 && (
-                              <div className="hidden items-center gap-1 sm:flex">
-                                {lesson.subtitleSources.slice(0, 4).map((src) => {
-                                  const originShort = getOriginLabel(src.origin, src.version);
-                                  const effectiveSource =
-                                    lesson.subtitleSources.find((s) => s.is_ai_source) ??
-                                    lesson.subtitleSources.find((s) => s.is_master) ??
-                                    lesson.subtitleSources[0];
-                                  const isSource = effectiveSource === src;
-                                  return (
-                                    <Badge
-                                      key={src.id || `${src.lang}-${src.fileName ?? ""}`}
-                                      variant="secondary"
-                                      title={`${formatTrackDisplayLabel(src)}${isSource ? " (Source)" : ""}`}
-                                      className={cn(
-                                        "px-1.5 py-0 text-[10px]",
-                                        lesson.subtitleSources.length > 1 &&
-                                          isSource &&
-                                          "ring-1 ring-primary/40",
-                                      )}
-                                    >
-                                      <span className="uppercase">{src.lang}</span>
-                                      <span className="mx-0.5 opacity-60">·</span>
-                                      <span className="font-normal opacity-85">{originShort}</span>
-                                    </Badge>
+                              <button
+                                type="button"
+                                aria-label={
+                                  lesson.isCompleted ? "Mark as incomplete" : "Mark as complete"
+                                }
+                                title="Click or drag to mark lessons"
+                                onPointerDown={(e) => {
+                                  if (e.button !== 0) return;
+                                  e.preventDefault();
+                                  const initialMap = new Map<string, boolean>();
+                                  for (const l of allLessonsFlat) {
+                                    initialMap.set(l.lessonId, l.isCompleted);
+                                  }
+                                  doneDragInitialRef.current = initialMap;
+                                  const targetValue = !lesson.isCompleted;
+                                  setDoneDragState({ startIdx: globalIdx, targetValue });
+                                  setModules((prev) =>
+                                    prev.map((mod) => ({
+                                      ...mod,
+                                      lessons: mod.lessons.map((l) =>
+                                        l.lessonId === lesson.lessonId
+                                          ? { ...l, isCompleted: targetValue }
+                                          : l,
+                                      ),
+                                    })),
                                   );
-                                })}
-                                {captionCount > 4 && (
-                                  <Badge variant="secondary" className="px-1.5 py-0 text-[10px]">
-                                    +{captionCount - 4}
-                                  </Badge>
+                                }}
+                                onKeyDown={(e) => {
+                                  if (e.key === " " || e.key === "Enter") {
+                                    e.preventDefault();
+                                    void markVideoComplete(
+                                      lesson.lessonId,
+                                      !lesson.isCompleted,
+                                      course.id,
+                                    );
+                                  }
+                                }}
+                                className={cn(
+                                  "flex size-5 shrink-0 touch-none items-center justify-center rounded-full border-2 border-border transition-colors hover:border-chart-4/60",
+                                  lesson.isCompleted &&
+                                    "border-chart-4 bg-chart-4 text-primary-foreground",
+                                )}
+                              >
+                                {lesson.isCompleted && <Check className="size-3" strokeWidth={3} />}
+                              </button>
+
+                              <div className="min-w-0 flex-1">
+                                {editingLessonId === lesson.lessonId ? (
+                                  <input
+                                    autoFocus
+                                    value={editingLessonTitle}
+                                    onChange={(e) => setEditingLessonTitle(e.target.value)}
+                                    onBlur={() => void handleSaveLessonTitle(lesson.lessonId)}
+                                    onKeyDown={(e) => {
+                                      if (e.key === "Enter") {
+                                        void handleSaveLessonTitle(lesson.lessonId);
+                                      }
+                                      if (e.key === "Escape") setEditingLessonId(null);
+                                    }}
+                                    className="h-7 w-full rounded-md border border-border bg-background px-2 text-sm text-foreground outline-none"
+                                  />
+                                ) : (
+                                  <Link
+                                    to="/learn/$courseId"
+                                    params={{ courseId: course.id }}
+                                    search={{ lesson: globalIdx }}
+                                    className="block truncate text-sm font-medium text-foreground hover:text-primary"
+                                  >
+                                    {lesson.title}
+                                  </Link>
                                 )}
                               </div>
-                            )}
 
-                            <span className="shrink-0 font-mono text-xs tabular-nums text-muted-foreground">
-                              {formatTimestamp(secs)}
-                            </span>
-
-                            <div className="flex shrink-0 items-center gap-0.5">
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="icon"
-                                disabled={lessonIdx === 0}
-                                onClick={() => moveLesson(mod.id, lessonIdx, -1)}
-                                title="Move up"
-                                aria-label="Move lesson up"
-                                className="size-7 text-muted-foreground"
-                              >
-                                <ArrowUp className="size-3.5" />
-                              </Button>
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="icon"
-                                disabled={lessonIdx === mod.lessons.length - 1}
-                                onClick={() => moveLesson(mod.id, lessonIdx, 1)}
-                                title="Move down"
-                                aria-label="Move lesson down"
-                                className="size-7 text-muted-foreground"
-                              >
-                                <ArrowDown className="size-3.5" />
-                              </Button>
-
-                              <DropdownMenu>
-                                <DropdownMenuTrigger asChild>
-                                  <Button
+                              {isJobActive && lessonJob && (
+                                <div className="ai-shimmer-row t-resize flex shrink-0 items-center gap-1 rounded-md border border-primary/25 bg-primary-soft/40 pl-2 pr-1 py-0.5 text-[11px]">
+                                  <button
                                     type="button"
-                                    variant="ghost"
-                                    size="icon"
-                                    disabled={uploadingCaptionId === lesson.lessonId}
-                                    title="Subtitles & AI"
-                                    aria-label="Subtitles & AI"
-                                    className={cn(
-                                      "size-7 text-muted-foreground",
-                                      captionCount > 0 && "text-primary",
-                                    )}
+                                    aria-expanded={isJobExpanded}
+                                    onClick={() =>
+                                      setExpandedJobVideoId((cur) =>
+                                        cur === lesson.lessonId ? null : lesson.lessonId,
+                                      )
+                                    }
+                                    title={isJobExpanded ? "Hide AI progress" : "Show AI progress"}
+                                    className="flex items-center gap-1.5 rounded text-left focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                                   >
-                                    {uploadingCaptionId === lesson.lessonId ? (
-                                      <Loader2 className="size-3.5 animate-spin" />
-                                    ) : (
-                                      <Subtitles className="size-3.5" />
-                                    )}
-                                  </Button>
-                                </DropdownMenuTrigger>
-                                <DropdownMenuContent align="end" className="w-64 rounded-lg p-1.5">
-                                  {lesson.subtitleSources.length > 0 && (
-                                    <>
-                                      <p className="px-2 py-1 text-[11px] font-semibold text-muted-foreground">
-                                        Tracks
-                                      </p>
-                                      {lesson.subtitleSources.map((src) => {
-                                        const trackId =
-                                          src.id || `${src.lang}:${src.origin || "uploaded"}`;
-                                        const effectiveSource =
-                                          lesson.subtitleSources.find((s) => s.is_ai_source) ??
-                                          lesson.subtitleSources.find((s) => s.is_master) ??
-                                          lesson.subtitleSources[0];
-                                        const isSource = effectiveSource === src;
-                                        return (
-                                          <div
-                                            key={trackId}
-                                            className="flex items-center justify-between gap-2 rounded-md px-2 py-1.5 text-xs hover:bg-secondary/60"
-                                          >
-                                            <div className="min-w-0 flex-1">
-                                              <div className="flex items-center gap-1.5 truncate font-medium text-foreground">
-                                                <span className="truncate">
-                                                  {formatTrackDisplayLabel(src)}
-                                                </span>
+                                    <span className="ai-shimmer-text max-w-[120px] truncate font-medium">
+                                      {getLanguageLabel(lessonJob.targetLanguage)} · AI
+                                    </span>
+                                    <span className="font-mono font-semibold text-primary tabular-nums">
+                                      {lessonJob.status === "queued"
+                                        ? "Queued"
+                                        : `${lessonJob.progress}%`}
+                                    </span>
+                                    <ChevronDown
+                                      className={cn(
+                                        "size-3 text-primary/70 transition-transform duration-200",
+                                        isJobExpanded && "rotate-180",
+                                      )}
+                                    />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => cancelTranscriptJob(lesson.lessonId)}
+                                    title="Cancel task"
+                                    aria-label="Cancel task"
+                                    className="rounded p-0.5 text-muted-foreground hover:bg-secondary hover:text-destructive"
+                                  >
+                                    <X className="size-3" />
+                                  </button>
+                                </div>
+                              )}
+
+                              {captionCount > 0 && (
+                                <div className="hidden items-center gap-1 sm:flex">
+                                  {lesson.subtitleSources.slice(0, 4).map((src) => {
+                                    const originShort = getOriginLabel(src.origin, src.version);
+                                    const effectiveSource =
+                                      lesson.subtitleSources.find((s) => s.is_ai_source) ??
+                                      lesson.subtitleSources.find((s) => s.is_master) ??
+                                      lesson.subtitleSources[0];
+                                    const isSource = effectiveSource === src;
+                                    return (
+                                      <Badge
+                                        key={src.id || `${src.lang}-${src.fileName ?? ""}`}
+                                        variant="secondary"
+                                        title={`${formatTrackDisplayLabel(src)}${isSource ? " (Source)" : ""}`}
+                                        className={cn(
+                                          "px-1.5 py-0 text-[10px]",
+                                          lesson.subtitleSources.length > 1 &&
+                                            isSource &&
+                                            "ring-1 ring-primary/40",
+                                        )}
+                                      >
+                                        <span className="uppercase">{src.lang}</span>
+                                        <span className="mx-0.5 opacity-60">·</span>
+                                        <span className="font-normal opacity-85">
+                                          {originShort}
+                                        </span>
+                                      </Badge>
+                                    );
+                                  })}
+                                  {captionCount > 4 && (
+                                    <Badge variant="secondary" className="px-1.5 py-0 text-[10px]">
+                                      +{captionCount - 4}
+                                    </Badge>
+                                  )}
+                                </div>
+                              )}
+
+                              <span className="shrink-0 font-mono text-xs tabular-nums text-muted-foreground">
+                                {formatTimestamp(secs)}
+                              </span>
+
+                              <div className="flex shrink-0 items-center gap-0.5">
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="icon"
+                                  disabled={lessonIdx === 0}
+                                  onClick={() => moveLesson(mod.id, lessonIdx, -1)}
+                                  title="Move up"
+                                  aria-label="Move lesson up"
+                                  className="size-7 text-muted-foreground"
+                                >
+                                  <ArrowUp className="size-3.5" />
+                                </Button>
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="icon"
+                                  disabled={lessonIdx === mod.lessons.length - 1}
+                                  onClick={() => moveLesson(mod.id, lessonIdx, 1)}
+                                  title="Move down"
+                                  aria-label="Move lesson down"
+                                  className="size-7 text-muted-foreground"
+                                >
+                                  <ArrowDown className="size-3.5" />
+                                </Button>
+
+                                <DropdownMenu>
+                                  <DropdownMenuTrigger asChild>
+                                    <Button
+                                      type="button"
+                                      variant="ghost"
+                                      size="icon"
+                                      disabled={uploadingCaptionId === lesson.lessonId}
+                                      title="Subtitles & AI"
+                                      aria-label="Subtitles & AI"
+                                      className={cn(
+                                        "size-7 text-muted-foreground",
+                                        captionCount > 0 && "text-primary",
+                                      )}
+                                    >
+                                      {uploadingCaptionId === lesson.lessonId ? (
+                                        <Loader2 className="size-3.5 animate-spin" />
+                                      ) : (
+                                        <Subtitles className="size-3.5" />
+                                      )}
+                                    </Button>
+                                  </DropdownMenuTrigger>
+                                  <DropdownMenuContent
+                                    align="end"
+                                    className="w-64 rounded-lg p-1.5"
+                                  >
+                                    {lesson.subtitleSources.length > 0 && (
+                                      <>
+                                        <p className="px-2 py-1 text-[11px] font-semibold text-muted-foreground">
+                                          Tracks
+                                        </p>
+                                        {lesson.subtitleSources.map((src) => {
+                                          const trackId =
+                                            src.id || `${src.lang}:${src.origin || "uploaded"}`;
+                                          const effectiveSource =
+                                            lesson.subtitleSources.find((s) => s.is_ai_source) ??
+                                            lesson.subtitleSources.find((s) => s.is_master) ??
+                                            lesson.subtitleSources[0];
+                                          const isSource = effectiveSource === src;
+                                          return (
+                                            <div
+                                              key={trackId}
+                                              className="flex items-center justify-between gap-2 rounded-md px-2 py-1.5 text-xs hover:bg-secondary/60"
+                                            >
+                                              <div className="min-w-0 flex-1">
+                                                <div className="flex items-center gap-1.5 truncate font-medium text-foreground">
+                                                  <span className="truncate">
+                                                    {formatTrackDisplayLabel(src)}
+                                                  </span>
+                                                </div>
+                                              </div>
+                                              <div className="flex shrink-0 items-center gap-1">
+                                                {src.is_master ? (
+                                                  <span className="rounded-sm bg-chart-4/15 px-1.5 py-0.5 text-[10px] font-semibold text-chart-4">
+                                                    Master
+                                                  </span>
+                                                ) : (
+                                                  <button
+                                                    type="button"
+                                                    onClick={() =>
+                                                      void handleSetTrackMaster(
+                                                        lesson.lessonId,
+                                                        trackId,
+                                                      )
+                                                    }
+                                                    title="Set as master for this language"
+                                                    className="rounded-sm border border-dashed border-muted-foreground/35 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground/70 transition-colors hover:border-chart-4/60 hover:bg-chart-4/10 hover:text-chart-4"
+                                                  >
+                                                    Master
+                                                  </button>
+                                                )}
+                                                {isSource ? (
+                                                  <span className="rounded-sm bg-primary/15 px-1.5 py-0.5 text-[10px] font-semibold text-primary">
+                                                    Source
+                                                  </span>
+                                                ) : (
+                                                  <button
+                                                    type="button"
+                                                    onClick={() =>
+                                                      void handleSetTrackSource(
+                                                        lesson.lessonId,
+                                                        trackId,
+                                                      )
+                                                    }
+                                                    title="Set as translation source"
+                                                    className="rounded-sm border border-dashed border-muted-foreground/35 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground/70 transition-colors hover:border-primary/60 hover:bg-primary/10 hover:text-primary"
+                                                  >
+                                                    Source
+                                                  </button>
+                                                )}
+                                                <button
+                                                  type="button"
+                                                  onClick={() =>
+                                                    void handleDeleteTrack(lesson.lessonId, trackId)
+                                                  }
+                                                  title="Delete track"
+                                                  aria-label="Delete track"
+                                                  className="rounded p-1 text-muted-foreground/75 transition-colors hover:bg-destructive/15 hover:text-destructive"
+                                                >
+                                                  <Trash2 className="size-3.5" />
+                                                </button>
                                               </div>
                                             </div>
-                                            <div className="flex shrink-0 items-center gap-1">
-                                              {src.is_master ? (
-                                                <span className="rounded-sm bg-chart-4/15 px-1.5 py-0.5 text-[10px] font-semibold text-chart-4">
-                                                  Master
-                                                </span>
-                                              ) : (
-                                                <button
-                                                  type="button"
-                                                  onClick={() =>
-                                                    void handleSetTrackMaster(
-                                                      lesson.lessonId,
-                                                      trackId,
-                                                    )
-                                                  }
-                                                  title="Set as master for this language"
-                                                  className="rounded-sm border border-dashed border-muted-foreground/35 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground/70 transition-colors hover:border-chart-4/60 hover:bg-chart-4/10 hover:text-chart-4"
-                                                >
-                                                  Master
-                                                </button>
-                                              )}
-                                              {isSource ? (
-                                                <span className="rounded-sm bg-primary/15 px-1.5 py-0.5 text-[10px] font-semibold text-primary">
-                                                  Source
-                                                </span>
-                                              ) : (
-                                                <button
-                                                  type="button"
-                                                  onClick={() =>
-                                                    void handleSetTrackSource(
-                                                      lesson.lessonId,
-                                                      trackId,
-                                                    )
-                                                  }
-                                                  title="Set as translation source"
-                                                  className="rounded-sm border border-dashed border-muted-foreground/35 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground/70 transition-colors hover:border-primary/60 hover:bg-primary/10 hover:text-primary"
-                                                >
-                                                  Source
-                                                </button>
-                                              )}
-                                              <button
-                                                type="button"
-                                                onClick={() =>
-                                                  void handleDeleteTrack(lesson.lessonId, trackId)
-                                                }
-                                                title="Delete track"
-                                                aria-label="Delete track"
-                                                className="rounded p-1 text-muted-foreground/75 transition-colors hover:bg-destructive/15 hover:text-destructive"
-                                              >
-                                                <Trash2 className="size-3.5" />
-                                              </button>
-                                            </div>
-                                          </div>
-                                        );
-                                      })}
-                                      <DropdownMenuSeparator />
-                                    </>
-                                  )}
-                                  {isJobActive && lessonJob && (
-                                    <>
-                                      <DropdownMenuItem
-                                        className="ai-shimmer-row t-resize relative mb-1 flex items-center justify-between gap-2 overflow-hidden rounded-md border border-primary/20 py-2 pr-1.5"
-                                        onClick={() =>
-                                          setAiModalState({
-                                            open: true,
-                                            mode: lessonJob.mode,
-                                            lessons: [toModalLesson(lesson)],
-                                          })
-                                        }
-                                      >
-                                        <span className="flex min-w-0 flex-1 items-center gap-2 truncate">
-                                          <span className="ai-shimmer-text truncate font-medium">
-                                            {getLanguageLabel(lessonJob.targetLanguage)} · AI
-                                          </span>
-                                        </span>
-                                        <div
-                                          className="ml-auto flex shrink-0 items-center gap-1.5"
-                                          onPointerDown={(e) => e.stopPropagation()}
-                                          onPointerUp={(e) => e.stopPropagation()}
-                                          onClick={(e) => e.stopPropagation()}
-                                        >
-                                          <span className="font-mono text-[11px] font-semibold text-primary tabular-nums">
-                                            {lessonJob.status === "queued"
-                                              ? "Queued"
-                                              : `${lessonJob.progress}%`}
-                                          </span>
-                                          <button
-                                            type="button"
-                                            onClick={(e) => {
-                                              e.preventDefault();
-                                              e.stopPropagation();
-                                              cancelTranscriptJob(lesson.lessonId);
-                                            }}
-                                            title="Cancel"
-                                            aria-label="Cancel"
-                                            className="rounded p-1 text-muted-foreground/75 transition-colors hover:bg-destructive/15 hover:text-destructive"
-                                          >
-                                            <X className="size-3.5" />
-                                          </button>
-                                        </div>
-                                        <span
-                                          aria-hidden="true"
-                                          className="pointer-events-none absolute inset-x-0 bottom-0 h-0.5 bg-secondary/60"
-                                        >
-                                          <span
-                                            className="block h-full bg-gradient-to-r from-primary via-chart-2 to-chart-1 transition-all duration-300"
-                                            style={{ width: `${Math.max(6, lessonJob.progress)}%` }}
-                                          />
-                                        </span>
-                                      </DropdownMenuItem>
-                                      <DropdownMenuSeparator />
-                                    </>
-                                  )}
-                                  <DropdownMenuItem
-                                    className="rounded-md"
-                                    onClick={() =>
-                                      setAiModalState({
-                                        open: true,
-                                        mode:
-                                          lesson.subtitleSources.length > 0
-                                            ? "translate"
-                                            : "transcribe",
-                                        lessons: [toModalLesson(lesson)],
-                                      })
-                                    }
-                                  >
-                                    <Sparkles className="size-3.5 text-primary" />
-                                    <span>Generate / translate AI…</span>
-                                  </DropdownMenuItem>
-                                  <DropdownMenuItem
-                                    className="rounded-md"
-                                    onClick={() => triggerCaptionUpload(lesson)}
-                                  >
-                                    <Upload className="size-3.5" />
-                                    <span>Upload file (.srt / .vtt)…</span>
-                                  </DropdownMenuItem>
-                                </DropdownMenuContent>
-                              </DropdownMenu>
+                                          );
+                                        })}
+                                        <DropdownMenuSeparator />
+                                      </>
+                                    )}
+                                    {isJobActive && lessonJob && (
+                                      <>
+                                        <AiJobTraceCard job={lessonJob} compact className="mb-1" />
+                                        <DropdownMenuSeparator />
+                                      </>
+                                    )}
+                                    <DropdownMenuItem
+                                      className="rounded-md"
+                                      onClick={() =>
+                                        setAiModalState({
+                                          open: true,
+                                          mode:
+                                            lesson.subtitleSources.length > 0
+                                              ? "translate"
+                                              : "transcribe",
+                                          lessons: [toModalLesson(lesson)],
+                                        })
+                                      }
+                                    >
+                                      <Sparkles className="size-3.5 text-primary" />
+                                      <span>Generate / translate AI…</span>
+                                    </DropdownMenuItem>
+                                    <DropdownMenuItem
+                                      className="rounded-md"
+                                      onClick={() => triggerCaptionUpload(lesson)}
+                                    >
+                                      <Upload className="size-3.5" />
+                                      <span>Upload file (.srt / .vtt)…</span>
+                                    </DropdownMenuItem>
+                                  </DropdownMenuContent>
+                                </DropdownMenu>
 
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="icon"
-                                onClick={() => {
-                                  setEditingLessonId(lesson.lessonId);
-                                  setEditingLessonTitle(lesson.title);
-                                }}
-                                title="Rename lesson"
-                                aria-label="Rename lesson"
-                                className="size-7 text-muted-foreground"
-                              >
-                                <Pencil className="size-3.5" />
-                              </Button>
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="icon"
-                                onClick={() =>
-                                  setConfirmDelete({
-                                    kind: "lesson",
-                                    id: lesson.lessonId,
-                                    title: lesson.title,
-                                  })
-                                }
-                                title="Delete lesson"
-                                aria-label="Delete lesson"
-                                className="size-7 text-muted-foreground hover:text-destructive"
-                              >
-                                <Trash2 className="size-3.5" />
-                              </Button>
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="icon"
+                                  onClick={() => {
+                                    setEditingLessonId(lesson.lessonId);
+                                    setEditingLessonTitle(lesson.title);
+                                  }}
+                                  title="Rename lesson"
+                                  aria-label="Rename lesson"
+                                  className="size-7 text-muted-foreground"
+                                >
+                                  <Pencil className="size-3.5" />
+                                </Button>
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="icon"
+                                  onClick={() =>
+                                    setConfirmDelete({
+                                      kind: "lesson",
+                                      id: lesson.lessonId,
+                                      title: lesson.title,
+                                    })
+                                  }
+                                  title="Delete lesson"
+                                  aria-label="Delete lesson"
+                                  className="size-7 text-muted-foreground hover:text-destructive"
+                                >
+                                  <Trash2 className="size-3.5" />
+                                </Button>
+                              </div>
                             </div>
+                            {isJobExpanded && lessonJob && (
+                              <div className="px-4 pb-3 pt-0.5">
+                                <AiJobTraceCard job={lessonJob} defaultExpanded />
+                              </div>
+                            )}
                           </div>
                         );
                       })

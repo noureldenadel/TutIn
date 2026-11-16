@@ -5,6 +5,8 @@ import {
   useRef,
   useState,
   type Dispatch,
+  type MouseEvent as ReactMouseEvent,
+  type PointerEvent as ReactPointerEvent,
   type ReactNode,
   type SetStateAction,
 } from "react";
@@ -102,21 +104,25 @@ import {
   SmartCaptionsModal,
   type SmartCaptionMatch,
 } from "@/components/modals/smart-captions-modal";
+import { VideoCaptionOverlay } from "@/components/player/video-caption-overlay";
 import {
   arePlayerShortcutsEnabled,
   readAppSettings,
   SETTINGS_CHANGED_EVENT,
+  writeAppSettings,
+  type CaptionFontSize,
+  type CaptionPosition,
 } from "@/lib/app-settings";
 import { formatTrackDisplayLabel, getLanguageLabel, getLanguageName } from "@/lib/languages";
 import {
   TRANSCRIPT_UPDATED_EVENT,
-  cancelTranscriptJob,
   deleteSubtitleTrack,
   setSubtitleTrackMaster,
   setSubtitleTrackSource,
   useVideoTranscriptJob,
 } from "@/lib/transcript-ai";
 import { TranscriptTranslateModal } from "@/components/modals/transcript-translate-modal";
+import { AiJobTraceCard } from "@/components/shared/ai-job-trace";
 import type { SubtitleSource } from "@/lib/course-lessons";
 import {
   getHistoryThresholdSeconds,
@@ -264,6 +270,71 @@ function findActiveCueIndex(cues: TranscriptCue[], t: number, allowGapBridge: bo
   return -1;
 }
 
+const HOLD_SPEED_RATE = 2;
+const SPACE_HOLD_DELAY_MS = 220;
+const POINTER_HOLD_DELAY_MS = 500;
+const PLAYER_SPEED_OPTIONS = [0.75, 1, 1.25, 1.5, 2] as const;
+
+function matchesDigitShortcut(e: KeyboardEvent): number | null {
+  if (e.shiftKey) return null;
+  if (/^[0-9]$/.test(e.key)) return Number(e.key);
+  if (/^Digit[0-9]$/.test(e.code)) return Number(e.code.slice(5));
+  return null;
+}
+
+function isPlayerEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  return Boolean(
+    target.isContentEditable ||
+    target.tagName === "INPUT" ||
+    target.tagName === "TEXTAREA" ||
+    target.tagName === "SELECT" ||
+    target.closest('[contenteditable="true"]'),
+  );
+}
+
+function isPlayerSliderTarget(target: EventTarget | null): boolean {
+  return target instanceof Element && Boolean(target.closest('[role="slider"]'));
+}
+
+function matchesShortcutKey(e: KeyboardEvent, char: string, code: string): boolean {
+  return e.key.toLowerCase() === char || (!/^[a-z]$/i.test(e.key) && e.code === code);
+}
+
+function isSliderOwnedNavigationKey(e: KeyboardEvent): boolean {
+  return (
+    e.key === "ArrowLeft" ||
+    e.key === "ArrowRight" ||
+    e.key === "ArrowUp" ||
+    e.key === "ArrowDown" ||
+    e.key === "Home" ||
+    e.key === "End"
+  );
+}
+
+type ShortcutHudIcon =
+  | "play"
+  | "pause"
+  | "captions-on"
+  | "captions-off"
+  | "mute"
+  | "volume"
+  | "speed"
+  | "seek-back"
+  | "seek-forward"
+  | "sidebar-hide"
+  | "sidebar-show"
+  | "pip";
+
+function isPlayerInteractiveChildTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) return false;
+  return Boolean(
+    target.closest(
+      'button, a[href], input, select, textarea, [role="slider"], [role="button"], [role="menuitem"], [role="menuitemradio"], [role="switch"], [role="tab"], [data-no-speed-boost="true"]',
+    ),
+  );
+}
+
 type Tab = "playlist" | "notes" | "transcript";
 
 export function CoursePlayer({
@@ -305,9 +376,12 @@ export function CoursePlayer({
   const [volume, setVolume] = useState(0.8);
   const [muted, setMuted] = useState(false);
   const [speed, setSpeed] = useState(1);
+  const [speedBoostActive, setSpeedBoostActive] = useState(false);
+  const effectiveSpeed = speedBoostActive ? HOLD_SPEED_RATE : speed;
   const [autoplay, setAutoplay] = useState(true);
   const [remainingTime, setRemainingTime] = useState(false);
   const [subtitleTrack, setSubtitleTrack] = useState<string>("off");
+  const captionsExplicitlyOffRef = useRef(false);
   const [transcriptLang, setTranscriptLang] = useState<string | null>(null);
   const [availableTracks, setAvailableTracks] = useState<TranscriptTrack[]>([]);
   const pendingTrackSelectionRef = useRef<string | null>(null);
@@ -316,9 +390,19 @@ export function CoursePlayer({
   const volumeRef = useRef(volume);
   const mutedRef = useRef(muted);
   const speedRef = useRef(speed);
+  const effectiveSpeedRef = useRef(effectiveSpeed);
   volumeRef.current = volume;
   mutedRef.current = muted;
   speedRef.current = speed;
+  effectiveSpeedRef.current = effectiveSpeed;
+  const spaceHoldTimerRef = useRef<number | null>(null);
+  const spacePressPendingRef = useRef(false);
+  const spaceBoostActiveRef = useRef(false);
+  const pointerHoldTimerRef = useRef<number | null>(null);
+  const activePointerIdRef = useRef<number | null>(null);
+  const activePointerTypeRef = useRef<string>("");
+  const pointerBoostActiveRef = useRef(false);
+  const suppressNextVideoClickUntilRef = useRef(0);
   const [dubLanguages, setDubLanguages] = useState<string[]>([]);
   const [selectedDubLang, setSelectedDubLang] = useState<string>("original");
   const [transcriptCues, setTranscriptCues] = useState<TranscriptCue[]>([]);
@@ -330,12 +414,30 @@ export function CoursePlayer({
   const [tracksMenuOpen, setTracksMenuOpen] = useState(false);
   const [settingsMenuOpen, setSettingsMenuOpen] = useState(false);
   const [controlsActive, setControlsActive] = useState(false);
+  const controlsContentRef = useRef<HTMLDivElement>(null);
+  const [controlsBarHeight, setControlsBarHeight] = useState(84);
+  const [captionFontSize, setCaptionFontSize] = useState<CaptionFontSize>(
+    () => readAppSettings().captionFontSize,
+  );
+  const [captionBackground, setCaptionBackground] = useState<boolean>(
+    () => readAppSettings().captionBackground,
+  );
+  const [captionPosition, setCaptionPosition] = useState<CaptionPosition | null>(
+    () => readAppSettings().captionPosition,
+  );
   const anyPlayerMenuOpen = tracksMenuOpen || settingsMenuOpen;
+  const playerControlsVisible = !playing || anyPlayerMenuOpen || controlsActive;
   const anyMenuOpenRef = useRef(false);
   anyMenuOpenRef.current = anyPlayerMenuOpen;
   const isPointerInsidePlayerRef = useRef(false);
   const isPointerOverControlsRef = useRef(false);
   const controlsHideTimerRef = useRef<number | null>(null);
+  const [shortcutHud, setShortcutHud] = useState<{
+    icon: ShortcutHudIcon;
+    label: string;
+    id: number;
+  } | null>(null);
+  const shortcutHudTimerRef = useRef<number | null>(null);
   const lastMenuDismissAtRef = useRef(0);
   const seekGuardRef = useRef<{ floorTime: number; expiresAt: number } | null>(null);
   const [panelOpen, setPanelOpen] = useState(true);
@@ -454,6 +556,8 @@ export function CoursePlayer({
   const resolvedVideoSrc = localVideoUrl || (isPlayableExternalVideo ? externalDirectUrl : "");
   const isEmbeddedPlayer = Boolean(youtubeId || driveFileId);
   const isExternalResourceOnly = Boolean(externalDirectUrl && !isPlayableExternalVideo);
+  const canHoldBoostVideo =
+    !curriculumLoading && Boolean(currentLesson) && !isEmbeddedPlayer && !isExternalResourceOnly;
   const isTsVideo = useMemo(() => {
     const rawPath = currentLesson?.filePath || resolvedVideoSrc;
     if (!rawPath) return false;
@@ -474,6 +578,8 @@ export function CoursePlayer({
       mpegtsPlayerRef.current = null;
     }
 
+    let disposed = false;
+
     if (isTsVideo && resolvedVideoSrc && videoRef.current && mpegts.isSupported()) {
       if (mpegts.LoggingControl) {
         mpegts.LoggingControl.applyConfig({
@@ -484,16 +590,27 @@ export function CoursePlayer({
           enableWarn: false,
         });
       }
+      // Blob WebWorkers cannot resolve root-relative URLs without an explicit origin.
+      const mpegtsUrl =
+        typeof window !== "undefined"
+          ? new URL(resolvedVideoSrc, window.location.href).href
+          : resolvedVideoSrc;
       const player = mpegts.createPlayer(
-        { type: "mpegts", url: resolvedVideoSrc, isLive: false },
+        { type: "mpegts", url: mpegtsUrl, isLive: false },
         { enableWorker: true, lazyLoadMaxDuration: 180, seekType: "range" },
       );
+      player.on(mpegts.Events.ERROR, (errorType, errorDetail) => {
+        if (disposed) return;
+        console.error("mpegts playback error:", errorType, errorDetail);
+        toast.error("Failed to load video stream.");
+      });
       player.attachMediaElement(videoRef.current);
       player.load();
       mpegtsPlayerRef.current = player;
     }
 
     return () => {
+      disposed = true;
       if (mpegtsPlayerRef.current) {
         try {
           mpegtsPlayerRef.current.unload();
@@ -679,6 +796,7 @@ export function CoursePlayer({
       if (!detail?.videoId || detail.videoId === currentLesson?.lessonId) {
         const nextSelection = detail?.trackId || detail?.targetLang;
         if (nextSelection) {
+          captionsExplicitlyOffRef.current = false;
           pendingTrackSelectionRef.current = nextSelection;
           setTranscriptLang(nextSelection);
           setSubtitleTrack(nextSelection);
@@ -799,8 +917,13 @@ export function CoursePlayer({
           });
 
           setSubtitleTrack((prev) => {
-            if (resolvedPending) return resolvedPending;
-            if (prev === "off") return tracks[0]?.id ?? "off";
+            if (resolvedPending) {
+              captionsExplicitlyOffRef.current = false;
+              return resolvedPending;
+            }
+            if (prev === "off") {
+              return captionsExplicitlyOffRef.current ? "off" : (tracks[0]?.id ?? "off");
+            }
             const kept = resolveBestTrackId(tracks, prev);
             if (kept) return kept;
             const fromPrimary = resolveBestTrackId(tracks, currentLesson.primaryTranscript);
@@ -980,6 +1103,151 @@ export function CoursePlayer({
     },
     [effectiveDuration, selectedDubLang],
   );
+  const syncMediaPlaybackRate = useCallback((rate: number) => {
+    const v = videoRef.current;
+    if (v && v.playbackRate !== rate) v.playbackRate = rate;
+    const a = dubAudioRef.current;
+    if (a && a.playbackRate !== rate) a.playbackRate = rate;
+  }, []);
+
+  const updateBoostState = useCallback(
+    (source: "space" | "pointer", active: boolean) => {
+      if (source === "space") {
+        spaceBoostActiveRef.current = active;
+      } else {
+        pointerBoostActiveRef.current = active;
+      }
+      const nextActive = spaceBoostActiveRef.current || pointerBoostActiveRef.current;
+      const nextRate = nextActive ? HOLD_SPEED_RATE : speedRef.current;
+      effectiveSpeedRef.current = nextRate;
+      syncMediaPlaybackRate(nextRate);
+      setSpeedBoostActive(nextActive);
+    },
+    [syncMediaPlaybackRate],
+  );
+
+  const clearSpaceHold = useCallback(
+    (restoreRate = true) => {
+      if (spaceHoldTimerRef.current !== null) {
+        window.clearTimeout(spaceHoldTimerRef.current);
+        spaceHoldTimerRef.current = null;
+      }
+      spacePressPendingRef.current = false;
+      if (spaceBoostActiveRef.current) {
+        if (restoreRate) {
+          updateBoostState("space", false);
+        } else {
+          spaceBoostActiveRef.current = false;
+        }
+      }
+    },
+    [updateBoostState],
+  );
+
+  const clearPointerHold = useCallback(
+    (restoreRate = true) => {
+      if (pointerHoldTimerRef.current !== null) {
+        window.clearTimeout(pointerHoldTimerRef.current);
+        pointerHoldTimerRef.current = null;
+      }
+      activePointerIdRef.current = null;
+      activePointerTypeRef.current = "";
+      if (pointerBoostActiveRef.current) {
+        if (restoreRate) {
+          updateBoostState("pointer", false);
+        } else {
+          pointerBoostActiveRef.current = false;
+        }
+      }
+    },
+    [updateBoostState],
+  );
+
+  const clearAllSpeedBoosts = useCallback(() => {
+    clearSpaceHold(true);
+    clearPointerHold(true);
+  }, [clearPointerHold, clearSpaceHold]);
+
+  const endPointerHold = useCallback(
+    (pointerId?: number) => {
+      if (pointerId !== undefined && activePointerIdRef.current !== pointerId) return;
+      if (pointerBoostActiveRef.current) {
+        suppressNextVideoClickUntilRef.current = performance.now() + 180;
+      }
+      clearPointerHold(true);
+    },
+    [clearPointerHold],
+  );
+
+  const focusVideoViewport = useCallback(() => {
+    frameRef.current?.focus({ preventScroll: true });
+  }, []);
+
+  const clearShortcutHud = useCallback(() => {
+    if (shortcutHudTimerRef.current !== null) {
+      window.clearTimeout(shortcutHudTimerRef.current);
+      shortcutHudTimerRef.current = null;
+    }
+    setShortcutHud(null);
+  }, []);
+
+  const showShortcutHud = useCallback((icon: ShortcutHudIcon, label: string) => {
+    if (shortcutHudTimerRef.current !== null) {
+      window.clearTimeout(shortcutHudTimerRef.current);
+    }
+    setShortcutHud({ icon, label, id: Date.now() });
+    shortcutHudTimerRef.current = window.setTimeout(() => {
+      shortcutHudTimerRef.current = null;
+      setShortcutHud(null);
+    }, 900);
+  }, []);
+
+  useEffect(() => () => clearShortcutHud(), [clearShortcutHud]);
+
+  const handleVideoStagePointerDown = useCallback(
+    (e: ReactPointerEvent<HTMLDivElement>) => {
+      if (e.pointerType === "mouse" && e.button !== 0) return;
+      if (document.querySelector('[role="dialog"]')) return;
+      if (!isPlayerInteractiveChildTarget(e.target)) {
+        focusVideoViewport();
+      }
+      if (!canHoldBoostVideo || activePointerIdRef.current !== null) return;
+      const v = videoRef.current;
+      if (!v || v.paused || v.ended) return;
+      if (anyMenuOpenRef.current || performance.now() - lastMenuDismissAtRef.current < 220) {
+        return;
+      }
+      if (isPlayerInteractiveChildTarget(e.target)) return;
+
+      const pointerId = e.pointerId;
+      activePointerIdRef.current = pointerId;
+      activePointerTypeRef.current = e.pointerType;
+      if (pointerHoldTimerRef.current !== null) {
+        window.clearTimeout(pointerHoldTimerRef.current);
+      }
+      pointerHoldTimerRef.current = window.setTimeout(() => {
+        pointerHoldTimerRef.current = null;
+        const media = videoRef.current;
+        if (
+          activePointerIdRef.current !== pointerId ||
+          !media ||
+          media.paused ||
+          media.ended ||
+          anyMenuOpenRef.current ||
+          document.querySelector('[role="dialog"]')
+        ) {
+          if (activePointerIdRef.current === pointerId) {
+            activePointerIdRef.current = null;
+            activePointerTypeRef.current = "";
+          }
+          return;
+        }
+        updateBoostState("pointer", true);
+      }, POINTER_HOLD_DELAY_MS);
+    },
+    [canHoldBoostVideo, focusVideoViewport, updateBoostState],
+  );
+
   const togglePlay = () => {
     const v = videoRef.current;
     if (!v) return;
@@ -989,11 +1257,67 @@ export function CoursePlayer({
       v.pause();
     }
   };
+  const togglePlayWithHud = () => {
+    const v = videoRef.current;
+    if (!v) return;
+    const willPlay = v.paused;
+    togglePlay();
+    showShortcutHud(willPlay ? "play" : "pause", willPlay ? "Play" : "Pause");
+  };
   const handleVideoStageClick = () => {
+    if (performance.now() < suppressNextVideoClickUntilRef.current) {
+      suppressNextVideoClickUntilRef.current = 0;
+      return;
+    }
     if (anyMenuOpenRef.current || performance.now() - lastMenuDismissAtRef.current < 220) {
       return;
     }
     togglePlay();
+  };
+  const toggleCaptions = () => {
+    if (subtitleTrack !== "off") {
+      captionsExplicitlyOffRef.current = true;
+      setSubtitleTrack("off");
+      showShortcutHud("captions-off", "Subtitles off");
+      return;
+    }
+    const candidate =
+      resolveBestTrackId(availableTracks, lastSubtitleRef.current) ??
+      resolveBestTrackId(availableTracks, spokenCourseLang) ??
+      availableTracks.find((t) => t.is_master)?.id ??
+      availableTracks[0]?.id;
+    if (!candidate) {
+      showShortcutHud("captions-off", "No subtitles");
+      return;
+    }
+    captionsExplicitlyOffRef.current = false;
+    setSubtitleTrack(candidate);
+    setTranscriptLang(candidate);
+    const chosen = availableTracks.find((t) => t.id === candidate);
+    showShortcutHud("captions-on", chosen ? `Subtitles · ${chosen.short}` : "Subtitles on");
+  };
+  const toggleMute = () => {
+    const nextMuted = !mutedRef.current;
+    setMuted(nextMuted);
+    showShortcutHud(
+      nextMuted ? "mute" : "volume",
+      nextMuted ? "Muted" : `${Math.round(volumeRef.current * 100)}%`,
+    );
+  };
+  const toggleSidebarPanel = () => {
+    setPanelOpen((prev) => {
+      const next = !prev;
+      showShortcutHud(
+        next ? "sidebar-show" : "sidebar-hide",
+        next ? "Default view" : "Theater view",
+      );
+      return next;
+    });
+  };
+  const stepFrame = (direction: -1 | 1) => {
+    const v = videoRef.current;
+    if (!v || !v.paused) return;
+    seek((v.currentTime || time) + direction * (1 / 30));
   };
   const playVideo = useCallback(() => {
     videoRef.current?.play().catch(() => {});
@@ -1050,16 +1374,18 @@ export function CoursePlayer({
     return canvas.toDataURL("image/jpeg", 0.88);
   }, [course.title, currentLesson?.title, time]);
 
-  const togglePiP = async () => {
+  const togglePiP = async (withHud = false) => {
     const v = videoRef.current;
     if (!v) return;
     try {
       if (document.pictureInPictureElement) {
         await document.exitPictureInPicture();
         setIsPiP(false);
+        if (withHud) showShortcutHud("pip", "Exit PiP");
       } else if (document.pictureInPictureEnabled) {
         await v.requestPictureInPicture();
         setIsPiP(true);
+        if (withHud) showShortcutHud("pip", "Picture-in-Picture");
       }
     } catch {
       // Ignore PiP errors when media is not yet ready
@@ -1074,6 +1400,21 @@ export function CoursePlayer({
     } else {
       el.requestFullscreen?.();
     }
+  };
+
+  const handleVideoStageDoubleClick = (e: ReactMouseEvent<HTMLDivElement>) => {
+    if (curriculumLoading || !currentLesson || isEmbeddedPlayer || isExternalResourceOnly) return;
+    if (anyMenuOpenRef.current || performance.now() - lastMenuDismissAtRef.current < 220) return;
+    if (document.querySelector('[role="dialog"]')) return;
+    const target = e.target;
+    if (
+      target instanceof Element &&
+      !target.closest('[data-stage-play-overlay="true"]') &&
+      isPlayerInteractiveChildTarget(target)
+    ) {
+      return;
+    }
+    toggleFullscreen();
   };
 
   useEffect(() => {
@@ -1093,7 +1434,7 @@ export function CoursePlayer({
       v.removeEventListener("enterpictureinpicture", onEnterPiP);
       v.removeEventListener("leavepictureinpicture", onLeavePiP);
     };
-  }, []);
+  }, [curriculumLoading, isEmbeddedPlayer, isExternalResourceOnly, currentLesson?.lessonId]);
 
   useEffect(() => {
     const isDubActive = !isEmbeddedPlayer && selectedDubLang !== "original";
@@ -1107,13 +1448,18 @@ export function CoursePlayer({
       a.volume = volume;
       a.muted = muted;
     }
-  }, [volume, muted, selectedDubLang, isEmbeddedPlayer]);
+  }, [
+    volume,
+    muted,
+    selectedDubLang,
+    isEmbeddedPlayer,
+    isExternalResourceOnly,
+    curriculumLoading,
+    currentLesson?.lessonId,
+  ]);
   useEffect(() => {
-    const v = videoRef.current;
-    if (v) v.playbackRate = speed;
-    const a = dubAudioRef.current;
-    if (a) a.playbackRate = speed;
-  }, [speed, selectedDubLang]);
+    syncMediaPlaybackRate(effectiveSpeed);
+  }, [effectiveSpeed, selectedDubLang, currentLesson?.lessonId, syncMediaPlaybackRate]);
 
   useEffect(() => {
     const lessonId = currentLesson?.lessonId;
@@ -1171,7 +1517,7 @@ export function CoursePlayer({
     v.muted = true;
     a.volume = volumeRef.current;
     a.muted = mutedRef.current;
-    a.playbackRate = v.playbackRate || speedRef.current;
+    a.playbackRate = v.playbackRate || effectiveSpeedRef.current;
     a.src = srcUrl;
     a.load();
 
@@ -1189,7 +1535,7 @@ export function CoursePlayer({
 
     const handlePlay = () => {
       v.muted = true;
-      a.playbackRate = v.playbackRate || speedRef.current;
+      a.playbackRate = v.playbackRate || effectiveSpeedRef.current;
       syncTimeFromVideo();
       if (a.readyState >= 1 && (v.currentTime || 0) < (a.duration || Infinity) - 0.15) {
         void a.play().catch(() => {});
@@ -1206,7 +1552,7 @@ export function CoursePlayer({
     };
 
     const handleRateChange = () => {
-      a.playbackRate = v.playbackRate || speedRef.current;
+      a.playbackRate = v.playbackRate || effectiveSpeedRef.current;
     };
 
     const handleTimeUpdate = () => {
@@ -1229,7 +1575,7 @@ export function CoursePlayer({
     const handleAudioReady = () => {
       a.volume = volumeRef.current;
       a.muted = mutedRef.current;
-      a.playbackRate = v.playbackRate || speedRef.current;
+      a.playbackRate = v.playbackRate || effectiveSpeedRef.current;
       syncTimeFromVideo();
       if (!v.paused && !v.ended && v.currentTime < (a.duration || Infinity) - 0.15) {
         void a.play().catch(() => {});
@@ -1490,124 +1836,244 @@ export function CoursePlayer({
     if (subtitleTrack !== "off") lastSubtitleRef.current = subtitleTrack;
   }, [subtitleTrack]);
 
+  const updateCaptionAppearance = useCallback(
+    (
+      patch: Partial<{
+        captionFontSize: CaptionFontSize;
+        captionBackground: boolean;
+        captionPosition: CaptionPosition | null;
+      }>,
+    ) => {
+      if (patch.captionFontSize !== undefined) {
+        setCaptionFontSize(patch.captionFontSize);
+      }
+      if (patch.captionBackground !== undefined) {
+        setCaptionBackground(patch.captionBackground);
+      }
+      if (patch.captionPosition !== undefined) {
+        setCaptionPosition(patch.captionPosition);
+      }
+      writeAppSettings({ ...readAppSettings(), ...patch });
+    },
+    [],
+  );
+
+  const hasNativeVideoControls = Boolean(
+    !isEmbeddedPlayer && !isExternalResourceOnly && currentLesson,
+  );
+
   useEffect(() => {
-    setShortcutsEnabled(arePlayerShortcutsEnabled());
-    const syncShortcuts = () => setShortcutsEnabled(arePlayerShortcutsEnabled());
-    window.addEventListener(SETTINGS_CHANGED_EVENT, syncShortcuts);
-    return () => window.removeEventListener(SETTINGS_CHANGED_EVENT, syncShortcuts);
+    const syncAppSettings = () => {
+      setShortcutsEnabled(arePlayerShortcutsEnabled());
+      const next = readAppSettings();
+      setCaptionFontSize(next.captionFontSize);
+      setCaptionBackground(next.captionBackground);
+      setCaptionPosition(next.captionPosition);
+    };
+    syncAppSettings();
+    window.addEventListener(SETTINGS_CHANGED_EVENT, syncAppSettings);
+    return () => window.removeEventListener(SETTINGS_CHANGED_EVENT, syncAppSettings);
   }, []);
 
+  useEffect(() => {
+    const el = controlsContentRef.current;
+    if (!hasNativeVideoControls || !el) return;
+
+    const measure = () => {
+      const nextHeight = Math.round(el.getBoundingClientRect().height);
+      if (nextHeight > 0) {
+        setControlsBarHeight((prev) => (prev === nextHeight ? prev : nextHeight));
+      }
+    };
+
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [hasNativeVideoControls]);
+
   const shortcutHandlerRef = useRef<(e: KeyboardEvent) => void>(() => {});
+  const shortcutKeyUpHandlerRef = useRef<(e: KeyboardEvent) => void>(() => {});
   shortcutHandlerRef.current = (e: KeyboardEvent) => {
     if (!shortcutsEnabled || e.defaultPrevented) return;
     if (e.ctrlKey || e.metaKey || e.altKey) return;
     if (document.querySelector('[role="dialog"]')) return;
 
-    const target = e.target as HTMLElement | null;
-    if (target) {
-      if (
-        target.isContentEditable ||
-        target.tagName === "INPUT" ||
-        target.tagName === "TEXTAREA" ||
-        target.tagName === "SELECT" ||
-        target.closest('[role="slider"]')
-      ) {
-        return;
-      }
-      if (
-        e.key === " " &&
-        target.closest(
-          'button, a[href], [role="button"], [role="menuitem"], [role="switch"], [role="tab"]',
-        )
-      ) {
-        return;
-      }
-    }
+    const target = e.target;
+    if (isPlayerEditableTarget(target)) return;
+    if (isPlayerSliderTarget(target) && isSliderOwnedNavigationKey(e)) return;
 
-    const lower = e.key.toLowerCase();
     const currentSeconds = videoRef.current?.currentTime ?? time;
 
-    if (e.key === " " || (!e.shiftKey && lower === "k")) {
+    if (!e.shiftKey && matchesShortcutKey(e, "t", "KeyT")) {
       e.preventDefault();
-      togglePlay();
+      toggleSidebarPanel();
+      return;
+    }
+    if (!e.shiftKey && matchesShortcutKey(e, "f", "KeyF")) {
+      e.preventDefault();
+      toggleFullscreen();
+      return;
+    }
+    if (e.shiftKey && matchesShortcutKey(e, "p", "KeyP")) {
+      e.preventDefault();
+      goTo(active - 1);
+      return;
+    }
+    if (e.shiftKey && matchesShortcutKey(e, "n", "KeyN")) {
+      e.preventDefault();
+      goTo(active + 1);
+      return;
+    }
+
+    if (!hasNativeVideoControls) return;
+
+    if (e.key === " " || e.code === "Space") {
+      if (
+        anyMenuOpenRef.current ||
+        (target instanceof Element &&
+          target.closest(
+            'button, a[href], [role="button"], [role="menuitem"], [role="menuitemradio"], [role="switch"], [role="tab"], [role="menu"], [data-radix-popper-content-wrapper]',
+          ))
+      ) {
+        return;
+      }
+      e.preventDefault();
+      if (e.repeat) return;
+
+      if (!canHoldBoostVideo) {
+        togglePlayWithHud();
+        return;
+      }
+
+      spacePressPendingRef.current = true;
+      if (spaceHoldTimerRef.current !== null) {
+        window.clearTimeout(spaceHoldTimerRef.current);
+      }
+      spaceHoldTimerRef.current = window.setTimeout(() => {
+        spaceHoldTimerRef.current = null;
+        spacePressPendingRef.current = false;
+        const v = videoRef.current;
+        if (
+          !v ||
+          !shortcutsEnabled ||
+          anyMenuOpenRef.current ||
+          document.querySelector('[role="dialog"]') ||
+          isPlayerEditableTarget(document.activeElement)
+        ) {
+          return;
+        }
+        updateBoostState("space", true);
+        if (v.paused && !v.ended) {
+          void v.play().catch(() => {});
+        }
+      }, SPACE_HOLD_DELAY_MS);
+      return;
+    }
+    if (!e.shiftKey && matchesShortcutKey(e, "k", "KeyK")) {
+      e.preventDefault();
+      togglePlayWithHud();
+      return;
+    }
+    if (!e.shiftKey && matchesShortcutKey(e, "c", "KeyC")) {
+      e.preventDefault();
+      toggleCaptions();
+      return;
+    }
+    if (!e.shiftKey && matchesShortcutKey(e, "m", "KeyM")) {
+      e.preventDefault();
+      toggleMute();
+      return;
+    }
+    if (!e.shiftKey && (matchesShortcutKey(e, "p", "KeyP") || matchesShortcutKey(e, "i", "KeyI"))) {
+      e.preventDefault();
+      void togglePiP(true);
       return;
     }
     if (!e.shiftKey && e.key === "ArrowLeft") {
       e.preventDefault();
       seek(currentSeconds - 5);
+      showShortcutHud("seek-back", "-5s");
       return;
     }
     if (!e.shiftKey && e.key === "ArrowRight") {
       e.preventDefault();
       seek(currentSeconds + 5);
+      showShortcutHud("seek-forward", "+5s");
       return;
     }
-    if (!e.shiftKey && lower === "j") {
+    if (!e.shiftKey && matchesShortcutKey(e, "j", "KeyJ")) {
+      e.preventDefault();
       seek(currentSeconds - 10);
+      showShortcutHud("seek-back", "-10s");
       return;
     }
-    if (!e.shiftKey && lower === "l") {
+    if (!e.shiftKey && matchesShortcutKey(e, "l", "KeyL")) {
+      e.preventDefault();
       seek(currentSeconds + 10);
+      showShortcutHud("seek-forward", "+10s");
       return;
     }
     if (!e.shiftKey && e.key === "ArrowUp") {
       e.preventDefault();
+      const nextVol = Math.min(1, Number((volumeRef.current + 0.05).toFixed(2)));
       setMuted(false);
-      setVolume((v) => Math.min(1, Number((v + 0.05).toFixed(2))));
+      setVolume(nextVol);
+      showShortcutHud("volume", `${Math.round(nextVol * 100)}%`);
       return;
     }
     if (!e.shiftKey && e.key === "ArrowDown") {
       e.preventDefault();
-      setVolume((v) => Math.max(0, Number((v - 0.05).toFixed(2))));
+      const nextVol = Math.max(0, Number((volumeRef.current - 0.05).toFixed(2)));
+      setVolume(nextVol);
+      showShortcutHud(nextVol === 0 ? "mute" : "volume", `${Math.round(nextVol * 100)}%`);
       return;
     }
-    if (!e.shiftKey && lower === "m") {
-      setMuted((m) => !m);
-      return;
-    }
-    if (!e.shiftKey && lower === "c") {
-      if (subtitleTrack !== "off") {
-        setSubtitleTrack("off");
-      } else {
-        const candidate =
-          resolveBestTrackId(availableTracks, lastSubtitleRef.current) ??
-          resolveBestTrackId(availableTracks, spokenCourseLang) ??
-          availableTracks.find((t) => t.is_master)?.id ??
-          availableTracks[0]?.id;
-        if (candidate) {
-          setSubtitleTrack(candidate);
-          setTranscriptLang(candidate);
-        }
-      }
-      return;
-    }
-    if (!e.shiftKey && lower === "p") {
-      void togglePiP();
-      return;
-    }
-    if (e.shiftKey && lower === "p") {
-      goTo(active - 1);
-      return;
-    }
-    if (e.shiftKey && lower === "n") {
-      goTo(active + 1);
-      return;
-    }
-    if (!e.shiftKey && lower === "f") {
-      toggleFullscreen();
-      return;
-    }
-    if (e.key === "<" || e.key === ">") {
-      const speeds = [0.75, 1, 1.25, 1.5, 2] as const;
-      const idx = speeds.findIndex((s) => s === speed);
+    if (
+      e.key === "<" ||
+      e.key === ">" ||
+      (e.shiftKey && (e.code === "Comma" || e.code === "Period"))
+    ) {
+      e.preventDefault();
+      const isFaster = e.key === ">" || e.code === "Period";
+      const idx = PLAYER_SPEED_OPTIONS.findIndex((s) => s === speed);
       const currentIdx = idx === -1 ? 1 : idx;
-      const nextIdx =
-        e.key === ">" ? Math.min(speeds.length - 1, currentIdx + 1) : Math.max(0, currentIdx - 1);
-      setSpeed(speeds[nextIdx]!);
+      const nextIdx = isFaster
+        ? Math.min(PLAYER_SPEED_OPTIONS.length - 1, currentIdx + 1)
+        : Math.max(0, currentIdx - 1);
+      const nextSpeed = PLAYER_SPEED_OPTIONS[nextIdx]!;
+      setSpeed(nextSpeed);
+      showShortcutHud("speed", `${nextSpeed}×`);
       return;
     }
-    if (!e.shiftKey && /^[0-9]$/.test(e.key) && effectiveDuration > 0) {
-      seek(effectiveDuration * (Number(e.key) / 10));
+    if (!e.shiftKey && (e.key === "," || e.code === "Comma")) {
+      e.preventDefault();
+      stepFrame(-1);
+      return;
+    }
+    if (!e.shiftKey && (e.key === "." || e.code === "Period")) {
+      e.preventDefault();
+      stepFrame(1);
+      return;
+    }
+    if (!e.shiftKey && e.key === "Home" && effectiveDuration > 0) {
+      e.preventDefault();
+      seek(0);
+      showShortcutHud("seek-back", "0%");
+      return;
+    }
+    if (!e.shiftKey && e.key === "End" && effectiveDuration > 0) {
+      e.preventDefault();
+      seek(effectiveDuration);
+      showShortcutHud("seek-forward", "100%");
+      return;
+    }
+    const digit = matchesDigitShortcut(e);
+    if (digit !== null && effectiveDuration > 0) {
+      e.preventDefault();
+      seek(effectiveDuration * (digit / 10));
+      showShortcutHud(digit === 0 ? "seek-back" : "seek-forward", `${digit * 10}%`);
     }
   };
 
@@ -1664,6 +2130,7 @@ export function CoursePlayer({
 
       const uploadedLang = data.language || "en";
       const uploadedTrackId = data.track?.id || `${uploadedLang}:uploaded`;
+      captionsExplicitlyOffRef.current = false;
       setSubtitleTrack(uploadedTrackId);
       setTranscriptLang(uploadedTrackId);
       setTranscriptRefreshTick((n) => n + 1);
@@ -1769,11 +2236,83 @@ export function CoursePlayer({
     [currentLesson, selectedDubLang],
   );
 
+  shortcutKeyUpHandlerRef.current = (e: KeyboardEvent) => {
+    if (e.key !== " " && e.code !== "Space") return;
+    const wasPending = spacePressPendingRef.current;
+    const wasBoosting = spaceBoostActiveRef.current;
+    if (!wasPending && !wasBoosting) return;
+
+    e.preventDefault();
+    clearSpaceHold(true);
+
+    if (!wasBoosting && shortcutsEnabled && !document.querySelector('[role="dialog"]')) {
+      if (!isPlayerEditableTarget(document.activeElement)) {
+        togglePlayWithHud();
+      }
+    }
+  };
+
+  useEffect(() => {
+    if (!shortcutsEnabled) clearSpaceHold(true);
+  }, [shortcutsEnabled, clearSpaceHold]);
+
+  useEffect(() => {
+    clearAllSpeedBoosts();
+    clearShortcutHud();
+  }, [currentLesson?.lessonId, canHoldBoostVideo, clearAllSpeedBoosts, clearShortcutHud]);
+
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => shortcutHandlerRef.current(e);
+    const onKeyUp = (e: KeyboardEvent) => shortcutKeyUpHandlerRef.current(e);
+    const onPointerUp = (e: PointerEvent) => {
+      endPointerHold(e.pointerId);
+      if (
+        e.pointerType === "mouse" &&
+        document.activeElement instanceof HTMLElement &&
+        isPlayerSliderTarget(document.activeElement)
+      ) {
+        requestAnimationFrame(() => {
+          if (
+            document.activeElement instanceof HTMLElement &&
+            isPlayerSliderTarget(document.activeElement)
+          ) {
+            focusVideoViewport();
+          }
+        });
+      }
+    };
+    const onPointerCancel = (e: PointerEvent) => endPointerHold(e.pointerId);
+    const onPointerMove = (e: PointerEvent) => {
+      if (
+        e.pointerType === "mouse" &&
+        activePointerIdRef.current === e.pointerId &&
+        (e.buttons & 1) === 0
+      ) {
+        endPointerHold(e.pointerId);
+      }
+    };
+    const onWindowBlur = () => clearAllSpeedBoosts();
+    const onVisibilityChange = () => {
+      if (document.hidden) clearAllSpeedBoosts();
+    };
     window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, []);
+    window.addEventListener("keyup", onKeyUp);
+    window.addEventListener("pointerup", onPointerUp);
+    window.addEventListener("pointercancel", onPointerCancel);
+    window.addEventListener("pointermove", onPointerMove, { passive: true });
+    window.addEventListener("blur", onWindowBlur);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("pointerup", onPointerUp);
+      window.removeEventListener("pointercancel", onPointerCancel);
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("blur", onWindowBlur);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      clearAllSpeedBoosts();
+    };
+  }, [clearAllSpeedBoosts, endPointerHold, focusVideoViewport]);
 
   return (
     <div className="relative flex flex-col gap-5 overflow-x-hidden p-4 sm:p-5 lg:h-dvh lg:flex-row lg:overflow-hidden">
@@ -1788,7 +2327,22 @@ export function CoursePlayer({
           />
           <div
             ref={frameRef}
+            tabIndex={-1}
             onDragStart={(e) => e.preventDefault()}
+            onPointerDown={handleVideoStagePointerDown}
+            onDoubleClick={handleVideoStageDoubleClick}
+            onPointerLeave={() => {
+              if (!pointerBoostActiveRef.current) {
+                clearPointerHold(false);
+              }
+            }}
+            onContextMenu={(e) => {
+              if (pointerBoostActiveRef.current && activePointerTypeRef.current === "touch") {
+                e.preventDefault();
+              } else {
+                clearPointerHold(true);
+              }
+            }}
             onMouseEnter={() => {
               isPointerInsidePlayerRef.current = true;
               wakeControls();
@@ -1805,7 +2359,7 @@ export function CoursePlayer({
                 setControlsActive(false);
               }
             }}
-            className="group relative z-10 min-h-0 w-full flex-1 select-none overflow-hidden rounded-xl bg-player shadow-workspace max-lg:aspect-video"
+            className="group relative z-10 min-h-0 w-full flex-1 select-none overflow-hidden rounded-xl bg-player shadow-workspace outline-none focus:outline-none max-lg:aspect-video"
           >
             {curriculumLoading ? (
               <div className="flex size-full items-center justify-center text-sm text-white/70">
@@ -1824,7 +2378,7 @@ export function CoursePlayer({
               <iframe
                 ref={ytIframeRef}
                 id={`yt-player-${currentLesson.lessonId}`}
-                key={currentLesson.lessonId}
+                key={`yt-${currentLesson.lessonId}`}
                 src={`https://www.youtube.com/embed/${encodeURIComponent(youtubeId)}?enablejsapi=1&controls=1&modestbranding=1&rel=0${ytStartCacheRef.current.startSec > 2 ? `&start=${ytStartCacheRef.current.startSec}` : ""}&origin=${typeof window !== "undefined" ? encodeURIComponent(window.location.origin) : ""}`}
                 title={currentLesson.title}
                 className="size-full border-0"
@@ -1839,7 +2393,7 @@ export function CoursePlayer({
               />
             ) : driveFileId ? (
               <iframe
-                key={driveFileId}
+                key={`drive-${driveFileId}`}
                 src={`https://drive.google.com/file/d/${encodeURIComponent(driveFileId)}/preview`}
                 title={currentLesson.title}
                 className="size-full border-0"
@@ -1875,7 +2429,7 @@ export function CoursePlayer({
             ) : (
               <video
                 ref={videoRef}
-                key={currentLesson.lessonId}
+                key={`video-${currentLesson.lessonId}`}
                 src={isTsVideo ? undefined : resolvedVideoSrc || undefined}
                 playsInline
                 draggable={false}
@@ -1920,6 +2474,7 @@ export function CoursePlayer({
                   }
                 }}
                 onPause={(e) => {
+                  clearAllSpeedBoosts();
                   setPlaying(false);
                   pauseActiveSessionSlice(studySessionRef.current);
                   const pos = e.currentTarget.currentTime;
@@ -1971,6 +2526,7 @@ export function CoursePlayer({
                   }
                 }}
                 onEnded={(e) => {
+                  clearAllSpeedBoosts();
                   const endDur = e.currentTarget.duration || effectiveDuration;
                   if (studySessionRef.current && endDur > 0) {
                     studySessionRef.current.latestPosition = endDur;
@@ -1990,29 +2546,61 @@ export function CoursePlayer({
               />
             )}
 
-            {!isEmbeddedPlayer && !isExternalResourceOnly && activeCaptionCue && (
+            {canHoldBoostVideo && speedBoostActive && (
               <div
-                dir={activePlayerTrack?.rtl ? "rtl" : "ltr"}
-                className="pointer-events-none absolute inset-x-6 bottom-20 flex justify-center"
+                aria-live="polite"
+                className="pointer-events-none absolute left-1/2 top-4 z-30 flex -translate-x-1/2 select-none items-center gap-1.5 rounded-full bg-black/80 px-3.5 py-1.5 text-xs font-semibold tabular-nums text-white shadow-workspace"
               >
-                <span className="max-w-2xl rounded-md bg-black/75 px-3 py-1.5 text-center text-sm font-medium leading-snug text-white backdrop-blur-sm">
-                  {activeCaptionCue.text}
-                </span>
+                <span>2×</span>
+                <FastForwardIcon className="size-3.5" />
               </div>
             )}
 
-            {!isEmbeddedPlayer && !isExternalResourceOnly && currentLesson && !playing && (
+            {shortcutHud && !(canHoldBoostVideo && speedBoostActive) && (
+              <div
+                key={shortcutHud.id}
+                aria-live="polite"
+                className="pointer-events-none absolute left-1/2 top-4 z-30 flex -translate-x-1/2 select-none items-center gap-1.5 rounded-full bg-black/80 px-3.5 py-1.5 text-xs font-semibold tabular-nums text-white shadow-workspace"
+              >
+                {renderShortcutHudIcon(shortcutHud.icon, volume)}
+                <span>{shortcutHud.label}</span>
+              </div>
+            )}
+
+            {hasNativeVideoControls && (
+              <VideoCaptionOverlay
+                key={`captions-${currentLesson?.lessonId ?? "none"}`}
+                text={activeCaptionCue?.text ?? null}
+                rtl={Boolean(activePlayerTrack?.rtl)}
+                enabled={subtitleTrack !== "off" && Boolean(activePlayerTrack)}
+                controlsVisible={playerControlsVisible}
+                controlsHeight={controlsBarHeight}
+                fontSize={captionFontSize}
+                showBackground={captionBackground}
+                position={captionPosition}
+                onPositionChange={(nextPos) =>
+                  updateCaptionAppearance({ captionPosition: nextPos })
+                }
+              />
+            )}
+
+            {hasNativeVideoControls && !playing && (
               <button
                 type="button"
-                onClick={handleVideoStageClick}
+                data-stage-play-overlay="true"
+                onClick={() => {
+                  focusVideoViewport();
+                  handleVideoStageClick();
+                }}
                 aria-label="Play"
-                className="absolute left-1/2 top-1/2 flex size-16 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full bg-card/90 text-primary shadow-workspace backdrop-blur transition-transform hover:scale-105"
+                className="absolute left-1/2 top-1/2 z-20 flex size-14 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full bg-black/60 text-white transition-all duration-150 hover:scale-105 hover:bg-black/75 active:scale-95"
               >
-                <PlayIcon className="size-6" />
+                <PlayIcon className="size-6 translate-x-[1.5px]" />
               </button>
             )}
-            {!isEmbeddedPlayer && !isExternalResourceOnly && currentLesson && (
+            {hasNativeVideoControls && (
               <div
+                data-no-speed-boost="true"
                 onMouseEnter={() => {
                   isPointerOverControlsRef.current = true;
                   wakeControls();
@@ -2025,310 +2613,421 @@ export function CoursePlayer({
                 }}
                 onFocusCapture={wakeControls}
                 className={cn(
-                  "absolute inset-x-0 bottom-0 flex flex-col justify-end bg-gradient-to-t from-black/80 via-black/40 to-transparent px-4 pb-4 pt-12 text-white transition-opacity duration-200",
-                  !playing || anyPlayerMenuOpen || controlsActive
-                    ? "opacity-100"
-                    : "pointer-events-none opacity-0",
+                  "absolute inset-x-0 bottom-0 z-20 flex flex-col justify-end bg-gradient-to-t from-black/80 via-black/40 to-transparent px-4 pt-12 text-white transition-opacity duration-200",
+                  playerControlsVisible ? "opacity-100" : "pointer-events-none opacity-0",
                 )}
               >
-                {/* Timeline Progress Bar */}
-                <div className="group/timeline mb-3">
-                  <Slider
-                    value={[time]}
-                    max={effectiveDuration || 1}
-                    step={0.1}
-                    onValueChange={([t]) => seek(t ?? 0)}
-                    aria-label="Timeline"
-                    className="cursor-pointer [&_[role=slider]]:size-3 [&_[role=slider]]:border-0 [&_[role=slider]]:bg-white [&_[role=slider]]:opacity-0 [&_[role=slider]]:transition-opacity group-hover/timeline:[&_[role=slider]]:opacity-100 focus-within:[&_[role=slider]]:opacity-100 [&>span:first-child]:h-1 [&>span:first-child]:bg-white/30 [&>span:first-child>span]:bg-white"
-                  />
-                </div>
-
-                {/* Controls Bar */}
-                <div className="flex min-w-0 items-center justify-between gap-2">
-                  {/* Left Side Group */}
-                  <div className="flex min-w-0 items-center gap-2">
-                    {/* Play / Pause Button */}
-                    <button
-                      type="button"
-                      onClick={togglePlay}
-                      aria-label={playing ? "Pause" : "Play"}
-                      title={playing ? "Pause (Space)" : "Play (Space)"}
-                      className="flex size-10 shrink-0 items-center justify-center rounded-full bg-white/[0.08] text-white backdrop-blur-sm transition-all hover:bg-white/[0.15]"
-                    >
-                      {playing ? (
-                        <PauseIcon className="size-5" />
-                      ) : (
-                        <PlayIcon className="size-5 translate-x-[0.5px]" />
-                      )}
-                    </button>
-
-                    {/* Prev / Next Pill */}
-                    <div className="flex h-10 shrink-0 items-center gap-3 rounded-full bg-white/[0.08] px-3.5 text-white backdrop-blur-sm transition-all hover:bg-white/[0.12]">
-                      <button
-                        type="button"
-                        onClick={() => goTo(active - 1)}
-                        disabled={active === 0}
-                        aria-label="Previous lesson"
-                        title="Previous lesson (Shift+P)"
-                        className="p-1 transition-opacity hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-35"
-                      >
-                        <PrevIcon className="size-5" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => goTo(active + 1)}
-                        disabled={active === lessonTitles.length - 1}
-                        aria-label="Next lesson"
-                        title="Next lesson (Shift+N)"
-                        className="p-1 transition-opacity hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-35"
-                      >
-                        <NextIcon className="size-5" />
-                      </button>
-                    </div>
-
-                    {/* Volume Pill */}
-                    <div className="group/volume flex h-10 shrink-0 items-center rounded-full bg-white/[0.08] px-3 text-white backdrop-blur-sm transition-all hover:bg-white/[0.15] focus-within:bg-white/[0.15]">
-                      <button
-                        type="button"
-                        onClick={() => setMuted(!muted)}
-                        aria-label={muted ? "Unmute" : "Mute"}
-                        title={muted ? "Unmute (M)" : "Mute (M)"}
-                        className="p-1 transition-opacity hover:opacity-80"
-                      >
-                        <VolumeIcon volume={volume} muted={muted} />
-                      </button>
-                      <div className="w-0 overflow-hidden opacity-0 transition-all duration-200 group-hover/volume:ml-1.5 group-hover/volume:w-20 group-hover/volume:pr-1 group-hover/volume:opacity-100 group-focus-within/volume:ml-1.5 group-focus-within/volume:w-20 group-focus-within/volume:pr-1 group-focus-within/volume:opacity-100">
-                        <Slider
-                          value={[muted ? 0 : volume]}
-                          max={1}
-                          step={0.01}
-                          onValueChange={([v]) => {
-                            setVolume(v ?? 0);
-                            setMuted(false);
-                          }}
-                          aria-label="Volume"
-                          className="w-[72px] cursor-pointer [&_[role=slider]]:size-3 [&_[role=slider]]:border-0 [&_[role=slider]]:bg-white [&>span:first-child]:h-1 [&>span:first-child]:bg-white/30 [&>span:first-child>span]:bg-white"
-                        />
-                      </div>
-                    </div>
-
-                    {/* Time Pill */}
-                    <button
-                      type="button"
-                      onClick={() => setRemainingTime(!remainingTime)}
-                      aria-label={remainingTime ? "Show elapsed time" : "Show remaining time"}
-                      title={remainingTime ? "Show elapsed time" : "Show remaining time"}
-                      className="flex h-10 shrink-0 select-none items-center rounded-full bg-white/[0.08] px-4 text-xs font-semibold tabular-nums text-white backdrop-blur-sm transition-all hover:bg-white/[0.15]"
-                    >
-                      {remainingTime
-                        ? `−${fmtTime(Math.max(0, effectiveDuration - time))}`
-                        : `${fmtTime(time)} / ${fmtTime(effectiveDuration)}`}
-                    </button>
+                <div ref={controlsContentRef} className="pb-4">
+                  {/* Timeline Progress Bar */}
+                  <div className="group/timeline mb-3">
+                    <Slider
+                      value={[time]}
+                      max={effectiveDuration || 1}
+                      step={0.1}
+                      onValueChange={([t]) => seek(t ?? 0)}
+                      aria-label="Timeline"
+                      className="cursor-pointer [&_[role=slider]]:size-3 [&_[role=slider]]:border-0 [&_[role=slider]]:bg-white [&_[role=slider]]:opacity-0 [&_[role=slider]]:transition-opacity group-hover/timeline:[&_[role=slider]]:opacity-100 focus-within:[&_[role=slider]]:opacity-100 [&>span:first-child]:h-1 [&>span:first-child]:bg-white/30 [&>span:first-child>span]:bg-white"
+                    />
                   </div>
 
-                  {/* Right Side Pill */}
-                  <div className="flex h-10 shrink-0 items-center gap-1 rounded-full bg-white/[0.08] px-3 py-1 text-white backdrop-blur-sm transition-all hover:bg-white/[0.12]">
-                    <Popover open={tracksMenuOpen} onOpenChange={setTracksMenuOpen}>
-                      <PopoverTrigger asChild>
+                  {/* Controls Bar */}
+                  <div className="flex min-w-0 items-center justify-between gap-2">
+                    {/* Left Side Group */}
+                    <div className="flex min-w-0 items-center gap-2">
+                      {/* Play / Pause Button */}
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          if (e.detail > 0) e.currentTarget.blur();
+                          togglePlay();
+                        }}
+                        aria-label={playing ? "Pause" : "Play"}
+                        title={playing ? "Pause (Space)" : "Play (Space)"}
+                        className="flex size-10 shrink-0 items-center justify-center rounded-full bg-white/[0.08] text-white transition-all hover:bg-white/[0.15]"
+                      >
+                        {playing ? (
+                          <PauseIcon className="size-5" />
+                        ) : (
+                          <PlayIcon className="size-5 translate-x-[0.5px]" />
+                        )}
+                      </button>
+
+                      {/* Prev / Next Pill */}
+                      <div className="flex h-10 shrink-0 items-center gap-3 rounded-full bg-white/[0.08] px-3.5 text-white transition-all hover:bg-white/[0.12]">
                         <button
                           type="button"
-                          aria-label="Audio and subtitles"
-                          title="Audio & Subtitles (C)"
-                          className="flex items-center justify-center rounded-full p-1.5 text-white opacity-75 transition-all hover:bg-white/15 hover:opacity-100 data-[state=open]:opacity-100 [&_svg]:size-5"
+                          onClick={(e) => {
+                            if (e.detail > 0) e.currentTarget.blur();
+                            goTo(active - 1);
+                          }}
+                          disabled={active === 0}
+                          aria-label="Previous lesson"
+                          title="Previous lesson (Shift+P)"
+                          className="p-1 transition-opacity hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-35"
                         >
-                          <MessageSquareText />
+                          <PrevIcon className="size-5" />
                         </button>
-                      </PopoverTrigger>
-                      <PopoverContent
-                        side="top"
-                        sideOffset={10}
-                        align="end"
-                        onCloseAutoFocus={(e) => e.preventDefault()}
-                        className="w-[340px] max-w-[calc(100vw-1rem)] sm:w-[390px] overflow-hidden rounded-lg border border-border/50 p-0"
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            if (e.detail > 0) e.currentTarget.blur();
+                            goTo(active + 1);
+                          }}
+                          disabled={active === lessonTitles.length - 1}
+                          aria-label="Next lesson"
+                          title="Next lesson (Shift+N)"
+                          className="p-1 transition-opacity hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-35"
+                        >
+                          <NextIcon className="size-5" />
+                        </button>
+                      </div>
+
+                      {/* Volume Pill */}
+                      <div className="group/volume flex h-10 shrink-0 items-center rounded-full bg-white/[0.08] px-3 text-white transition-all hover:bg-white/[0.15] focus-within:bg-white/[0.15]">
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            if (e.detail > 0) e.currentTarget.blur();
+                            setMuted(!muted);
+                          }}
+                          aria-label={muted ? "Unmute" : "Mute"}
+                          title={muted ? "Unmute (M)" : "Mute (M)"}
+                          className="p-1 transition-opacity hover:opacity-80"
+                        >
+                          <VolumeIcon volume={volume} muted={muted} />
+                        </button>
+                        <div className="w-0 overflow-hidden opacity-0 transition-all duration-200 group-hover/volume:ml-1.5 group-hover/volume:w-20 group-hover/volume:pr-1 group-hover/volume:opacity-100 group-focus-within/volume:ml-1.5 group-focus-within/volume:w-20 group-focus-within/volume:pr-1 group-focus-within/volume:opacity-100">
+                          <Slider
+                            value={[muted ? 0 : volume]}
+                            max={1}
+                            step={0.01}
+                            onValueChange={([v]) => {
+                              setVolume(v ?? 0);
+                              setMuted(false);
+                            }}
+                            aria-label="Volume"
+                            className="w-[72px] cursor-pointer [&_[role=slider]]:size-3 [&_[role=slider]]:border-0 [&_[role=slider]]:bg-white [&>span:first-child]:h-1 [&>span:first-child]:bg-white/30 [&>span:first-child>span]:bg-white"
+                          />
+                        </div>
+                      </div>
+
+                      {/* Time Pill */}
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          if (e.detail > 0) e.currentTarget.blur();
+                          setRemainingTime(!remainingTime);
+                        }}
+                        aria-label={remainingTime ? "Show elapsed time" : "Show remaining time"}
+                        title={remainingTime ? "Show elapsed time" : "Show remaining time"}
+                        className="flex h-10 shrink-0 select-none items-center rounded-full bg-white/[0.08] px-4 text-xs font-semibold tabular-nums text-white transition-all hover:bg-white/[0.15]"
                       >
-                        <div className="grid grid-cols-2 divide-x divide-border/50">
-                          <div className="flex min-w-0 flex-col">
-                            <div className="border-b border-border/50 px-3 py-2">
-                              <p className="text-xs font-semibold text-muted-foreground">Audio</p>
-                            </div>
-                            <div
-                              role="menu"
-                              aria-label="Audio tracks"
-                              className="max-h-56 space-y-0.5 overflow-y-auto p-1.5 custom-scrollbar-sm"
-                            >
-                              <button
-                                type="button"
-                                role="menuitemradio"
-                                aria-checked={selectedDubLang === "original"}
-                                onClick={() => {
-                                  lastDubLangRef.current = "original";
-                                  setSelectedDubLang("original");
-                                }}
-                                className={cn(
-                                  "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:text-accent-foreground focus-visible:outline-none",
-                                  selectedDubLang === "original" && "bg-accent/60 font-medium",
-                                )}
+                        {remainingTime
+                          ? `−${fmtTime(Math.max(0, effectiveDuration - time))}`
+                          : `${fmtTime(time)} / ${fmtTime(effectiveDuration)}`}
+                      </button>
+                    </div>
+
+                    {/* Right Side Pill */}
+                    <div className="flex h-10 shrink-0 items-center gap-1 rounded-full bg-white/[0.08] px-3 py-1 text-white transition-all hover:bg-white/[0.12]">
+                      <Popover open={tracksMenuOpen} onOpenChange={setTracksMenuOpen}>
+                        <PopoverTrigger asChild>
+                          <button
+                            type="button"
+                            aria-label="Audio and subtitles"
+                            title="Audio & Subtitles (C)"
+                            className="flex items-center justify-center rounded-full p-1.5 text-white opacity-75 transition-all hover:bg-white/15 hover:opacity-100 data-[state=open]:opacity-100 [&_svg]:size-5"
+                          >
+                            <MessageSquareText />
+                          </button>
+                        </PopoverTrigger>
+                        <PopoverContent
+                          side="top"
+                          sideOffset={10}
+                          align="end"
+                          onCloseAutoFocus={(e) => e.preventDefault()}
+                          className="w-[340px] max-w-[calc(100vw-1rem)] sm:w-[390px] overflow-hidden rounded-lg border border-border/50 p-0"
+                        >
+                          <div className="grid grid-cols-2 divide-x divide-border/50">
+                            <div className="flex min-w-0 flex-col">
+                              <div className="border-b border-border/50 px-3 py-2">
+                                <p className="text-xs font-semibold text-muted-foreground">Audio</p>
+                              </div>
+                              <div
+                                role="menu"
+                                aria-label="Audio tracks"
+                                className="max-h-56 space-y-0.5 overflow-y-auto p-1.5 custom-scrollbar-sm"
                               >
-                                <span className="truncate">
-                                  Original ({getLanguageName(spokenCourseLang)})
-                                </span>
-                                {selectedDubLang === "original" && (
-                                  <Check className="ml-auto size-4 shrink-0 text-primary" />
+                                <button
+                                  type="button"
+                                  role="menuitemradio"
+                                  aria-checked={selectedDubLang === "original"}
+                                  onClick={() => {
+                                    lastDubLangRef.current = "original";
+                                    setSelectedDubLang("original");
+                                  }}
+                                  className={cn(
+                                    "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:text-accent-foreground focus-visible:outline-none",
+                                    selectedDubLang === "original" && "bg-accent/60 font-medium",
+                                  )}
+                                >
+                                  <span className="truncate">
+                                    Original ({getLanguageName(spokenCourseLang)})
+                                  </span>
+                                  {selectedDubLang === "original" && (
+                                    <Check className="ml-auto size-4 shrink-0 text-primary" />
+                                  )}
+                                </button>
+                                {dubLanguages.map((lang) => {
+                                  const isSelected = selectedDubLang === lang;
+                                  return (
+                                    <button
+                                      key={lang}
+                                      type="button"
+                                      role="menuitemradio"
+                                      aria-checked={isSelected}
+                                      onClick={() => {
+                                        lastDubLangRef.current = lang;
+                                        setSelectedDubLang(lang);
+                                      }}
+                                      className={cn(
+                                        "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:text-accent-foreground focus-visible:outline-none",
+                                        isSelected && "bg-accent/60 font-medium",
+                                      )}
+                                    >
+                                      <span className="truncate">{getLanguageName(lang)}</span>
+                                      {isSelected && (
+                                        <Check className="ml-auto size-4 shrink-0 text-primary" />
+                                      )}
+                                    </button>
+                                  );
+                                })}
+                                {dubLanguages.length === 0 && (
+                                  <p className="px-2 py-1.5 text-xs text-muted-foreground">
+                                    No dubbed audio
+                                  </p>
                                 )}
-                              </button>
-                              {dubLanguages.map((lang) => {
-                                const isSelected = selectedDubLang === lang;
-                                return (
-                                  <button
-                                    key={lang}
-                                    type="button"
-                                    role="menuitemradio"
-                                    aria-checked={isSelected}
-                                    onClick={() => {
-                                      lastDubLangRef.current = lang;
-                                      setSelectedDubLang(lang);
-                                    }}
-                                    className={cn(
-                                      "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:text-accent-foreground focus-visible:outline-none",
-                                      isSelected && "bg-accent/60 font-medium",
-                                    )}
-                                  >
-                                    <span className="truncate">{getLanguageName(lang)}</span>
-                                    {isSelected && (
-                                      <Check className="ml-auto size-4 shrink-0 text-primary" />
-                                    )}
-                                  </button>
-                                );
-                              })}
-                              {dubLanguages.length === 0 && (
-                                <p className="px-2 py-1.5 text-xs text-muted-foreground">
-                                  No dubbed audio
+                              </div>
+                            </div>
+
+                            <div className="flex min-w-0 flex-col">
+                              <div className="border-b border-border/50 px-3 py-2">
+                                <p className="text-xs font-semibold text-muted-foreground">
+                                  Subtitles
                                 </p>
+                              </div>
+                              <div
+                                role="menu"
+                                aria-label="Subtitle tracks"
+                                className="max-h-56 space-y-0.5 overflow-y-auto p-1.5 custom-scrollbar-sm"
+                              >
+                                <button
+                                  type="button"
+                                  role="menuitemradio"
+                                  aria-checked={subtitleTrack === "off"}
+                                  onClick={() => {
+                                    captionsExplicitlyOffRef.current = true;
+                                    setSubtitleTrack("off");
+                                  }}
+                                  className={cn(
+                                    "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:text-accent-foreground focus-visible:outline-none",
+                                    subtitleTrack === "off" && "bg-accent/60 font-medium",
+                                  )}
+                                >
+                                  <span className="truncate">Off</span>
+                                  {subtitleTrack === "off" && (
+                                    <Check className="ml-auto size-4 shrink-0 text-primary" />
+                                  )}
+                                </button>
+                                {availableTracks.map((tr) => {
+                                  const isSelected = activePlayerTrack?.id === tr.id;
+                                  return (
+                                    <button
+                                      key={tr.id}
+                                      type="button"
+                                      role="menuitemradio"
+                                      aria-checked={isSelected}
+                                      onClick={() => {
+                                        captionsExplicitlyOffRef.current = false;
+                                        setSubtitleTrack(tr.id);
+                                        setTranscriptLang(tr.id);
+                                      }}
+                                      className={cn(
+                                        "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:text-accent-foreground focus-visible:outline-none",
+                                        isSelected && "bg-accent/60 font-medium",
+                                      )}
+                                    >
+                                      <span className="truncate">{tr.label}</span>
+                                      {isSelected && (
+                                        <Check className="ml-auto size-4 shrink-0 text-primary" />
+                                      )}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          </div>
+                          <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border/50 bg-secondary/25 px-3 py-2">
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs font-medium text-muted-foreground">
+                                Size
+                              </span>
+                              <div
+                                role="radiogroup"
+                                aria-label="Caption size"
+                                className="inline-flex items-center rounded-md bg-secondary/70 p-0.5"
+                              >
+                                {(
+                                  [
+                                    { id: "small", label: "S", name: "Small" },
+                                    { id: "medium", label: "M", name: "Medium" },
+                                    { id: "large", label: "L", name: "Large" },
+                                  ] as const
+                                ).map((opt) => {
+                                  const activeOption = captionFontSize === opt.id;
+                                  return (
+                                    <button
+                                      key={opt.id}
+                                      type="button"
+                                      role="radio"
+                                      aria-checked={activeOption}
+                                      aria-label={opt.name}
+                                      onClick={() =>
+                                        updateCaptionAppearance({ captionFontSize: opt.id })
+                                      }
+                                      className={cn(
+                                        "rounded-sm px-2 py-0.5 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+                                        activeOption
+                                          ? "bg-card text-foreground shadow-xs dark:bg-accent"
+                                          : "text-muted-foreground hover:text-foreground",
+                                      )}
+                                    >
+                                      {opt.label}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            </div>
+
+                            <div className="flex items-center gap-1.5">
+                              <div
+                                role="radiogroup"
+                                aria-label="Caption backdrop"
+                                className="inline-flex items-center rounded-md bg-secondary/70 p-0.5"
+                              >
+                                {(
+                                  [
+                                    { id: true, label: "Box" },
+                                    { id: false, label: "Outline" },
+                                  ] as const
+                                ).map((opt) => {
+                                  const activeOption = captionBackground === opt.id;
+                                  return (
+                                    <button
+                                      key={opt.label}
+                                      type="button"
+                                      role="radio"
+                                      aria-checked={activeOption}
+                                      onClick={() =>
+                                        updateCaptionAppearance({ captionBackground: opt.id })
+                                      }
+                                      className={cn(
+                                        "rounded-sm px-2 py-0.5 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+                                        activeOption
+                                          ? "bg-card text-foreground shadow-xs dark:bg-accent"
+                                          : "text-muted-foreground hover:text-foreground",
+                                      )}
+                                    >
+                                      {opt.label}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+
+                              {captionPosition && (
+                                <button
+                                  type="button"
+                                  onClick={() => updateCaptionAppearance({ captionPosition: null })}
+                                  className="rounded-sm px-1.5 py-0.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                                >
+                                  Reset
+                                </button>
                               )}
                             </div>
                           </div>
+                        </PopoverContent>
+                      </Popover>
 
-                          <div className="flex min-w-0 flex-col">
-                            <div className="border-b border-border/50 px-3 py-2">
-                              <p className="text-xs font-semibold text-muted-foreground">
-                                Subtitles
-                              </p>
-                            </div>
-                            <div
-                              role="menu"
-                              aria-label="Subtitle tracks"
-                              className="max-h-56 space-y-0.5 overflow-y-auto p-1.5 custom-scrollbar-sm"
-                            >
-                              <button
-                                type="button"
-                                role="menuitemradio"
-                                aria-checked={subtitleTrack === "off"}
-                                onClick={() => setSubtitleTrack("off")}
-                                className={cn(
-                                  "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:text-accent-foreground focus-visible:outline-none",
-                                  subtitleTrack === "off" && "bg-accent/60 font-medium",
-                                )}
-                              >
-                                <span className="truncate">Off</span>
-                                {subtitleTrack === "off" && (
-                                  <Check className="ml-auto size-4 shrink-0 text-primary" />
-                                )}
-                              </button>
-                              {availableTracks.map((tr) => {
-                                const isSelected = activePlayerTrack?.id === tr.id;
-                                return (
-                                  <button
-                                    key={tr.id}
-                                    type="button"
-                                    role="menuitemradio"
-                                    aria-checked={isSelected}
-                                    onClick={() => {
-                                      setSubtitleTrack(tr.id);
-                                      setTranscriptLang(tr.id);
-                                    }}
-                                    className={cn(
-                                      "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:text-accent-foreground focus-visible:outline-none",
-                                      isSelected && "bg-accent/60 font-medium",
-                                    )}
-                                  >
-                                    <span className="truncate">{tr.label}</span>
-                                    {isSelected && (
-                                      <Check className="ml-auto size-4 shrink-0 text-primary" />
-                                    )}
-                                  </button>
-                                );
-                              })}
-                            </div>
-                          </div>
-                        </div>
-                      </PopoverContent>
-                    </Popover>
-
-                    <DropdownMenu
-                      modal={false}
-                      open={settingsMenuOpen}
-                      onOpenChange={setSettingsMenuOpen}
-                    >
-                      <DropdownMenuTrigger asChild>
-                        <button
-                          type="button"
-                          aria-label="Settings"
-                          title="Settings"
-                          className="flex items-center justify-center rounded-full p-1.5 text-white opacity-75 transition-all hover:bg-white/15 hover:opacity-100 data-[state=open]:opacity-100 [&_svg]:size-5"
-                        >
-                          <Settings />
-                        </button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent
-                        side="top"
-                        sideOffset={10}
-                        align="end"
-                        onCloseAutoFocus={(e) => e.preventDefault()}
-                        className="w-52 rounded-lg p-1.5"
+                      <DropdownMenu
+                        modal={false}
+                        open={settingsMenuOpen}
+                        onOpenChange={setSettingsMenuOpen}
                       >
-                        <p className="px-2 py-1.5 text-xs font-semibold text-muted-foreground">
-                          Playback speed
-                        </p>
-                        {[0.75, 1, 1.25, 1.5, 2].map((s) => (
-                          <DropdownMenuItem
-                            key={s}
-                            className="rounded-md"
-                            onClick={() => setSpeed(s)}
+                        <DropdownMenuTrigger asChild>
+                          <button
+                            type="button"
+                            aria-label="Settings"
+                            title="Settings"
+                            className="flex items-center justify-center rounded-full p-1.5 text-white opacity-75 transition-all hover:bg-white/15 hover:opacity-100 data-[state=open]:opacity-100 [&_svg]:size-5"
                           >
-                            <Gauge />
-                            {s}×{speed === s && <Check className="ml-auto" />}
-                          </DropdownMenuItem>
-                        ))}
-                        <DropdownMenuSeparator />
-                        <DropdownMenuItem
-                          className="rounded-md"
-                          onSelect={(event) => {
-                            event.preventDefault();
-                            setAutoplay(!autoplay);
-                          }}
+                            <Settings />
+                          </button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent
+                          side="top"
+                          sideOffset={10}
+                          align="end"
+                          onCloseAutoFocus={(e) => e.preventDefault()}
+                          className="w-52 rounded-lg p-1.5"
                         >
-                          Autoplay next{autoplay && <Check className="ml-auto" />}
-                        </DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
+                          <p className="px-2 py-1.5 text-xs font-semibold text-muted-foreground">
+                            Playback speed
+                          </p>
+                          {PLAYER_SPEED_OPTIONS.map((s) => (
+                            <DropdownMenuItem
+                              key={s}
+                              className="rounded-md"
+                              onClick={() => setSpeed(s)}
+                            >
+                              <Gauge />
+                              {s}×{speed === s && <Check className="ml-auto" />}
+                            </DropdownMenuItem>
+                          ))}
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem
+                            className="rounded-md"
+                            onSelect={(event) => {
+                              event.preventDefault();
+                              setAutoplay(!autoplay);
+                            }}
+                          >
+                            Autoplay next{autoplay && <Check className="ml-auto" />}
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
 
-                    <PlayerBtn label="Picture-in-Picture (P)" onClick={togglePiP} active={isPiP}>
-                      <PictureInPicture />
-                    </PlayerBtn>
+                      <PlayerBtn
+                        label="Picture-in-Picture (P / I)"
+                        onClick={() => void togglePiP()}
+                        active={isPiP}
+                      >
+                        <PictureInPicture />
+                      </PlayerBtn>
 
-                    <PlayerBtn
-                      label={isFullscreen ? "Exit fullscreen (F)" : "Fullscreen (F)"}
-                      onClick={toggleFullscreen}
-                    >
-                      {isFullscreen ? <Minimize /> : <Maximize />}
-                    </PlayerBtn>
+                      <PlayerBtn
+                        label={isFullscreen ? "Exit fullscreen (F)" : "Fullscreen (F)"}
+                        onClick={toggleFullscreen}
+                      >
+                        {isFullscreen ? <Minimize /> : <Maximize />}
+                      </PlayerBtn>
 
-                    <PlayerBtn
-                      label={panelOpen ? "Hide sidebar" : "Show sidebar"}
-                      onClick={() => setPanelOpen(!panelOpen)}
-                    >
-                      {panelOpen ? <PanelRightClose /> : <PanelRightOpen />}
-                    </PlayerBtn>
+                      <PlayerBtn
+                        label={panelOpen ? "Hide sidebar (T)" : "Show sidebar (T)"}
+                        onClick={() => setPanelOpen((prev) => !prev)}
+                      >
+                        {panelOpen ? <PanelRightClose /> : <PanelRightOpen />}
+                      </PlayerBtn>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -2397,7 +3096,7 @@ export function CoursePlayer({
                   onClick={() => setTab(id)}
                   className={cn(
                     "flex items-center justify-center gap-1.5 rounded-sm px-2 py-2 text-xs font-semibold text-muted-foreground transition-all",
-                    tab === id && "bg-card text-foreground shadow-card",
+                    tab === id && "bg-card text-foreground shadow-card dark:bg-accent",
                   )}
                 >
                   <Icon className={cn("size-3.5", tab === id && "text-primary")} /> {label}
@@ -2441,6 +3140,7 @@ export function CoursePlayer({
                 availableTracks={availableTracks}
                 selectedLang={transcriptLang}
                 onSelectLang={(nextTrackId) => {
+                  captionsExplicitlyOffRef.current = false;
                   setTranscriptLang(nextTrackId);
                   setSubtitleTrack(nextTrackId);
                 }}
@@ -2608,7 +3308,29 @@ function NextIcon({ className }: { className?: string }) {
   );
 }
 
-function VolumeIcon({ volume, muted }: { volume: number; muted: boolean }) {
+function FastForwardIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="currentColor"
+      stroke="none"
+      className={className}
+      aria-hidden="true"
+    >
+      <path d="M4 6l8.5 6L4 18V6zm9 0l8.5 6-8.5 6V6z" />
+    </svg>
+  );
+}
+
+function VolumeIcon({
+  volume,
+  muted,
+  className = "size-5",
+}: {
+  volume: number;
+  muted: boolean;
+  className?: string;
+}) {
   const effective = muted ? 0 : volume;
   return (
     <svg
@@ -2618,7 +3340,7 @@ function VolumeIcon({ volume, muted }: { volume: number; muted: boolean }) {
       strokeWidth={2}
       strokeLinecap="round"
       strokeLinejoin="round"
-      className="size-5"
+      className={className}
       aria-hidden="true"
     >
       <path
@@ -2640,6 +3362,35 @@ function VolumeIcon({ volume, muted }: { volume: number; muted: boolean }) {
   );
 }
 
+function renderShortcutHudIcon(icon: ShortcutHudIcon, volume: number): ReactNode {
+  switch (icon) {
+    case "play":
+      return <PlayIcon className="size-3.5" />;
+    case "pause":
+      return <PauseIcon className="size-3.5" />;
+    case "captions-on":
+      return <Subtitles className="size-3.5" />;
+    case "captions-off":
+      return <Subtitles className="size-3.5 opacity-55" />;
+    case "mute":
+      return <VolumeIcon volume={0} muted className="size-3.5" />;
+    case "volume":
+      return <VolumeIcon volume={Math.max(0.2, volume)} muted={false} className="size-3.5" />;
+    case "speed":
+      return <Gauge className="size-3.5" />;
+    case "seek-back":
+      return <FastForwardIcon className="size-3.5 rotate-180" />;
+    case "seek-forward":
+      return <FastForwardIcon className="size-3.5" />;
+    case "sidebar-hide":
+      return <PanelRightClose className="size-3.5" />;
+    case "sidebar-show":
+      return <PanelRightOpen className="size-3.5" />;
+    case "pip":
+      return <PictureInPicture className="size-3.5" />;
+  }
+}
+
 function PlayerBtn({
   label,
   onClick,
@@ -2658,7 +3409,10 @@ function PlayerBtn({
       type="button"
       aria-label={label}
       title={label}
-      onClick={onClick}
+      onClick={(e) => {
+        if (e.detail > 0) e.currentTarget.blur();
+        onClick();
+      }}
       disabled={disabled}
       className={cn(
         "flex shrink-0 items-center justify-center rounded-full p-1.5 text-white transition-all hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-35 [&_svg]:size-5",
@@ -2898,39 +3652,41 @@ function PlaylistTab({
                         key={lesson.id}
                         data-lesson-idx={i}
                         className={cn(
-                          "flex items-center gap-3 rounded-lg px-3 py-3 transition-colors hover:bg-secondary/60",
+                          "flex items-stretch rounded-lg transition-colors hover:bg-secondary/60",
                           isActive && "bg-primary-soft/75 shadow-brand hover:bg-primary-soft/75",
                         )}
                       >
-                        <button
-                          type="button"
-                          aria-label={done[i] ? "Mark as not done" : "Mark as done"}
-                          title="Click or drag to mark lessons"
-                          onPointerDown={(e) => {
-                            if (e.button !== 0) return;
-                            e.preventDefault();
-                            dragInitialDoneRef.current = [...done];
-                            const targetValue = !done[i];
-                            setDragState({ startIdx: i, targetValue });
-                            setDone((prev) => prev.map((d, j) => (j === i ? targetValue : d)));
-                          }}
-                          onKeyDown={(e) => {
-                            if (e.key === " " || e.key === "Enter") {
+                        <div className="flex shrink-0 items-center py-3 pl-3">
+                          <button
+                            type="button"
+                            aria-label={done[i] ? "Mark as not done" : "Mark as done"}
+                            title="Click or drag to mark lessons"
+                            onPointerDown={(e) => {
+                              if (e.button !== 0) return;
                               e.preventDefault();
-                              onToggleLessonDone(i, !done[i]);
-                            }
-                          }}
-                          className={cn(
-                            "flex size-5 shrink-0 touch-none items-center justify-center rounded-full border-2 border-border transition-colors hover:border-chart-4/60",
-                            done[i] && "border-chart-4 bg-chart-4 text-primary-foreground",
-                          )}
-                        >
-                          {done[i] && <Check className="size-3" strokeWidth={3} />}
-                        </button>
+                              dragInitialDoneRef.current = [...done];
+                              const targetValue = !done[i];
+                              setDragState({ startIdx: i, targetValue });
+                              setDone((prev) => prev.map((d, j) => (j === i ? targetValue : d)));
+                            }}
+                            onKeyDown={(e) => {
+                              if (e.key === " " || e.key === "Enter") {
+                                e.preventDefault();
+                                onToggleLessonDone(i, !done[i]);
+                              }
+                            }}
+                            className={cn(
+                              "flex size-5 shrink-0 touch-none items-center justify-center rounded-full border-2 border-border transition-colors hover:border-chart-4/60",
+                              done[i] && "border-chart-4 bg-chart-4 text-primary-foreground",
+                            )}
+                          >
+                            {done[i] && <Check className="size-3" strokeWidth={3} />}
+                          </button>
+                        </div>
                         <button
                           type="button"
                           onClick={() => onSelect(i)}
-                          className="flex min-w-0 flex-1 items-center gap-3 text-left"
+                          className="flex min-w-0 flex-1 cursor-pointer items-center gap-3 py-3 pl-3 pr-3 text-left"
                         >
                           <span className="w-5 shrink-0 text-xs tabular-nums text-muted-foreground">
                             {String(lessonIdx + 1).padStart(2, "0")}
@@ -3155,6 +3911,10 @@ function RichNoteEditor({
       getSuggestion={autocompleteEnabled ? getSuggestionFn : undefined}
       onWritingActivity={triggerWritingActivity}
       onSuspendSmartTimers={cleanupSmartTimers}
+      wrapperPaddingClassName="px-4 pt-3.5 pb-5"
+      editorClassName="min-h-0"
+      minHeightClassName=""
+      maxHeightClassName=""
       placeholder={placeholder}
     />
   );
@@ -3198,13 +3958,53 @@ function NotesTab({
   } | null>(null);
 
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
-  const [autocompleteEnabled, setAutocompleteEnabled] = useState(true);
-  const [smartPauseEnabled, setSmartPauseEnabled] = useState(true);
-  const [smartPauseDelay, setSmartPauseDelay] = useState(2.5);
-  const [smartPauseRewind, setSmartPauseRewind] = useState(true);
+  const [autocompleteEnabled, setAutocompleteEnabled] = useState(
+    () => readAppSettings().notesAutocompleteEnabled,
+  );
+  const [smartPauseEnabled, setSmartPauseEnabled] = useState(
+    () => readAppSettings().notesSmartPauseEnabled,
+  );
+  const [smartPauseDelay, setSmartPauseDelay] = useState(
+    () => readAppSettings().notesSmartPauseDelay,
+  );
+  const [smartPauseRewind, setSmartPauseRewind] = useState(
+    () => readAppSettings().notesSmartPauseRewind,
+  );
   const [menuOpen, setMenuOpen] = useState(false);
   const [smartPauseState, setSmartPauseState] = useState<SmartPauseStatus | null>(null);
   const isSavingNoteRef = useRef(false);
+
+  const updateNotesPreferences = useCallback(
+    (
+      patch: Partial<{
+        notesAutocompleteEnabled: boolean;
+        notesSmartPauseEnabled: boolean;
+        notesSmartPauseDelay: number;
+        notesSmartPauseRewind: boolean;
+      }>,
+    ) => {
+      writeAppSettings({ ...readAppSettings(), ...patch });
+      const next = readAppSettings();
+      setAutocompleteEnabled(next.notesAutocompleteEnabled);
+      setSmartPauseEnabled(next.notesSmartPauseEnabled);
+      setSmartPauseDelay(next.notesSmartPauseDelay);
+      setSmartPauseRewind(next.notesSmartPauseRewind);
+    },
+    [],
+  );
+
+  useEffect(() => {
+    const syncNotesSettings = () => {
+      const next = readAppSettings();
+      setAutocompleteEnabled(next.notesAutocompleteEnabled);
+      setSmartPauseEnabled(next.notesSmartPauseEnabled);
+      setSmartPauseDelay(next.notesSmartPauseDelay);
+      setSmartPauseRewind(next.notesSmartPauseRewind);
+    };
+    syncNotesSettings();
+    window.addEventListener(SETTINGS_CHANGED_EVENT, syncNotesSettings);
+    return () => window.removeEventListener(SETTINGS_CHANGED_EVENT, syncNotesSettings);
+  }, []);
 
   useEffect(() => {
     setNotes(getCourseNotes(courseId));
@@ -3334,7 +4134,7 @@ function NotesTab({
   return (
     <div className="flex h-full flex-col">
       {/* Unified Single-Row Top Action Bar (aligned to 12px px-3) */}
-      <div className="px-3 pb-3 pt-1">
+      <div className="px-3 pb-2.5 pt-3">
         <div className="flex items-center gap-1">
           {/* 1. Primary Add Note Button */}
           <Button
@@ -3430,7 +4230,9 @@ function NotesTab({
                     <Switch
                       id="notes-pause-video"
                       checked={smartPauseEnabled}
-                      onCheckedChange={setSmartPauseEnabled}
+                      onCheckedChange={(checked) =>
+                        updateNotesPreferences({ notesSmartPauseEnabled: checked })
+                      }
                     />
                   </div>
 
@@ -3447,7 +4249,12 @@ function NotesTab({
                           type="button"
                           aria-label="Decrease resume delay"
                           onClick={() =>
-                            setSmartPauseDelay((d) => Math.max(0.5, Number((d - 0.5).toFixed(1))))
+                            updateNotesPreferences({
+                              notesSmartPauseDelay: Math.max(
+                                0.5,
+                                Number((smartPauseDelay - 0.5).toFixed(1)),
+                              ),
+                            })
                           }
                           className="flex size-6 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
                         >
@@ -3460,7 +4267,12 @@ function NotesTab({
                           type="button"
                           aria-label="Increase resume delay"
                           onClick={() =>
-                            setSmartPauseDelay((d) => Math.min(30, Number((d + 0.5).toFixed(1))))
+                            updateNotesPreferences({
+                              notesSmartPauseDelay: Math.min(
+                                30,
+                                Number((smartPauseDelay + 0.5).toFixed(1)),
+                              ),
+                            })
                           }
                           className="flex size-6 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
                         >
@@ -3479,7 +4291,9 @@ function NotesTab({
                       <Switch
                         id="notes-rewind-resume"
                         checked={smartPauseRewind}
-                        onCheckedChange={setSmartPauseRewind}
+                        onCheckedChange={(checked) =>
+                          updateNotesPreferences({ notesSmartPauseRewind: checked })
+                        }
                       />
                     </div>
                   </div>
@@ -3499,7 +4313,9 @@ function NotesTab({
                 <Switch
                   id="notes-autocomplete"
                   checked={autocompleteEnabled}
-                  onCheckedChange={setAutocompleteEnabled}
+                  onCheckedChange={(checked) =>
+                    updateNotesPreferences({ notesAutocompleteEnabled: checked })
+                  }
                 />
               </div>
             </PopoverContent>
@@ -3508,11 +4324,11 @@ function NotesTab({
       </div>
 
       {/* Scrollable Note Composer + Note Cards List (aligned to 12px px-3) */}
-      <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-3 pb-4 custom-scrollbar-sm">
+      <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-3 pt-1.5 pb-4 custom-scrollbar-sm">
         {/* New Note Composer Card */}
         {showAddNote && !editingNoteId && (
           <div className="overflow-hidden rounded-xl bg-background ring-1 ring-primary/35 shadow-card">
-            <div className="flex items-center justify-between bg-secondary/35 px-3 pb-1.5 pt-2.5">
+            <div className="flex items-center justify-between bg-secondary/35 px-4 pb-2 pt-3">
               <span className="inline-flex items-center gap-1 rounded-full bg-primary-soft px-2.5 py-0.5 font-mono text-xs font-semibold tabular-nums text-primary">
                 <Clock className="size-3" /> {fmt(noteTimestamp ?? time)}
               </span>
@@ -3552,7 +4368,7 @@ function NotesTab({
               smartPauseDelay={smartPauseDelay}
               smartPauseRewind={smartPauseRewind}
               onSmartPauseChange={setSmartPauseState}
-              placeholder="Write a note… (type # for heading, - for list, or paste an image)"
+              placeholder="Write a note…"
             />
 
             <NoteEditorFooter
@@ -3585,7 +4401,7 @@ function NotesTab({
               >
                 {isEditing ? (
                   <>
-                    <div className="flex items-center justify-between bg-secondary/35 px-3 pb-1.5 pt-2.5">
+                    <div className="flex items-center justify-between bg-secondary/35 px-4 pb-2 pt-3">
                       <span className="inline-flex items-center gap-1 rounded-full bg-primary-soft px-2.5 py-0.5 font-mono text-xs font-semibold tabular-nums text-primary">
                         <Clock className="size-3" /> {fmt(note.timestamp)}
                       </span>
@@ -3636,11 +4452,14 @@ function NotesTab({
                     />
                   </>
                 ) : (
-                  <div className="space-y-2 p-3 pb-4.5">
+                  <div className="space-y-2.5 px-4 pt-3.5 pb-4.5">
                     <div className="flex items-center justify-between gap-2">
                       <button
                         type="button"
-                        onClick={() => seek(note.timestamp)}
+                        onClick={(e) => {
+                          if (e.detail > 0) e.currentTarget.blur();
+                          seek(note.timestamp);
+                        }}
                         title={`Seek to ${fmt(note.timestamp)}`}
                         className="inline-flex items-center gap-1.5 rounded-full bg-primary-soft px-2.5 py-0.5 font-mono text-xs font-semibold tabular-nums text-primary transition-colors hover:bg-primary/20"
                       >
@@ -3740,7 +4559,7 @@ function NoteEditorFooter({
   isAdd?: boolean;
 }) {
   return (
-    <div className="flex min-h-[44px] items-center justify-between border-t border-border/50 bg-secondary/25 px-3 py-2">
+    <div className="flex min-h-[44px] items-center justify-between border-t border-border/50 bg-secondary/25 px-4 py-2">
       <div className="flex items-center">
         {smartPauseState?.isSmartPaused && (
           <div className="flex items-center gap-2 rounded-lg bg-primary-soft px-2 py-1 text-xs font-medium text-primary">
@@ -4045,51 +4864,7 @@ function TranscriptTab({
               })}
 
               {isJobActive && activeJob && (
-                <DropdownMenuItem
-                  className="ai-shimmer-row t-resize relative mt-0.5 flex items-center justify-between gap-2 overflow-hidden rounded-md border border-primary/20 py-2 pr-1.5"
-                  onClick={() => onOpenAiModal(activeJob.mode, activeJob.targetLanguage)}
-                >
-                  <span className="flex min-w-0 flex-1 items-center gap-1.5 truncate">
-                    <Check className="size-3.5 shrink-0 opacity-0" />
-                    <span className="ai-shimmer-text truncate font-medium">
-                      {activeJobTrackLabel}
-                    </span>
-                  </span>
-                  <div
-                    className="ml-auto flex shrink-0 items-center gap-1.5"
-                    onPointerDown={(e) => e.stopPropagation()}
-                    onPointerUp={(e) => e.stopPropagation()}
-                    onClick={(e) => e.stopPropagation()}
-                  >
-                    <span className="font-mono text-[11px] font-semibold text-primary tabular-nums">
-                      {activeJob.status === "queued" ? "Queued" : `${activeJob.progress}%`}
-                    </span>
-                    {videoId && (
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.preventDefault();
-                          e.stopPropagation();
-                          cancelTranscriptJob(videoId);
-                        }}
-                        title="Cancel"
-                        aria-label="Cancel"
-                        className="rounded p-1 text-muted-foreground/75 transition-colors hover:bg-destructive/15 hover:text-destructive"
-                      >
-                        <X className="size-3.5" />
-                      </button>
-                    )}
-                  </div>
-                  <span
-                    aria-hidden="true"
-                    className="pointer-events-none absolute inset-x-0 bottom-0 h-0.5 bg-secondary/60"
-                  >
-                    <span
-                      className="block h-full bg-gradient-to-r from-primary via-chart-2 to-chart-1 transition-all duration-300"
-                      style={{ width: `${Math.max(6, activeJob.progress)}%` }}
-                    />
-                  </span>
-                </DropdownMenuItem>
+                <AiJobTraceCard job={activeJob} compact className="mt-0.5" />
               )}
 
               {(availableTracks.length > 0 || isJobActive) && <DropdownMenuSeparator />}
@@ -4195,23 +4970,7 @@ function TranscriptTab({
       ) : cues.length === 0 ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
           {isJobActive && activeJob ? (
-            <div className="t-resize flex flex-col items-center gap-2">
-              <div className="space-y-1">
-                <p className="ai-shimmer-text text-sm font-medium">{activeJob.message}</p>
-                <p className="font-mono text-xs text-muted-foreground tabular-nums">
-                  {activeJobTrackLabel} · {activeJob.progress}%
-                </p>
-              </div>
-              <Button
-                type="button"
-                size="sm"
-                variant="ghost"
-                onClick={() => videoId && cancelTranscriptJob(videoId)}
-                className="mt-1 h-7 rounded-md px-2.5 text-xs text-muted-foreground hover:text-destructive"
-              >
-                Cancel
-              </Button>
-            </div>
+            <AiJobTraceCard job={activeJob} className="w-full max-w-xs text-left" />
           ) : (
             <>
               <p className="text-sm text-muted-foreground">No subtitles yet.</p>
@@ -4259,7 +5018,8 @@ function TranscriptTab({
             <li key={`${cue.start}-${i}`}>
               <button
                 type="button"
-                onClick={() => {
+                onClick={(e) => {
+                  if (e.detail > 0) e.currentTarget.blur();
                   const span = Math.max(0, cue.end - cue.start);
                   const nudge = span > 0 ? Math.min(0.035, span * 0.2) : 0.025;
                   seek(cue.start + nudge, { minLockTime: cue.start });

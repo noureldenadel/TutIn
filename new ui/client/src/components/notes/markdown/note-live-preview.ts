@@ -1,94 +1,59 @@
 import {
   BLOCK_TAG_SET,
   HEADING_TAG_SET,
+  HR_LINE_REGEX,
   INLINE_MARK_TAGS,
   MD_ACTIVE_ATTR,
+  MD_HR_ACTIVE_ATTR,
+  MD_HR_SYNTAX_ATTR,
   MD_SYNTAX_ATTR,
   MD_URL_ATTR,
   cleanTrailingEmptyNodes,
+  convertStandaloneHrLines,
+  doesRangeCrossElementScope,
+  doesRangeOverlapElement,
+  doesRangeOverlapHr,
   ensureElementHasBreakIfEmpty,
-  getCaretBookmark,
   getClosestBlock,
   getCollapsedSelectionRange,
+  getEditableScope,
   getFirstEditableTarget,
-  getLastDescendantTextNode,
+  getLiOwnChildLimit,
   getTextWithoutArtifacts,
+  getTopLevelBlock,
+  hasOwnInlineContent,
   hasVisibleContent,
-  isInsideMarkdownSyntax,
+  isCaretAtBlockBoundaryStart,
+  isCaretAtEndOfScope,
+  isCaretAtStartOfScope,
+  isCaretOnVisualEdgeLine,
   isInsideTag,
+  isStandaloneHrBlock,
+  normalizeEmptyBreak,
   placeCaret,
   placeCaretAtEnd,
   placeCaretAtStart,
-  restoreCaretBookmark,
   sanitizeHttpUrl,
+  stripZeroWidth,
 } from "./note-dom";
-
-interface InlineLiveRule {
-  tag: "code" | "strong" | "em" | "s" | "mark";
-  delimiter: string;
-}
-
-const INLINE_LIVE_RULES: Record<string, InlineLiveRule> = {
-  code: { tag: "code", delimiter: "`" },
-  strong: { tag: "strong", delimiter: "**" },
-  b: { tag: "strong", delimiter: "**" },
-  em: { tag: "em", delimiter: "*" },
-  i: { tag: "em", delimiter: "*" },
-  s: { tag: "s", delimiter: "~~" },
-  del: { tag: "s", delimiter: "~~" },
-  strike: { tag: "s", delimiter: "~~" },
-  mark: { tag: "mark", delimiter: "==" },
-};
-
-const SELECTION_WRAP_DELIMITERS: Record<string, [string, string]> = {
-  "(": ["(", ")"],
-  "[": ["[", "]"],
-  '"': ['"', '"'],
-};
-
-const COLLAPSED_PLAIN_PAIRS: Record<string, [string, string]> = {
-  "(": ["(", ")"],
-  "[": ["[", "]"],
-  '"': ['"', '"'],
-};
-
-const CLOSING_PLAIN_PAIR_CHARS = new Set([")", "]", '"']);
-
-function createSyntaxSpan(
-  kind: "heading" | "blockquote" | "open" | "close",
-  text: string,
-): HTMLSpanElement {
-  const span = document.createElement("span");
-  span.setAttribute(MD_SYNTAX_ATTR, kind);
-  span.setAttribute("spellcheck", "false");
-  span.textContent = text;
-  return span;
-}
-
-function createLinkCloseSyntaxSpan(href: string): HTMLSpanElement {
-  const span = document.createElement("span");
-  span.setAttribute(MD_SYNTAX_ATTR, "close");
-  span.setAttribute("spellcheck", "false");
-  span.appendChild(document.createTextNode("]("));
-  const urlSpan = document.createElement("span");
-  urlSpan.setAttribute(MD_URL_ATTR, "true");
-  urlSpan.textContent = href;
-  span.appendChild(urlSpan);
-  span.appendChild(document.createTextNode(")"));
-  return span;
-}
-
-function getDirectSyntaxChild(
-  el: HTMLElement,
-  kind: "heading" | "blockquote" | "open" | "close",
-): HTMLSpanElement | null {
-  for (const child of Array.from(el.children)) {
-    if (child.tagName === "SPAN" && child.getAttribute(MD_SYNTAX_ATTR) === kind) {
-      return child as HTMLSpanElement;
-    }
-  }
-  return null;
-}
+import {
+  CODE_CLOSE_PREFIX_REGEX,
+  CODE_OPEN_PREFIX_REGEX,
+  INLINE_LIVE_RULES,
+  applyLiMarkerAttrs,
+  createLinkCloseSyntaxSpan,
+  createListItemWithContent,
+  createSyntaxSpan,
+  createTaskListItem,
+  getBlockSyntaxSpec,
+  getDirectSyntaxChild,
+  getLiBulletMarker,
+  getLiDelimMarker,
+  getOrderedListIndex,
+  mergeListWithAdjacentSiblings,
+  parseMarkdownBlockPrefix,
+  splitListAroundItem,
+} from "./note-specs";
 
 function cleanZeroWidthInsideElement(el: HTMLElement): void {
   if (getTextWithoutArtifacts(el).length === 0 && !el.querySelector("img")) return;
@@ -101,7 +66,7 @@ function cleanZeroWidthInsideElement(el: HTMLElement): void {
     const val = tn.nodeValue || "";
     if (!val.includes("\u200B")) continue;
     const cleaned = val.replace(/\u200B/g, "");
-    const isCaretInNode = Boolean(range && range.startContainer === tn);
+    const isCaretInNode = Boolean(range && range.collapsed && range.startContainer === tn);
     const oldOffset = isCaretInNode && range ? range.startOffset : 0;
     if (cleaned === "") {
       if (isCaretInNode) {
@@ -130,65 +95,143 @@ function cleanZeroWidthInsideElement(el: HTMLElement): void {
   }
 }
 
-function getBlockSyntaxPrefix(block: HTMLElement): {
-  kind: "heading" | "blockquote";
-  text: string;
-} | null {
-  const tag = block.tagName.toLowerCase();
-  if (HEADING_TAG_SET.has(tag)) {
-    const level = Number.parseInt(tag.slice(1), 10) || 1;
-    return { kind: "heading", text: `${"#".repeat(level)} ` };
-  }
-  if (tag === "blockquote") {
-    return { kind: "blockquote", text: "> " };
-  }
-  return null;
+export interface SyncLiveMarkdownOptions {
+  clearAll?: boolean;
+  forcedPrefixBlocks?: ReadonlySet<HTMLElement>;
+  revealAllPrefixBlocks?: boolean;
+}
+
+interface ActiveMarksSelection {
+  activeBlocks: HTMLElement[];
+  activeHrs: HTMLElement[];
+  activeInlines: HTMLElement[];
 }
 
 function getActiveMarksForSelection(
   editor: HTMLElement,
   range: Range,
-): { activeBlock: HTMLElement | null; activeInlines: HTMLElement[] } {
-  if (isInsideTag(range.startContainer, editor, ["pre"])) {
-    return { activeBlock: null, activeInlines: [] };
-  }
+  options?: SyncLiveMarkdownOptions,
+): ActiveMarksSelection {
+  if (range.collapsed) {
+    const preEl = isInsideTag(range.startContainer, editor, ["pre"]);
+    if (preEl) {
+      return { activeBlocks: [preEl], activeHrs: [], activeInlines: [] };
+    }
 
-  const startBlock = getClosestBlock(range.startContainer, editor);
-  const endBlock = range.collapsed ? startBlock : getClosestBlock(range.endContainer, editor);
+    const startBlock = getClosestBlock(range.startContainer, editor);
+    let activeBlocks: HTMLElement[] = [];
+    if (startBlock) {
+      if (startBlock.hasAttribute(MD_HR_ACTIVE_ATTR)) {
+        activeBlocks = [startBlock];
+      } else {
+        const spec = getBlockSyntaxSpec(startBlock);
+        if (spec?.revealMode === "line") {
+          activeBlocks = [startBlock];
+        } else if (spec?.revealMode === "prefix") {
+          const syntaxSpan = getDirectSyntaxChild(startBlock, spec.kind);
+          if (syntaxSpan && syntaxSpan.contains(range.startContainer)) {
+            const cleanText = stripZeroWidth(
+              (syntaxSpan.textContent || "").replace(/\u00A0/g, " "),
+            );
+            const caretOff = getLogicalCaretOffsetInNode(
+              syntaxSpan,
+              range.startContainer,
+              range.startOffset,
+            );
+            if (caretOff < cleanText.length || !cleanText.endsWith(" ")) {
+              activeBlocks = [startBlock];
+            }
+          }
+        }
+      }
+    }
 
-  const activeBlock =
-    startBlock && startBlock === endBlock && Boolean(getBlockSyntaxPrefix(startBlock))
-      ? startBlock
-      : null;
-
-  const collectAncestors = (node: Node): HTMLElement[] => {
-    const list: HTMLElement[] = [];
-    let curr: Node | null = node;
+    const activeInlines: HTMLElement[] = [];
+    let curr: Node | null = range.startContainer;
     while (curr && curr !== editor) {
       if (curr.nodeType === Node.ELEMENT_NODE) {
         const el = curr as HTMLElement;
         const tag = el.tagName.toLowerCase();
         if (BLOCK_TAG_SET.has(tag)) break;
         if (INLINE_MARK_TAGS.has(tag)) {
-          list.push(el);
+          activeInlines.push(el);
         }
       }
       curr = curr.parentNode;
     }
-    return list;
-  };
 
-  const startInlines = collectAncestors(range.startContainer);
-  const activeInlines = range.collapsed
-    ? startInlines
-    : startInlines.filter((el) => el.contains(range.endContainer));
+    return { activeBlocks, activeHrs: [], activeInlines };
+  }
 
-  return { activeBlock, activeInlines };
+  const blockSelector = `h1, h2, h3, h4, h5, h6, blockquote, li, pre, [${MD_HR_ACTIVE_ATTR}]`;
+  const activeBlocks = (Array.from(editor.querySelectorAll(blockSelector)) as HTMLElement[]).filter(
+    (el) => {
+      const tag = el.tagName.toLowerCase();
+      if (tag !== "pre" && isInsideTag(el, editor, ["pre"])) return false;
+      const limit = tag === "li" ? getLiOwnChildLimit(el) : undefined;
+      if (!doesRangeOverlapElement(range, el, limit)) return false;
+
+      if (el.hasAttribute(MD_HR_ACTIVE_ATTR)) return true;
+      const spec = getBlockSyntaxSpec(el);
+      if (!spec || spec.revealMode === "line") return true;
+
+      if (options?.revealAllPrefixBlocks || options?.forcedPrefixBlocks?.has(el)) {
+        return true;
+      }
+      const syntaxSpan = getDirectSyntaxChild(el, spec.kind);
+      if (syntaxSpan && doesRangeOverlapElement(range, syntaxSpan)) {
+        return true;
+      }
+      return doesRangeCrossElementScope(range, el, limit);
+    },
+  );
+
+  const activeHrs = (Array.from(editor.querySelectorAll("hr")) as HTMLElement[]).filter(
+    (hr) => !isInsideTag(hr, editor, ["pre"]) && doesRangeOverlapHr(range, hr),
+  );
+
+  const inlineSelector = "code, mark, strong, b, em, i, s, del, strike, a";
+  const activeInlines = (
+    Array.from(editor.querySelectorAll(inlineSelector)) as HTMLElement[]
+  ).filter((el) => !el.closest("pre") && doesRangeOverlapElement(range, el));
+
+  return { activeBlocks, activeHrs, activeInlines };
 }
 
-function deactivateElement(editor: HTMLElement, el: HTMLElement): void {
+function expandHorizontalRule(hr: HTMLElement): HTMLElement {
+  const syntaxAttr = hr.getAttribute(MD_HR_SYNTAX_ATTR);
+  const hrText = syntaxAttr && HR_LINE_REGEX.test(syntaxAttr) ? syntaxAttr : "---";
+  const p = document.createElement("p");
+  p.setAttribute(MD_HR_ACTIVE_ATTR, hrText);
+  p.setAttribute(MD_ACTIVE_ATTR, "true");
+  p.appendChild(document.createTextNode(hrText));
+  hr.replaceWith(p);
+  return p;
+}
+
+export function deactivateElement(
+  editor: HTMLElement,
+  el: HTMLElement,
+  preserveCaret = true,
+): HTMLElement | null {
   const tag = el.tagName.toLowerCase();
+  const sel = preserveCaret && typeof window !== "undefined" ? window.getSelection() : null;
+  const activeRange = sel && sel.rangeCount > 0 && sel.isCollapsed ? sel.getRangeAt(0) : null;
+  const hadCaretInsideEl = Boolean(activeRange && el.contains(activeRange.startContainer));
   el.removeAttribute(MD_ACTIVE_ATTR);
+
+  if (el.hasAttribute(MD_HR_ACTIVE_ATTR)) {
+    el.removeAttribute(MD_HR_ACTIVE_ATTR);
+    const hrSyntax = isStandaloneHrBlock(el);
+    if (hrSyntax) {
+      const hr = document.createElement("hr");
+      hr.setAttribute(MD_HR_SYNTAX_ATTR, hrSyntax);
+      el.replaceWith(hr);
+      return hr;
+    }
+    normalizeEmptyBreak(el);
+    return null;
+  }
 
   Array.from(el.children).forEach((child) => {
     if (
@@ -200,7 +243,7 @@ function deactivateElement(editor: HTMLElement, el: HTMLElement): void {
   });
 
   if (INLINE_MARK_TAGS.has(tag)) {
-    const remainingText = (el.textContent || "").replace(/\u200B/g, "");
+    const remainingText = stripZeroWidth(el.textContent || "");
     if (remainingText.length === 0 && !el.querySelector("img, br")) {
       const parent = el.parentNode;
       el.remove();
@@ -212,36 +255,150 @@ function deactivateElement(editor: HTMLElement, el: HTMLElement): void {
       ) {
         ensureElementHasBreakIfEmpty(parent);
       }
-      return;
+      return null;
     }
     cleanTrailingEmptyNodes(el);
-    return;
+    return null;
   }
 
   cleanTrailingEmptyNodes(el);
-  ensureElementHasBreakIfEmpty(el);
+  const scope = getEditableScope(el);
+  if (scope !== el) {
+    normalizeEmptyBreak(scope);
+  } else if (tag === "li" && !hasOwnInlineContent(el)) {
+    if (!el.querySelector(":scope > br")) {
+      const firstNested = el.querySelector(":scope > ul, :scope > ol");
+      el.insertBefore(document.createElement("br"), firstNested);
+    }
+  } else {
+    normalizeEmptyBreak(el);
+  }
+  if (
+    preserveCaret &&
+    hadCaretInsideEl &&
+    activeRange &&
+    !activeRange.startContainer.isConnected &&
+    el.isConnected
+  ) {
+    placeCaretAtStart(el);
+  }
+  return null;
+}
+
+function hasZeroWidthTextChild(el: HTMLElement): boolean {
+  for (const child of Array.from(el.childNodes)) {
+    if (child.nodeType === Node.TEXT_NODE && (child.nodeValue || "").includes("\u200B")) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function activateBlockElement(block: HTMLElement, caretNode: Node | null): void {
-  const spec = getBlockSyntaxPrefix(block);
+  const spec = getBlockSyntaxSpec(block);
   if (!spec) return;
 
-  block.setAttribute(MD_ACTIVE_ATTR, "true");
-  cleanZeroWidthInsideElement(block);
-
-  if (getDirectSyntaxChild(block, spec.kind)) return;
-
-  const hadCaretOnElement = caretNode === block;
-  const emptyBr =
-    getTextWithoutArtifacts(block).length === 0 ? block.querySelector(":scope > br") : null;
-  if (emptyBr) {
-    emptyBr.remove();
+  if (block.getAttribute(MD_ACTIVE_ATTR) !== "true") {
+    block.setAttribute(MD_ACTIVE_ATTR, "true");
   }
 
-  const span = createSyntaxSpan(spec.kind, spec.text);
+  if (spec.kind === "code") {
+    let codeEl = block.querySelector(":scope > code") as HTMLElement | null;
+    if (!codeEl) {
+      codeEl = document.createElement("code");
+      while (block.firstChild) {
+        if (
+          block.firstChild.nodeType === Node.ELEMENT_NODE &&
+          (block.firstChild as HTMLElement).hasAttribute(MD_SYNTAX_ATTR)
+        ) {
+          block.firstChild.remove();
+        } else {
+          codeEl.appendChild(block.firstChild);
+        }
+      }
+      normalizeEmptyBreak(codeEl);
+      block.appendChild(codeEl);
+    }
+    cleanZeroWidthInsideElement(codeEl);
+
+    let openSpan = getDirectSyntaxChild(block, "code-open");
+    if (!openSpan) {
+      openSpan = createSyntaxSpan("code-open", spec.openPrefix);
+      block.insertBefore(openSpan, codeEl);
+    } else if (
+      (!caretNode || !openSpan.contains(caretNode)) &&
+      openSpan.textContent !== spec.openPrefix
+    ) {
+      openSpan.textContent = spec.openPrefix;
+    }
+
+    if (!getDirectSyntaxChild(block, "code-close")) {
+      block.appendChild(createSyntaxSpan("code-close", spec.closePrefix));
+    }
+
+    if (caretNode === block) {
+      placeCaretAtStart(codeEl);
+    }
+    return;
+  }
+
+  cleanZeroWidthInsideElement(block);
+
+  if (spec.kind === "list" && spec.isTask) {
+    let contentSpan = block.querySelector(":scope > span[data-task-content]") as HTMLElement | null;
+    if (!contentSpan) {
+      contentSpan = document.createElement("span");
+      contentSpan.setAttribute("data-task-content", "true");
+      block.appendChild(contentSpan);
+    }
+    cleanZeroWidthInsideElement(contentSpan);
+
+    let span = getDirectSyntaxChild(block, "list");
+    if (!span) {
+      span = createSyntaxSpan("list", spec.prefixText);
+      block.insertBefore(span, contentSpan);
+    } else if ((!caretNode || !span.contains(caretNode)) && span.textContent !== spec.prefixText) {
+      span.textContent = spec.prefixText;
+    }
+
+    if (!hasVisibleContent(contentSpan)) {
+      const emptyBr = contentSpan.querySelector(":scope > br");
+      if (emptyBr) emptyBr.remove();
+      if (!hasZeroWidthTextChild(contentSpan)) {
+        const anchor = document.createTextNode("\u200B");
+        contentSpan.appendChild(anchor);
+        if (caretNode === block || caretNode === contentSpan) {
+          placeCaret(anchor, 1);
+        }
+      }
+    } else if (caretNode === block) {
+      placeCaretAtStart(contentSpan);
+    }
+    return;
+  }
+
+  const existingSpan = getDirectSyntaxChild(block, spec.kind);
+  if (existingSpan) {
+    if (
+      spec.kind === "list" &&
+      (!caretNode || !existingSpan.contains(caretNode)) &&
+      existingSpan.textContent !== spec.prefixText
+    ) {
+      existingSpan.textContent = spec.prefixText;
+    }
+    return;
+  }
+
+  const hadCaretOnElement = caretNode === block;
+  if (!hasOwnInlineContent(block)) {
+    const emptyBr = block.querySelector(":scope > br");
+    if (emptyBr) emptyBr.remove();
+  }
+
+  const span = createSyntaxSpan(spec.kind, spec.prefixText);
   block.insertBefore(span, block.firstChild);
 
-  if (getTextWithoutArtifacts(block).length === 0 && !block.querySelector("img")) {
+  if (!hasOwnInlineContent(block) && !hasZeroWidthTextChild(block)) {
     const anchor = document.createTextNode("\u200B");
     block.insertBefore(anchor, span.nextSibling);
     if (hadCaretOnElement) {
@@ -252,9 +409,11 @@ function activateBlockElement(block: HTMLElement, caretNode: Node | null): void 
   }
 }
 
-function activateInlineElement(inlineEl: HTMLElement, caretNode: Node | null): void {
+export function activateInlineElement(inlineEl: HTMLElement, caretNode: Node | null): void {
   const tag = inlineEl.tagName.toLowerCase();
-  inlineEl.setAttribute(MD_ACTIVE_ATTR, "true");
+  if (inlineEl.getAttribute(MD_ACTIVE_ATTR) !== "true") {
+    inlineEl.setAttribute(MD_ACTIVE_ATTR, "true");
+  }
   cleanZeroWidthInsideElement(inlineEl);
 
   const hasOpen = Boolean(getDirectSyntaxChild(inlineEl, "open"));
@@ -350,27 +509,45 @@ function activateInlineElement(inlineEl: HTMLElement, caretNode: Node | null): v
 
 /**
  * Synchronizes Obsidian-style Live Preview syntax markers across the editor based on
- * the current selection. Runs idempotently on `selectionchange`, commands, and `blur`.
+ * the current selection (collapsed caret or multi-element drag range), and converts
+ * standalone deferred divider lines (`---`) to `<hr>` once cursor/focus leaves them.
+ * Returns `true` when a semantic block conversion occurred (so callers can persist changes).
  */
 export function syncLiveMarkdownSyntax(
   editor: HTMLElement,
-  options?: { clearAll?: boolean },
-): void {
+  options?: SyncLiveMarkdownOptions,
+): boolean {
   const sel = window.getSelection();
+  const rawRange = !options?.clearAll && sel && sel.rangeCount > 0 ? sel.getRangeAt(0) : null;
   const range =
-    !options?.clearAll &&
-    sel &&
-    sel.rangeCount > 0 &&
-    editor.contains(sel.getRangeAt(0).startContainer)
-      ? sel.getRangeAt(0)
+    rawRange && (editor.contains(rawRange.startContainer) || rawRange.intersectsNode(editor))
+      ? rawRange
       : null;
 
-  const { activeBlock, activeInlines } = range
-    ? getActiveMarksForSelection(editor, range)
-    : { activeBlock: null, activeInlines: [] };
+  const nonCollapsedSnap =
+    range && !range.collapsed && sel && sel.anchorNode && sel.focusNode
+      ? {
+          anchorNode: sel.anchorNode,
+          anchorOffset: sel.anchorOffset,
+          focusNode: sel.focusNode,
+          focusOffset: sel.focusOffset,
+        }
+      : null;
 
-  const activeSet = new Set<HTMLElement>(activeInlines);
-  if (activeBlock) activeSet.add(activeBlock);
+  const { activeBlocks, activeHrs, activeInlines } = range
+    ? getActiveMarksForSelection(editor, range, options)
+    : { activeBlocks: [], activeHrs: [], activeInlines: [] };
+
+  const replacements = new Map<Node, Node>();
+  const expandedHrBlocks: HTMLElement[] = [];
+  for (const hr of activeHrs) {
+    if (!hr.isConnected) continue;
+    const expanded = expandHorizontalRule(hr);
+    replacements.set(hr, expanded);
+    expandedHrBlocks.push(expanded);
+  }
+
+  const activeSet = new Set<HTMLElement>([...activeBlocks, ...expandedHrBlocks, ...activeInlines]);
 
   const currentActives = Array.from(
     editor.querySelectorAll(`[${MD_ACTIVE_ATTR}="true"]`),
@@ -379,18 +556,27 @@ export function syncLiveMarkdownSyntax(
   for (let i = currentActives.length - 1; i >= 0; i -= 1) {
     const el = currentActives[i]!;
     if (!activeSet.has(el)) {
-      deactivateElement(editor, el);
+      const replacement = deactivateElement(editor, el, !options?.clearAll);
+      if (replacement) {
+        replacements.set(el, replacement);
+      }
     }
   }
 
-  if (!range) return;
-
-  const caretNode = range.startContainer;
-  if (activeBlock) {
-    activateBlockElement(activeBlock, caretNode);
-  }
-  for (const inlineEl of activeInlines) {
-    activateInlineElement(inlineEl, caretNode);
+  if (range) {
+    const caretNode = range.collapsed ? range.startContainer : null;
+    for (const block of activeBlocks) {
+      if (block.hasAttribute(MD_HR_ACTIVE_ATTR)) {
+        if (block.getAttribute(MD_ACTIVE_ATTR) !== "true") {
+          block.setAttribute(MD_ACTIVE_ATTR, "true");
+        }
+      } else {
+        activateBlockElement(block, caretNode);
+      }
+    }
+    for (const inlineEl of activeInlines) {
+      activateInlineElement(inlineEl, caretNode);
+    }
   }
 
   // Strip/unwrap any orphan syntax spans whose parent lost active state (e.g. after native block merge).
@@ -413,10 +599,65 @@ export function syncLiveMarkdownSyntax(
       span.remove();
     }
   }
+
+  const currentRangeAfterDom =
+    !options?.clearAll && sel && sel.rangeCount > 0 ? sel.getRangeAt(0) : null;
+  const effectiveActiveRange =
+    currentRangeAfterDom &&
+    (editor.contains(currentRangeAfterDom.startContainer) ||
+      currentRangeAfterDom.intersectsNode(editor))
+      ? currentRangeAfterDom
+      : range;
+
+  const semanticConverted = convertStandaloneHrLines(editor, {
+    activeRange: options?.clearAll ? null : effectiveActiveRange,
+    preserveSyntaxAttr: true,
+    onNodeReplaced: (oldNode, newNode) => replacements.set(oldNode, newNode),
+  });
+
+  if (nonCollapsedSnap && sel) {
+    const resolveEndpoint = (node: Node, offset: number): { node: Node; offset: number } => {
+      if (node.isConnected && editor.contains(node)) {
+        return { node, offset };
+      }
+      const directReplacement = replacements.get(node);
+      if (directReplacement && directReplacement.isConnected) {
+        const textChild = directReplacement.firstChild;
+        if (textChild && textChild.nodeType === Node.TEXT_NODE) {
+          return {
+            node: textChild,
+            offset: Math.min(offset, textChild.nodeValue?.length ?? 0),
+          };
+        }
+        return { node: directReplacement, offset: 0 };
+      }
+      return { node, offset };
+    };
+
+    const nextAnchor = resolveEndpoint(nonCollapsedSnap.anchorNode, nonCollapsedSnap.anchorOffset);
+    const nextFocus = resolveEndpoint(nonCollapsedSnap.focusNode, nonCollapsedSnap.focusOffset);
+    if (
+      nextAnchor.node.isConnected &&
+      nextFocus.node.isConnected &&
+      (sel.isCollapsed ||
+        sel.anchorNode !== nextAnchor.node ||
+        sel.anchorOffset !== nextAnchor.offset ||
+        sel.focusNode !== nextFocus.node ||
+        sel.focusOffset !== nextFocus.offset)
+    ) {
+      try {
+        sel.setBaseAndExtent(nextAnchor.node, nextAnchor.offset, nextFocus.node, nextFocus.offset);
+      } catch {
+        // ignore invalid range restoration
+      }
+    }
+  }
+
+  return semanticConverted;
 }
 
-export function clearAllLiveMarkdownSyntax(editor: HTMLElement): void {
-  syncLiveMarkdownSyntax(editor, { clearAll: true });
+export function clearAllLiveMarkdownSyntax(editor: HTMLElement): boolean {
+  return syncLiveMarkdownSyntax(editor, { clearAll: true });
 }
 
 function getLogicalCaretOffsetInNode(
@@ -451,7 +692,7 @@ function replaceBlockTagPreservingCaret(
   const caretOffset = range ? range.startOffset : 0;
 
   const replacement = document.createElement(nextTag);
-  if (HEADING_TAG_SET.has(nextTag) || nextTag === "blockquote") {
+  if (HEADING_TAG_SET.has(nextTag)) {
     replacement.setAttribute(MD_ACTIVE_ATTR, "true");
   }
   while (block.firstChild) {
@@ -528,16 +769,33 @@ function pushSpilledTextAfterBlockSyntax(
 
   span.textContent = expectedPrefix;
   const extraNode = document.createTextNode(extraText);
+  const targetScope = getEditableScope(block);
 
-  const afterNode = span.nextSibling;
-  if (
-    afterNode &&
-    afterNode.nodeType === Node.TEXT_NODE &&
-    (afterNode.nodeValue || "").replace(/\u200B/g, "") === ""
-  ) {
-    afterNode.remove();
+  if (targetScope !== block) {
+    const emptyBr = !hasVisibleContent(targetScope)
+      ? targetScope.querySelector(":scope > br")
+      : null;
+    if (emptyBr) emptyBr.remove();
+    const firstNode = targetScope.firstChild;
+    if (
+      firstNode &&
+      firstNode.nodeType === Node.TEXT_NODE &&
+      stripZeroWidth(firstNode.nodeValue || "") === ""
+    ) {
+      firstNode.remove();
+    }
+    targetScope.insertBefore(extraNode, targetScope.firstChild);
+  } else {
+    const afterNode = span.nextSibling;
+    if (
+      afterNode &&
+      afterNode.nodeType === Node.TEXT_NODE &&
+      stripZeroWidth(afterNode.nodeValue || "") === ""
+    ) {
+      afterNode.remove();
+    }
+    block.insertBefore(extraNode, span.nextSibling);
   }
-  block.insertBefore(extraNode, span.nextSibling);
 
   if (caretInsideSpan) {
     if (spanCaretOffset > expectedPrefix.length) {
@@ -546,6 +804,302 @@ function pushSpilledTextAfterBlockSyntax(
       placeCaret(span.firstChild, spanCaretOffset);
     }
   }
+}
+
+function restoreCaretAtTextOffsetInContainer(container: HTMLElement, offset: number): void {
+  let remaining = offset;
+  const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
+  let curr = walker.nextNode() as Text | null;
+  while (curr) {
+    const len = stripZeroWidth(curr.nodeValue || "").length;
+    if (remaining <= len) {
+      placeCaret(curr, Math.min(remaining, curr.nodeValue?.length ?? 0));
+      return;
+    }
+    remaining -= len;
+    curr = walker.nextNode() as Text | null;
+  }
+  placeCaretAtStart(container);
+}
+
+function unwrapCodeBlockToParagraphs(pre: HTMLElement): void {
+  const openSpan = getDirectSyntaxChild(pre, "code-open");
+  const codeEl = pre.querySelector(":scope > code") as HTMLElement | null;
+  const closeSpan = getDirectSyntaxChild(pre, "code-close");
+
+  const sel = window.getSelection();
+  const range = sel && sel.rangeCount > 0 ? sel.getRangeAt(0) : null;
+  let caretPart: "open" | "code" | "close" | null = null;
+  let caretOffset = 0;
+
+  if (range && pre.contains(range.startContainer)) {
+    if (openSpan?.contains(range.startContainer)) {
+      caretPart = "open";
+      caretOffset = getLogicalCaretOffsetInNode(openSpan, range.startContainer, range.startOffset);
+    } else if (closeSpan?.contains(range.startContainer)) {
+      caretPart = "close";
+      caretOffset = getLogicalCaretOffsetInNode(closeSpan, range.startContainer, range.startOffset);
+    } else if (codeEl?.contains(range.startContainer)) {
+      caretPart = "code";
+      caretOffset = getLogicalCaretOffsetInNode(codeEl, range.startContainer, range.startOffset);
+    }
+  }
+
+  const openText = openSpan
+    ? stripZeroWidth((openSpan.textContent || "").replace(/\u00A0/g, " "))
+    : "";
+  const codeText = codeEl ? stripZeroWidth((codeEl.textContent || "").replace(/\u00A0/g, " ")) : "";
+  const closeText = closeSpan
+    ? stripZeroWidth((closeSpan.textContent || "").replace(/\u00A0/g, " "))
+    : "";
+
+  const makePara = (text: string): HTMLParagraphElement => {
+    const p = document.createElement("p");
+    if (text) p.appendChild(document.createTextNode(text));
+    normalizeEmptyBreak(p);
+    return p;
+  };
+
+  const frag = document.createDocumentFragment();
+  const openP = makePara(openText);
+  frag.appendChild(openP);
+
+  const codePs: HTMLParagraphElement[] = [];
+  if (codeText.length > 0 || caretPart === "code") {
+    for (const line of codeText.split("\n")) {
+      const p = makePara(line);
+      codePs.push(p);
+      frag.appendChild(p);
+    }
+  }
+
+  const closeP = makePara(closeText);
+  frag.appendChild(closeP);
+  pre.replaceWith(frag);
+
+  if (caretPart === "open") {
+    restoreCaretAtTextOffsetInContainer(openP, caretOffset);
+  } else if (caretPart === "close") {
+    restoreCaretAtTextOffsetInContainer(closeP, caretOffset);
+  } else if (caretPart === "code" && codePs.length > 0) {
+    let remaining = caretOffset;
+    const lines = codeText.split("\n");
+    for (let i = 0; i < codePs.length; i += 1) {
+      const lineLen = (lines[i] ?? "").length;
+      if (remaining <= lineLen || i === codePs.length - 1) {
+        restoreCaretAtTextOffsetInContainer(codePs[i]!, Math.min(remaining, lineLen));
+        break;
+      }
+      remaining -= lineLen + 1;
+    }
+  }
+}
+
+function unwrapListItemToParagraph(
+  li: HTMLElement,
+  stripPrefixSpan: boolean,
+): HTMLParagraphElement | null {
+  const list = li.parentElement;
+  if (!list) return null;
+
+  const sel = window.getSelection();
+  const range = sel && sel.rangeCount > 0 ? sel.getRangeAt(0) : null;
+  const caretInsideOwn = Boolean(
+    range &&
+    li.contains(range.startContainer) &&
+    (() => {
+      const firstNested = li.querySelector(":scope > ul, :scope > ol");
+      return !firstNested || !firstNested.contains(range.startContainer);
+    })(),
+  );
+  const logicalOffset =
+    caretInsideOwn && range
+      ? getLogicalCaretOffsetInNode(li, range.startContainer, range.startOffset)
+      : 0;
+
+  const nestedLists = Array.from(li.children).filter((child) => {
+    const tag = child.tagName.toLowerCase();
+    return tag === "ul" || tag === "ol";
+  });
+  nestedLists.forEach((nl) => nl.remove());
+
+  li.querySelectorAll(":scope > input[data-task-checkbox]").forEach((cb) => cb.remove());
+  if (stripPrefixSpan) {
+    li.querySelectorAll(`:scope > [${MD_SYNTAX_ATTR}]`).forEach((s) => s.remove());
+  } else {
+    li.querySelectorAll(`:scope > [${MD_SYNTAX_ATTR}]`).forEach((s) => {
+      const txt = stripZeroWidth(s.textContent || "");
+      if (txt) {
+        s.replaceWith(document.createTextNode(txt));
+      } else {
+        s.remove();
+      }
+    });
+  }
+
+  const p = document.createElement("p");
+  const taskSpan = li.querySelector(":scope > span[data-task-content]");
+  if (taskSpan) {
+    while (li.firstChild) {
+      if (li.firstChild === taskSpan) {
+        while (taskSpan.firstChild) p.appendChild(taskSpan.firstChild);
+        taskSpan.remove();
+      } else {
+        p.appendChild(li.firstChild);
+      }
+    }
+  } else {
+    while (li.firstChild) {
+      p.appendChild(li.firstChild);
+    }
+  }
+  p.normalize();
+  normalizeEmptyBreak(p);
+
+  splitListAroundItem(list, li, [p, ...nestedLists]);
+  for (const nl of nestedLists) {
+    const tag = nl.tagName.toLowerCase();
+    if ((tag === "ul" || tag === "ol") && nl.isConnected) {
+      mergeListWithAdjacentSiblings(nl as HTMLUListElement | HTMLOListElement);
+    }
+  }
+
+  if (caretInsideOwn) {
+    restoreCaretAtTextOffsetInContainer(p, logicalOffset);
+  }
+  return p;
+}
+
+function convertListItemKind(
+  li: HTMLElement,
+  span: HTMLSpanElement,
+  target:
+    | { kind: "bullet"; bullet: "-" | "*" | "+"; rest: string }
+    | { kind: "ordered"; start: number; delim: "." | ")"; rest: string }
+    | { kind: "task"; bullet: "-" | "*" | "+"; checked: boolean; rest: string },
+): void {
+  const parentList = li.parentElement;
+  if (!parentList) return;
+
+  const sel = window.getSelection();
+  const range = sel && sel.rangeCount > 0 ? sel.getRangeAt(0) : null;
+  const caretInsideSpan = Boolean(range && span.contains(range.startContainer));
+  const spanOffset = caretInsideSpan && range ? range.startOffset : 0;
+
+  const targetListTag = target.kind === "ordered" ? "ol" : "ul";
+  const isTargetTask = target.kind === "task";
+  const sameContainer =
+    parentList.tagName.toLowerCase() === targetListTag &&
+    parentList.hasAttribute("data-task-list") === isTargetTask;
+
+  const nestedLists = Array.from(li.children).filter((child) => {
+    const tag = child.tagName.toLowerCase();
+    return tag === "ul" || tag === "ol";
+  });
+  nestedLists.forEach((nl) => nl.remove());
+
+  const contentFrag = document.createDocumentFragment();
+  if (target.rest) {
+    contentFrag.appendChild(document.createTextNode(target.rest));
+  }
+  const existingTaskSpan = li.querySelector(":scope > span[data-task-content]");
+  if (existingTaskSpan) {
+    while (existingTaskSpan.firstChild) contentFrag.appendChild(existingTaskSpan.firstChild);
+  } else {
+    for (const child of Array.from(li.childNodes)) {
+      if (child === span) continue;
+      if (
+        child.nodeType === Node.ELEMENT_NODE &&
+        ((child as HTMLElement).hasAttribute("data-task-checkbox") ||
+          (child as HTMLElement).hasAttribute(MD_SYNTAX_ATTR))
+      ) {
+        continue;
+      }
+      contentFrag.appendChild(child);
+    }
+  }
+
+  const newLi =
+    target.kind === "task"
+      ? createTaskListItem(target.checked, contentFrag, target.bullet)
+      : createListItemWithContent(
+          contentFrag,
+          target.kind === "bullet" ? { bullet: target.bullet } : { delim: target.delim },
+        );
+  nestedLists.forEach((nl) => newLi.appendChild(nl));
+
+  if (sameContainer) {
+    parentList.replaceChild(newLi, li);
+    if (target.kind === "ordered" && parentList.firstElementChild === newLi) {
+      if (target.start !== 1) parentList.setAttribute("start", String(target.start));
+      else parentList.removeAttribute("start");
+    }
+  } else {
+    const newList = document.createElement(targetListTag);
+    if (isTargetTask) newList.setAttribute("data-task-list", "true");
+    if (target.kind === "ordered" && target.start !== 1) {
+      newList.setAttribute("start", String(target.start));
+    }
+    newList.appendChild(newLi);
+    if (parentList.children.length === 1) {
+      parentList.replaceWith(newList);
+    } else {
+      splitListAroundItem(parentList, li, newList);
+    }
+    mergeListWithAdjacentSiblings(newList as HTMLUListElement | HTMLOListElement);
+  }
+
+  const spec = getBlockSyntaxSpec(newLi);
+  if (!spec || spec.kind !== "list") return;
+
+  newLi.setAttribute(MD_ACTIVE_ATTR, "true");
+  const newSpan = createSyntaxSpan("list", spec.prefixText);
+  const scope = getEditableScope(newLi);
+  if (spec.isTask && scope !== newLi) {
+    newLi.insertBefore(newSpan, scope);
+  } else {
+    newLi.insertBefore(newSpan, newLi.firstChild);
+  }
+
+  if (!hasOwnInlineContent(newLi)) {
+    const emptyBr = scope.querySelector(":scope > br");
+    if (emptyBr) emptyBr.remove();
+    if (!hasZeroWidthTextChild(scope)) {
+      scope.insertBefore(
+        document.createTextNode("\u200B"),
+        spec.isTask ? null : newSpan.nextSibling,
+      );
+    }
+  }
+
+  if (caretInsideSpan && newSpan.firstChild) {
+    if (target.rest && spanOffset > spec.prefixText.length) {
+      restoreCaretAtTextOffsetInContainer(scope, spanOffset - spec.prefixText.length);
+    } else {
+      placeCaret(newSpan.firstChild, Math.min(spanOffset, newSpan.textContent?.length ?? 0));
+    }
+  }
+}
+
+function syncCanonicalPrefixInSpan(
+  block: HTMLElement,
+  span: HTMLSpanElement,
+  canonicalPrefix: string,
+  rest: string,
+): void {
+  if (rest) {
+    pushSpilledTextAfterBlockSyntax(block, span, canonicalPrefix, rest);
+  } else if (span.textContent !== canonicalPrefix) {
+    const sel = window.getSelection();
+    const range = sel && sel.rangeCount > 0 ? sel.getRangeAt(0) : null;
+    const inSpan = Boolean(range && span.contains(range.startContainer));
+    const off = inSpan && range ? range.startOffset : canonicalPrefix.length;
+    span.textContent = canonicalPrefix;
+    if (inSpan && span.firstChild) {
+      placeCaret(span.firstChild, Math.min(off, canonicalPrefix.length));
+    }
+  }
+  cleanZeroWidthInsideElement(getEditableScope(block));
 }
 
 function reconcileBlockSyntax(editor: HTMLElement, block: HTMLElement): void {
@@ -557,28 +1111,14 @@ function reconcileBlockSyntax(editor: HTMLElement, block: HTMLElement): void {
       unwrapBlockSyntaxToParagraph(block, true);
       return;
     }
-    const raw = (span.textContent || "").replace(/\u00A0/g, " ").replace(/\u200B/g, "");
+    const raw = stripZeroWidth((span.textContent || "").replace(/\u00A0/g, " "));
     const match = /^(#{1,6})([ ])(.*)$/.exec(raw);
     if (!match) {
       unwrapBlockSyntaxToParagraph(block, false);
       return;
     }
     const hashes = match[1]!;
-    const canonicalPrefix = `${hashes} `;
-    const spilled = match[3] || "";
-    if (spilled) {
-      pushSpilledTextAfterBlockSyntax(block, span, canonicalPrefix, spilled);
-    } else if (span.textContent !== canonicalPrefix) {
-      const sel = window.getSelection();
-      const range = sel && sel.rangeCount > 0 ? sel.getRangeAt(0) : null;
-      const inSpan = Boolean(range && span.contains(range.startContainer));
-      const off = inSpan && range ? range.startOffset : canonicalPrefix.length;
-      span.textContent = canonicalPrefix;
-      if (inSpan && span.firstChild) {
-        placeCaret(span.firstChild, Math.min(off, canonicalPrefix.length));
-      }
-    }
-    cleanZeroWidthInsideElement(block);
+    syncCanonicalPrefixInSpan(block, span, `${hashes} `, match[3] || "");
     if (hashes.length !== currentLevel) {
       replaceBlockTagPreservingCaret(block, `h${hashes.length}`, editor);
     }
@@ -591,18 +1131,119 @@ function reconcileBlockSyntax(editor: HTMLElement, block: HTMLElement): void {
       unwrapBlockSyntaxToParagraph(block, true);
       return;
     }
-    const raw = (span.textContent || "").replace(/\u00A0/g, " ").replace(/\u200B/g, "");
+    const raw = stripZeroWidth((span.textContent || "").replace(/\u00A0/g, " "));
     const match = /^(>[ ])(.*)$/.exec(raw);
     if (!match) {
       unwrapBlockSyntaxToParagraph(block, false);
       return;
     }
-    if (match[2]) {
-      pushSpilledTextAfterBlockSyntax(block, span, "> ", match[2]);
-    } else if (span.textContent !== "> ") {
-      span.textContent = "> ";
+    syncCanonicalPrefixInSpan(block, span, "> ", match[2] || "");
+    return;
+  }
+
+  if (tag === "li") {
+    const span = getDirectSyntaxChild(block, "list");
+    if (!span) {
+      unwrapListItemToParagraph(block, true);
+      return;
     }
-    cleanZeroWidthInsideElement(block);
+    const raw = stripZeroWidth((span.textContent || "").replace(/\u00A0/g, " "));
+    const parsed = parseMarkdownBlockPrefix(raw);
+    if (!parsed || parsed.type === "heading" || parsed.type === "blockquote") {
+      unwrapListItemToParagraph(block, false);
+      return;
+    }
+
+    const parentTag = block.parentElement?.tagName.toLowerCase();
+    const isTask = block.hasAttribute("data-task");
+
+    if (parsed.type === "task" && isTask) {
+      applyLiMarkerAttrs(block, { bullet: parsed.bullet });
+      block.setAttribute("data-checked", String(parsed.checked));
+      const input = block.querySelector(
+        ":scope > input[data-task-checkbox]",
+      ) as HTMLInputElement | null;
+      if (input) {
+        input.checked = parsed.checked;
+        if (parsed.checked) input.setAttribute("checked", "");
+        else input.removeAttribute("checked");
+      }
+      syncCanonicalPrefixInSpan(
+        block,
+        span,
+        `${parsed.bullet} [${parsed.checked ? "x" : " "}] `,
+        parsed.rest,
+      );
+      return;
+    }
+
+    if (parsed.type === "bullet" && parentTag === "ul" && !isTask) {
+      applyLiMarkerAttrs(block, { bullet: parsed.bullet });
+      syncCanonicalPrefixInSpan(block, span, `${parsed.bullet} `, parsed.rest);
+      return;
+    }
+
+    if (parsed.type === "ordered" && parentTag === "ol") {
+      const ol = block.parentElement as HTMLOListElement;
+      if (ol.firstElementChild === block) {
+        if (parsed.start !== 1) ol.setAttribute("start", String(parsed.start));
+        else ol.removeAttribute("start");
+      }
+      applyLiMarkerAttrs(block, { delim: parsed.delim });
+      const idx = getOrderedListIndex(block);
+      syncCanonicalPrefixInSpan(block, span, `${idx}${parsed.delim} `, parsed.rest);
+      return;
+    }
+
+    if (parsed.type === "task") {
+      convertListItemKind(block, span, {
+        kind: "task",
+        bullet: parsed.bullet,
+        checked: parsed.checked,
+        rest: parsed.rest,
+      });
+    } else if (parsed.type === "bullet") {
+      convertListItemKind(block, span, {
+        kind: "bullet",
+        bullet: parsed.bullet,
+        rest: parsed.rest,
+      });
+    } else {
+      convertListItemKind(block, span, {
+        kind: "ordered",
+        start: parsed.start,
+        delim: parsed.delim,
+        rest: parsed.rest,
+      });
+    }
+    return;
+  }
+
+  if (tag === "pre") {
+    const codeEl = block.querySelector(":scope > code") as HTMLElement | null;
+    const openSpan = getDirectSyntaxChild(block, "code-open");
+    const closeSpan = getDirectSyntaxChild(block, "code-close");
+    if (!codeEl || !openSpan || !closeSpan) {
+      unwrapCodeBlockToParagraphs(block);
+      return;
+    }
+    const openRaw = stripZeroWidth((openSpan.textContent || "").replace(/\u00A0/g, " "));
+    const closeRaw = stripZeroWidth((closeSpan.textContent || "").replace(/\u00A0/g, " "));
+    const openMatch = CODE_OPEN_PREFIX_REGEX.exec(openRaw);
+    const closeOk = CODE_CLOSE_PREFIX_REGEX.test(closeRaw);
+    if (!openMatch || !closeOk || openSpan.querySelector("br") || closeSpan.querySelector("br")) {
+      unwrapCodeBlockToParagraphs(block);
+      return;
+    }
+    const nextLang = openMatch[1] || "";
+    if (nextLang) {
+      if (codeEl.getAttribute("data-lang") !== nextLang) {
+        codeEl.setAttribute("data-lang", nextLang);
+      }
+    } else if (codeEl.hasAttribute("data-lang")) {
+      codeEl.removeAttribute("data-lang");
+    }
+    cleanZeroWidthInsideElement(codeEl);
   }
 }
 
@@ -842,9 +1483,143 @@ function reconcileInlineElement(inlineEl: HTMLElement): void {
   }
 }
 
+function promotePlainBlockPrefixAtCaret(editor: HTMLElement): void {
+  const range = getCollapsedSelectionRange(editor);
+  if (!range) return;
+  const block = getClosestBlock(range.startContainer, editor);
+  if (!block || block.parentElement !== editor) return;
+  const tag = block.tagName.toLowerCase();
+  if (tag !== "p" && tag !== "div") return;
+  if (block.querySelector("img, ul, ol, pre, blockquote, hr")) return;
+  if (Array.from(block.querySelectorAll("br")).some((br) => br.nextSibling !== null)) return;
+
+  const first = block.firstChild;
+  if (!first || first.nodeType !== Node.TEXT_NODE) return;
+  const cleanVal = stripZeroWidth((first.nodeValue || "").replace(/\u00A0/g, " "));
+  const parsed = parseMarkdownBlockPrefix(cleanVal);
+  if (!parsed) return;
+
+  const caretOffsetInBlock = getLogicalCaretOffsetInNode(
+    block,
+    range.startContainer,
+    range.startOffset,
+  );
+
+  first.remove();
+  if (parsed.rest) {
+    block.insertBefore(document.createTextNode(parsed.rest), block.firstChild);
+  }
+  cleanTrailingEmptyNodes(block);
+
+  if (parsed.type === "heading" || parsed.type === "blockquote") {
+    const canonicalPrefix = parsed.type === "blockquote" ? "> " : `${"#".repeat(parsed.level)} `;
+    const nextTag = parsed.type === "blockquote" ? "blockquote" : `h${parsed.level}`;
+    const kind = parsed.type === "blockquote" ? "blockquote" : "heading";
+
+    const replacement = replaceBlockTagPreservingCaret(block, nextTag, editor);
+    const shouldRevealPrefix =
+      parsed.type === "heading" || caretOffsetInBlock < canonicalPrefix.length;
+
+    if (!shouldRevealPrefix) {
+      normalizeEmptyBreak(replacement);
+      if (getTextWithoutArtifacts(replacement).length === 0 && !replacement.querySelector("img")) {
+        placeCaretAtStart(replacement);
+      } else {
+        restoreCaretAtTextOffsetInContainer(
+          replacement,
+          caretOffsetInBlock - canonicalPrefix.length,
+        );
+      }
+      return;
+    }
+
+    replacement.setAttribute(MD_ACTIVE_ATTR, "true");
+    const syntaxSpan = createSyntaxSpan(kind, canonicalPrefix);
+    replacement.insertBefore(syntaxSpan, replacement.firstChild);
+
+    if (getTextWithoutArtifacts(replacement).length === 0 && !replacement.querySelector("img")) {
+      const emptyBr = replacement.querySelector(":scope > br");
+      if (emptyBr) emptyBr.remove();
+      const anchor = document.createTextNode("\u200B");
+      replacement.appendChild(anchor);
+      if (caretOffsetInBlock <= canonicalPrefix.length && syntaxSpan.firstChild) {
+        placeCaret(syntaxSpan.firstChild, caretOffsetInBlock);
+      } else {
+        placeCaret(anchor, 1);
+      }
+      return;
+    }
+
+    restoreCaretAtTextOffsetInContainer(replacement, caretOffsetInBlock);
+    return;
+  }
+
+  const contentFrag = document.createDocumentFragment();
+  while (block.firstChild) {
+    contentFrag.appendChild(block.firstChild);
+  }
+
+  let listEl: HTMLUListElement | HTMLOListElement;
+  let li: HTMLLIElement;
+
+  if (parsed.type === "task") {
+    listEl = document.createElement("ul");
+    listEl.setAttribute("data-task-list", "true");
+    li = createTaskListItem(parsed.checked, contentFrag, parsed.bullet);
+  } else if (parsed.type === "bullet") {
+    listEl = document.createElement("ul");
+    li = createListItemWithContent(contentFrag, { bullet: parsed.bullet });
+  } else {
+    listEl = document.createElement("ol");
+    if (parsed.start !== 1) listEl.setAttribute("start", String(parsed.start));
+    li = createListItemWithContent(contentFrag, { delim: parsed.delim });
+  }
+
+  listEl.appendChild(li);
+  block.replaceWith(listEl);
+  mergeListWithAdjacentSiblings(listEl);
+
+  const spec = getBlockSyntaxSpec(li);
+  if (!spec || spec.kind !== "list") return;
+
+  const scope = getEditableScope(li);
+  if (caretOffsetInBlock >= spec.prefixText.length) {
+    normalizeEmptyBreak(scope);
+    if (!hasOwnInlineContent(li)) {
+      placeCaretAtStart(li);
+    } else {
+      restoreCaretAtTextOffsetInContainer(scope, caretOffsetInBlock - spec.prefixText.length);
+    }
+    return;
+  }
+
+  li.setAttribute(MD_ACTIVE_ATTR, "true");
+  const syntaxSpan = createSyntaxSpan("list", spec.prefixText);
+  if (spec.isTask && scope !== li) {
+    li.insertBefore(syntaxSpan, scope);
+  } else {
+    li.insertBefore(syntaxSpan, li.firstChild);
+  }
+
+  if (!hasOwnInlineContent(li)) {
+    const emptyBr = scope.querySelector(":scope > br");
+    if (emptyBr) emptyBr.remove();
+    const anchor = document.createTextNode("\u200B");
+    scope.appendChild(anchor);
+    if (caretOffsetInBlock <= spec.prefixText.length && syntaxSpan.firstChild) {
+      placeCaret(syntaxSpan.firstChild, caretOffsetInBlock);
+    } else {
+      placeCaret(anchor, 1);
+    }
+    return;
+  }
+
+  restoreCaretAtTextOffsetInContainer(li, caretOffsetInBlock);
+}
+
 /**
- * Reconciles user edits made while syntax markers (`### `, `` ` ``, `**`, `~~`, `==`, `> `, `[label](url)`)
- * are visible, dynamically changing heading levels or unwrapping broken delimiters.
+ * Reconciles user edits made while syntax markers (`### `, `- `, `1. `, `- [ ] `, `` ``` ``, `` ` ``, `**`, `~~`, `==`, `> `, `[label](url)`)
+ * are visible, dynamically changing heading levels, list types, code languages, or unwrapping broken delimiters.
  */
 export function reconcileActiveMarkdownSyntax(editor: HTMLElement): void {
   const actives = Array.from(
@@ -854,1066 +1629,409 @@ export function reconcileActiveMarkdownSyntax(editor: HTMLElement): void {
     const el = actives[i]!;
     if (!el.isConnected) continue;
     const tag = el.tagName.toLowerCase();
-    if (HEADING_TAG_SET.has(tag) || tag === "blockquote") {
+    if (el.hasAttribute(MD_HR_ACTIVE_ATTR)) {
+      const hrSyntax = isStandaloneHrBlock(el);
+      if (hrSyntax) {
+        el.setAttribute(MD_HR_ACTIVE_ATTR, hrSyntax);
+      } else {
+        el.removeAttribute(MD_HR_ACTIVE_ATTR);
+        el.removeAttribute(MD_ACTIVE_ATTR);
+      }
+    } else if (HEADING_TAG_SET.has(tag) || tag === "blockquote" || tag === "li" || tag === "pre") {
       reconcileBlockSyntax(editor, el);
     } else if (INLINE_MARK_TAGS.has(tag)) {
       reconcileInlineElement(el);
     }
   }
+  promotePlainBlockPrefixAtCaret(editor);
 }
 
-interface InlineRegexMatch {
-  startIdx: number;
-  endIdx: number;
-  createEl: () => HTMLElement;
-}
-
-function matchInlineMarkdownBeforeCaret(before: string): InlineRegexMatch | null {
-  // 1. Markdown Link `[label](https://url)`
-  const linkMatch = /\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)$/.exec(before);
-  if (linkMatch) {
-    const safeHref = sanitizeHttpUrl(linkMatch[2]!);
-    if (safeHref) {
-      const label = linkMatch[1]!;
-      return {
-        startIdx: linkMatch.index,
-        endIdx: linkMatch.index + linkMatch[0].length,
-        createEl: () => {
-          const a = document.createElement("a");
-          a.href = safeHref;
-          a.target = "_blank";
-          a.rel = "noopener noreferrer";
-          a.textContent = label;
-          return a;
-        },
-      };
+function findTextOffsetAtClientX(tn: Text, clientX: number): number {
+  const len = tn.nodeValue?.length ?? 0;
+  if (len === 0) return 0;
+  const doc = tn.ownerDocument || document;
+  let bestOffset = len;
+  let bestDist = Infinity;
+  for (let i = 0; i <= len; i += 1) {
+    const r = doc.createRange();
+    r.setStart(tn, i);
+    r.collapse(true);
+    const rect = r.getBoundingClientRect();
+    if (rect.height > 0 || rect.left > 0) {
+      const dist = Math.abs(rect.left - clientX);
+      if (dist < bestDist) {
+        bestDist = dist;
+        bestOffset = i;
+      }
     }
   }
-
-  // 2. Inline code `` `code` ``
-  const codeMatch = /`([^`\n]+)`$/.exec(before);
-  if (codeMatch && codeMatch[1]!.replace(/\u200B/g, "").length > 0) {
-    const content = codeMatch[1]!;
-    return {
-      startIdx: codeMatch.index,
-      endIdx: codeMatch.index + codeMatch[0].length,
-      createEl: () => {
-        const el = document.createElement("code");
-        el.textContent = content;
-        return el;
-      },
-    };
-  }
-
-  // 3. Highlight `==text==`
-  const markMatch = /==([^=\n]*\S[^=\n]*)==$/.exec(before);
-  if (markMatch) {
-    const content = markMatch[1]!;
-    return {
-      startIdx: markMatch.index,
-      endIdx: markMatch.index + markMatch[0].length,
-      createEl: () => {
-        const el = document.createElement("mark");
-        el.textContent = content;
-        return el;
-      },
-    };
-  }
-
-  // 4. Bold `**text**` or `__text__`
-  const boldStar = /\*\*([^* \n](?:[^*\n]*?[^* \n])?)\*\*$/.exec(before);
-  const boldUnder = /__([^_ \n](?:[^_\n]*?[^_ \n])?)__$/.exec(before);
-  const boldMatch = boldStar || boldUnder;
-  if (boldMatch) {
-    const content = boldMatch[1]!;
-    return {
-      startIdx: boldMatch.index,
-      endIdx: boldMatch.index + boldMatch[0].length,
-      createEl: () => {
-        const el = document.createElement("strong");
-        el.textContent = content;
-        return el;
-      },
-    };
-  }
-
-  // 5. Strikethrough `~~text~~`
-  const strikeMatch = /~~([^~ \n](?:[^~\n]*?[^~ \n])?)~~$/.exec(before);
-  if (strikeMatch) {
-    const content = strikeMatch[1]!;
-    return {
-      startIdx: strikeMatch.index,
-      endIdx: strikeMatch.index + strikeMatch[0].length,
-      createEl: () => {
-        const el = document.createElement("s");
-        el.textContent = content;
-        return el;
-      },
-    };
-  }
-
-  // 6. Italic `*text*` or `_text_` (boundary-safe against `**bold*` and `snake_case`)
-  const italicStar = /(?:^|([^*]))\*([^\s*](?:[^*\n]*?[^\s*])?)\*$/.exec(before);
-  if (italicStar) {
-    const prefixLen = italicStar[1] ? italicStar[1].length : 0;
-    const content = italicStar[2]!;
-    return {
-      startIdx: italicStar.index + prefixLen,
-      endIdx: italicStar.index + italicStar[0].length,
-      createEl: () => {
-        const el = document.createElement("em");
-        el.textContent = content;
-        return el;
-      },
-    };
-  }
-
-  const italicUnder = /(?:^|([^\w_]))_([^\s_](?:[^_\n]*?[^\s_])?)_$/.exec(before);
-  if (italicUnder) {
-    const prefixLen = italicUnder[1] ? italicUnder[1].length : 0;
-    const content = italicUnder[2]!;
-    return {
-      startIdx: italicUnder.index + prefixLen,
-      endIdx: italicUnder.index + italicUnder[0].length,
-      createEl: () => {
-        const el = document.createElement("em");
-        el.textContent = content;
-        return el;
-      },
-    };
-  }
-
-  return null;
+  return bestOffset;
 }
 
-export function applyInlineMarkdownAtCaret(editor: HTMLElement): boolean {
-  const range = getCollapsedSelectionRange(editor);
-  if (!range) return false;
-
-  const node = range.startContainer;
-  if (node.nodeType !== Node.TEXT_NODE) return false;
-  if (isInsideTag(node, editor, ["pre", "code", "a"])) return false;
-  if (isInsideMarkdownSyntax(node, editor)) return false;
-
-  const textNode = node as Text;
-  const val = textNode.nodeValue || "";
-  const offset = range.startOffset;
-  const before = val.slice(0, offset);
-  const after = val.slice(offset);
-
-  const matched = matchInlineMarkdownBeforeCaret(before);
-  if (!matched) return false;
-
-  const beforeText = val.slice(0, matched.startIdx);
-  const inlineEl = matched.createEl();
-  const parent = textNode.parentNode;
-  if (!parent) return false;
-
-  if (beforeText) {
-    parent.insertBefore(document.createTextNode(beforeText), textNode);
-  }
-  parent.insertBefore(inlineEl, textNode);
-
-  if (after) {
-    const afterNode = document.createTextNode(after);
-    parent.insertBefore(afterNode, textNode);
-    parent.removeChild(textNode);
-    placeCaret(afterNode, 0);
+export function expandHorizontalRuleAndFocus(
+  editor: HTMLElement,
+  hr: HTMLElement,
+  placement: "start" | "end" | { clientX: number },
+): void {
+  const p = expandHorizontalRule(hr);
+  const tn = p.firstChild;
+  if (tn && tn.nodeType === Node.TEXT_NODE) {
+    const textNode = tn as Text;
+    const len = textNode.nodeValue?.length ?? 0;
+    const offset =
+      placement === "start"
+        ? 0
+        : placement === "end"
+          ? len
+          : findTextOffsetAtClientX(textNode, placement.clientX);
+    placeCaret(textNode, offset);
+  } else if (placement === "end") {
+    placeCaretAtEnd(p);
   } else {
-    const anchor = document.createTextNode("\u200B");
-    parent.insertBefore(anchor, textNode);
-    parent.removeChild(textNode);
-    placeCaret(anchor, 1);
+    placeCaretAtStart(p);
   }
-  return true;
+  syncLiveMarkdownSyntax(editor);
 }
 
-function isDelimiterOpenAllowed(beforeText: string): boolean {
-  if (beforeText.endsWith("\\")) return false;
-  if (beforeText.length === 0) return true;
-  const ch = beforeText.slice(-1);
-  return /[\s([\]{}"'`>–—\-/]/.test(ch);
-}
-
-function countUnpairedToken(before: string, token: string): number {
-  let count = 0;
-  for (let i = 0; i <= before.length - token.length; i += 1) {
-    if (before[i] === "\\") {
-      i += 1;
-      continue;
-    }
-    if (before.slice(i, i + token.length) === token) {
-      count += 1;
-      i += token.length - 1;
-    }
-  }
-  return count;
-}
-
-function getInlineAtCaretForOvertype(
+export function findHorizontalRuleAtClientY(
   editor: HTMLElement,
-  range: Range,
-): { inlineEl: HTMLElement; closeSpan: HTMLSpanElement; charIndexInClose: number } | null {
-  const inSyntax = isInsideMarkdownSyntax(range.startContainer, editor);
-  if (inSyntax && inSyntax.getAttribute(MD_SYNTAX_ATTR) === "close") {
-    const parent = inSyntax.parentElement;
-    if (parent && INLINE_MARK_TAGS.has(parent.tagName.toLowerCase())) {
-      const charIdx = range.startContainer.nodeType === Node.TEXT_NODE ? range.startOffset : 0;
-      return { inlineEl: parent, closeSpan: inSyntax, charIndexInClose: charIdx };
-    }
-  }
-
-  let curr: Node | null = range.startContainer;
-  let innerEl: HTMLElement | null = null;
-  while (curr && curr !== editor) {
-    if (curr.nodeType === Node.ELEMENT_NODE) {
-      const el = curr as HTMLElement;
-      const tag = el.tagName.toLowerCase();
-      if (BLOCK_TAG_SET.has(tag)) break;
-      if (INLINE_MARK_TAGS.has(tag)) {
-        innerEl = el;
-        break;
-      }
-    }
-    curr = curr.parentNode;
-  }
-  if (!innerEl) return null;
-
-  const closeSpan = getDirectSyntaxChild(innerEl, "close");
-  if (!closeSpan) return null;
-
-  const probe = document.createRange();
-  probe.setStart(range.startContainer, range.startOffset);
-  probe.setEndBefore(closeSpan);
-  if (
-    probe.toString().replace(/\u200B/g, "").length === 0 &&
-    !probe.cloneContents().querySelector("img, br")
-  ) {
-    return { inlineEl: innerEl, closeSpan, charIndexInClose: 0 };
-  }
-  return null;
-}
-
-function stepOutAfterInline(editor: HTMLElement, inlineEl: HTMLElement): void {
-  const parent = inlineEl.parentNode;
-  if (!parent) return;
-  let next = inlineEl.nextSibling;
-  while (
-    next &&
-    next.nodeType === Node.ELEMENT_NODE &&
-    (next as HTMLElement).hasAttribute("data-ghost")
-  ) {
-    next = next.nextSibling;
-  }
-
-  if (next && next.nodeType === Node.TEXT_NODE) {
-    const tn = next as Text;
-    const val = tn.nodeValue || "";
-    if (val.startsWith("\u200B")) {
-      placeCaret(tn, 1);
-      syncLiveMarkdownSyntax(editor);
-      return;
-    }
-    if (val.length > 0) {
-      placeCaret(tn, 0);
-      syncLiveMarkdownSyntax(editor);
-      return;
-    }
-  }
-
-  const anchor = document.createTextNode("\u200B");
-  parent.insertBefore(anchor, next);
-  placeCaret(anchor, 1);
-  syncLiveMarkdownSyntax(editor);
-}
-
-function insertActiveInlinePair(
-  editor: HTMLElement,
-  range: Range,
-  tag: "code" | "strong" | "em" | "s" | "mark",
-  delimiter: string,
-): boolean {
-  const el = document.createElement(tag);
-  el.setAttribute(MD_ACTIVE_ATTR, "true");
-  const openSpan = createSyntaxSpan("open", delimiter);
-  const anchor = document.createTextNode("\u200B");
-  const closeSpan = createSyntaxSpan("close", delimiter);
-  el.appendChild(openSpan);
-  el.appendChild(anchor);
-  el.appendChild(closeSpan);
-
-  range.deleteContents();
-  range.insertNode(el);
-  placeCaret(anchor, 1);
-  syncLiveMarkdownSyntax(editor);
-  return true;
-}
-
-function upgradeEmptyItalicToBold(editor: HTMLElement, emEl: HTMLElement): boolean {
-  const strong = document.createElement("strong");
-  strong.setAttribute(MD_ACTIVE_ATTR, "true");
-  const openSpan = createSyntaxSpan("open", "**");
-  const anchor = document.createTextNode("\u200B");
-  const closeSpan = createSyntaxSpan("close", "**");
-  strong.appendChild(openSpan);
-  strong.appendChild(anchor);
-  strong.appendChild(closeSpan);
-  emEl.replaceWith(strong);
-  placeCaret(anchor, 1);
-  syncLiveMarkdownSyntax(editor);
-  return true;
-}
-
-export function wrapSelectionWithDelimiter(editor: HTMLElement, key: string): boolean {
-  const sel = window.getSelection();
-  if (!sel || sel.rangeCount === 0) return false;
-  const range = sel.getRangeAt(0);
-  if (range.collapsed || !editor.contains(range.commonAncestorContainer)) return false;
-  if (isInsideTag(range.commonAncestorContainer, editor, ["pre", "code"])) return false;
-
-  const selectedText = range.toString();
-  if (!selectedText) return false;
-
-  if (key === "`" || key === "*") {
-    const tag = key === "`" ? "code" : "em";
-    const delimiter = key;
-    const el = document.createElement(tag);
-    el.setAttribute(MD_ACTIVE_ATTR, "true");
-    const openSpan = createSyntaxSpan("open", delimiter);
-    const contentNode = document.createTextNode(selectedText);
-    const closeSpan = createSyntaxSpan("close", delimiter);
-    el.appendChild(openSpan);
-    el.appendChild(contentNode);
-    el.appendChild(closeSpan);
-    range.deleteContents();
-    range.insertNode(el);
-
-    const nextRange = document.createRange();
-    nextRange.selectNodeContents(contentNode);
-    sel.removeAllRanges();
-    sel.addRange(nextRange);
-    syncLiveMarkdownSyntax(editor);
-    return true;
-  }
-
-  const pair = SELECTION_WRAP_DELIMITERS[key];
-  if (!pair) return false;
-
-  const wrappedNode = document.createTextNode(`${pair[0]}${selectedText}${pair[1]}`);
-  range.deleteContents();
-  range.insertNode(wrappedNode);
-  const nextRange = document.createRange();
-  nextRange.setStart(wrappedNode, pair[0].length);
-  nextRange.setEnd(wrappedNode, pair[0].length + selectedText.length);
-  sel.removeAllRanges();
-  sel.addRange(nextRange);
-  return true;
-}
-
-/**
- * Handles Obsidian-style auto-pairing, overtyping closing delimiters, and selection wrapping
- * for `` ` ``, `*`, `~`, `=`, `(`, `)`, `[`, `]`, and `"`.
- */
-export function handleMarkdownDelimiterKeyDown(editor: HTMLElement, key: string): boolean {
-  const sel = window.getSelection();
-  if (!sel || sel.rangeCount === 0) return false;
-  const range = sel.getRangeAt(0);
-  if (!editor.contains(range.startContainer)) return false;
-
-  if (!range.collapsed) {
-    if (["(", "[", '"', "`", "*"].includes(key)) {
-      return wrapSelectionWithDelimiter(editor, key);
-    }
-    return false;
-  }
-
-  if (isInsideTag(range.startContainer, editor, ["pre"])) return false;
-
-  // 1. Overtyping closing bracket/quote characters (`)`, `]`, `"`).
-  if (CLOSING_PLAIN_PAIR_CHARS.has(key) && range.startContainer.nodeType === Node.TEXT_NODE) {
-    const tn = range.startContainer as Text;
-    const val = tn.nodeValue || "";
-    const off = range.startOffset;
-    if (val[off] === key) {
-      placeCaret(tn, off + 1);
-      // Completing `)` in `[label](https://...)` immediately upgrades into rendered link!
-      if (key === ")") {
-        applyInlineMarkdownAtCaret(editor);
-      }
-      syncLiveMarkdownSyntax(editor);
-      return true;
-    }
-  }
-
-  // 2. Check if caret sits at the closing delimiter of an active inline mark (for overtype or ```` ``` ````).
-  const overtype = getInlineAtCaretForOvertype(editor, range);
-  if (overtype) {
-    const { inlineEl, closeSpan, charIndexInClose } = overtype;
-    const tag = inlineEl.tagName.toLowerCase();
-    const rule = INLINE_LIVE_RULES[tag];
-    if (rule && rule.delimiter[0] === key) {
-      const innerEmpty = getTextWithoutArtifacts(inlineEl).length === 0;
-
-      // Empty `*|*` + `*` -> upgrade to bold `**|**`!
-      if (tag === "em" && key === "*" && innerEmpty) {
-        return upgradeEmptyItalicToBold(editor, inlineEl);
-      }
-
-      // Empty `` `|` `` at start of an empty paragraph + `` ` `` -> degrade to plain `` `` `` for fenced code blocks!
-      if (tag === "code" && key === "`" && innerEmpty) {
-        const block = getClosestBlock(inlineEl, editor);
-        if (
-          block &&
-          ["p", "div"].includes(block.tagName.toLowerCase()) &&
-          getTextWithoutArtifacts(block).length === 0 &&
-          block.querySelectorAll("img").length === 0
-        ) {
-          const tn = document.createTextNode("``");
-          inlineEl.replaceWith(tn);
-          placeCaret(tn, 2);
-          syncLiveMarkdownSyntax(editor);
-          return true;
-        }
-      }
-
-      // Overtype across single- or multi-char delimiter (`*` inside `**`, `` ` `` inside `` ` ``, etc.)
-      if (charIndexInClose + 1 < rule.delimiter.length) {
-        const closeTextNode = closeSpan.firstChild;
-        if (closeTextNode) {
-          placeCaret(closeTextNode, charIndexInClose + 1);
-          return true;
-        }
-      }
-
-      if (innerEmpty) {
-        // Exiting an empty pair removes the empty element cleanly.
-        const parent = inlineEl.parentNode;
-        const next = inlineEl.nextSibling;
-        inlineEl.remove();
-        if (parent) {
-          if (next && next.nodeType === Node.TEXT_NODE) {
-            placeCaret(next, 0);
-          } else {
-            const pBlock = parent instanceof HTMLElement ? parent : null;
-            if (pBlock && !hasVisibleContent(pBlock)) {
-              ensureElementHasBreakIfEmpty(pBlock);
-              placeCaretAtStart(pBlock);
-            } else {
-              const fallback = document.createTextNode("\u200B");
-              parent.insertBefore(fallback, next);
-              placeCaret(fallback, 1);
-            }
-          }
-        }
-        syncLiveMarkdownSyntax(editor);
-        return true;
-      }
-
-      stepOutAfterInline(editor, inlineEl);
-      return true;
-    }
-  }
-
-  // Don't auto-pair inside existing `<code>` or `[data-md-syntax]`.
-  if (isInsideTag(range.startContainer, editor, ["code"])) return false;
-  if (isInsideMarkdownSyntax(range.startContainer, editor)) return false;
-
-  const beforeInNode =
-    range.startContainer.nodeType === Node.TEXT_NODE
-      ? (range.startContainer.nodeValue || "").slice(0, range.startOffset).replace(/\u200B/g, "")
-      : "";
-
-  // 3. Auto-pair `` ` `` -> `` `|` `` (unless closing an earlier unclosed `` ` `` in the same text node!)
-  if (key === "`") {
-    if (beforeInNode.endsWith("\\")) return false;
-    if (countUnpairedToken(beforeInNode, "`") % 2 === 1) {
-      // Let browser insert the closing backtick so `applyInlineMarkdownAtCaret` closes cleanly!
-      return false;
-    }
-    return insertActiveInlinePair(editor, range, "code", "`");
-  }
-
-  // 4. Auto-pair `*` -> `*|*` (only at clean boundary; never mid-word like `2*3`, and never if closing an odd `*`).
-  if (key === "*") {
-    if (!isDelimiterOpenAllowed(beforeInNode)) return false;
-    const starCount = countUnpairedToken(beforeInNode.replace(/\*\*/g, ""), "*");
-    if (starCount % 2 === 1) return false;
-    return insertActiveInlinePair(editor, range, "em", "*");
-  }
-
-  // 5. Auto-pair `~~` (`~~|~~`) and `==` (`==|==`) on the 2nd consecutive char when opening!
-  if ((key === "~" || key === "=") && range.startContainer.nodeType === Node.TEXT_NODE) {
-    if (beforeInNode.endsWith(key)) {
-      const prefixBeforeFirst = beforeInNode.slice(0, -1);
-      if (prefixBeforeFirst.endsWith(key)) return false;
-      if (!isDelimiterOpenAllowed(prefixBeforeFirst)) return false;
-
-      const tn = range.startContainer as Text;
-      const off = range.startOffset;
-      const val = tn.nodeValue || "";
-      const tag = key === "~" ? "s" : "mark";
-      const delim = `${key}${key}`;
-
-      tn.nodeValue = val.slice(0, off - 1) + val.slice(off);
-      const nextR = document.createRange();
-      nextR.setStart(tn, off - 1);
-      nextR.collapse(true);
-      sel.removeAllRanges();
-      sel.addRange(nextR);
-      return insertActiveInlinePair(editor, nextR, tag, delim);
-    }
-    return false;
-  }
-
-  // 6. Auto-pair plain brackets/quotes `(`, `[`, `"`.
-  const plainPair = COLLAPSED_PLAIN_PAIRS[key];
-  if (plainPair) {
-    if (key === '"') {
-      if (!isDelimiterOpenAllowed(beforeInNode)) return false;
-      if (countUnpairedToken(beforeInNode, '"') % 2 === 1) return false;
-    } else if (key === "(" || key === "[") {
-      // Allow `[` after whitespace/punctuation, and `(` directly after `]` (links!) or whitespace/punctuation.
-      const prevCh = beforeInNode.slice(-1);
-      const allowParenAfterLinkLabel = key === "(" && prevCh === "]";
-      if (!allowParenAfterLinkLabel && !isDelimiterOpenAllowed(beforeInNode)) return false;
-    }
-
-    const pairNode = document.createTextNode(`${plainPair[0]}${plainPair[1]}`);
-    range.deleteContents();
-    range.insertNode(pairNode);
-    placeCaret(pairNode, 1);
-    return true;
-  }
-
-  return false;
-}
-
-/**
- * Unwraps an empty auto-paired inline element (`*|*`, `**|**`, `~~|~~`, `==|==`) back into
- * plain delimiter text when the user presses Space immediately inside it, so `* ` lists and
- * spaced symbols (`2 * 3`) continue to work naturally.
- */
-export function unwrapEmptyInlinePairOnSpace(editor: HTMLElement): boolean {
-  const range = getCollapsedSelectionRange(editor);
-  if (!range) return false;
-
-  const overtype = getInlineAtCaretForOvertype(editor, range);
-  if (!overtype) return false;
-
-  const tag = overtype.inlineEl.tagName.toLowerCase();
-  if (!["em", "strong", "s", "mark"].includes(tag)) return false;
-  if (getTextWithoutArtifacts(overtype.inlineEl).length > 0) return false;
-
-  const rule = INLINE_LIVE_RULES[tag];
-  if (!rule) return false;
-
-  const tn = document.createTextNode(rule.delimiter);
-  overtype.inlineEl.replaceWith(tn);
-  placeCaret(tn, rule.delimiter.length);
-  return true;
-}
-
-/**
- * Handles smart Backspace inside empty pairs (deletes both delimiters at once) and at the
- * boundary immediately after heading/blockquote/inline syntax markers.
- */
-export function handleMarkdownDelimiterBackspace(editor: HTMLElement): boolean {
-  const range = getCollapsedSelectionRange(editor);
-  if (!range) return false;
-  if (isInsideTag(range.startContainer, editor, ["pre"])) return false;
-
-  // 1. Inside an empty plain pair `(|)`, `[|]`, `"|"` -> delete both!
-  if (range.startContainer.nodeType === Node.TEXT_NODE) {
-    const tn = range.startContainer as Text;
-    const val = tn.nodeValue || "";
-    const off = range.startOffset;
-    if (off > 0 && off < val.length) {
-      const prevCh = val[off - 1];
-      const nextCh = val[off];
-      if (
-        (prevCh === "(" && nextCh === ")") ||
-        (prevCh === "[" && nextCh === "]") ||
-        (prevCh === '"' && nextCh === '"')
-      ) {
-        tn.nodeValue = val.slice(0, off - 1) + val.slice(off + 1);
-        placeCaret(tn, off - 1);
-        return true;
-      }
-    }
-  }
-
-  // 2. Trailing zero-width exit anchor right after an inline mark: step into its closing delimiter
-  //    and erase one closing delimiter character so Backspace unwraps like Obsidian without a dead key.
-  if (range.startContainer.nodeType === Node.TEXT_NODE) {
-    const tn = range.startContainer as Text;
-    if ((tn.nodeValue || "") === "\u200B" && range.startOffset === 1) {
-      const prev = tn.previousSibling;
-      if (
-        prev &&
-        prev.nodeType === Node.ELEMENT_NODE &&
-        INLINE_MARK_TAGS.has((prev as HTMLElement).tagName.toLowerCase())
-      ) {
-        const prevInline = prev as HTMLElement;
-        tn.remove();
-        activateInlineElement(prevInline, null);
-        const closeSpan = getDirectSyntaxChild(prevInline, "close");
-        const lastText = closeSpan ? getLastDescendantTextNode(closeSpan) : null;
-        if (lastText && (lastText.nodeValue || "").length > 0) {
-          const val = lastText.nodeValue || "";
-          lastText.nodeValue = val.slice(0, -1);
-          placeCaret(lastText, lastText.nodeValue.length);
-          reconcileActiveMarkdownSyntax(editor);
-          syncLiveMarkdownSyntax(editor);
-          return true;
-        }
-        placeCaretAtEnd(prevInline);
-        syncLiveMarkdownSyntax(editor);
-        return false;
-      }
-    }
-  }
-
-  // 3. Inside an active inline mark.
-  let activeInline: HTMLElement | null = null;
-  let curr: Node | null = range.startContainer;
-  while (curr && curr !== editor) {
-    if (curr.nodeType === Node.ELEMENT_NODE) {
-      const el = curr as HTMLElement;
-      const tag = el.tagName.toLowerCase();
-      if (BLOCK_TAG_SET.has(tag)) break;
-      if (INLINE_MARK_TAGS.has(tag) && el.hasAttribute(MD_ACTIVE_ATTR)) {
-        activeInline = el;
-        break;
-      }
-    }
-    curr = curr.parentNode;
-  }
-
-  if (activeInline) {
-    const openSpan = getDirectSyntaxChild(activeInline, "open");
-    const closeSpan = getDirectSyntaxChild(activeInline, "close");
-
-    // Empty active inline pair (not inside openSpan) -> delete the entire pair!
-    if (
-      getTextWithoutArtifacts(activeInline).length === 0 &&
-      !activeInline.querySelector("img") &&
-      (!openSpan || !openSpan.contains(range.startContainer))
-    ) {
-      const parent = activeInline.parentNode;
-      const prevSib = activeInline.previousSibling;
-      const nextSib = activeInline.nextSibling;
-      activeInline.remove();
-      if (prevSib && prevSib.nodeType === Node.TEXT_NODE) {
-        placeCaret(prevSib, prevSib.nodeValue?.length ?? 0);
-      } else if (nextSib && nextSib.nodeType === Node.TEXT_NODE) {
-        placeCaret(nextSib, 0);
-      } else if (parent instanceof HTMLElement) {
-        ensureElementHasBreakIfEmpty(parent);
-        placeCaretAtStart(parent);
-      }
-      syncLiveMarkdownSyntax(editor);
-      return true;
-    }
-
-    // Caret sits right after `<span data-md-syntax="open">` on non-empty inline mark -> remove 1 char from openSpan!
-    if (
-      openSpan &&
-      !openSpan.contains(range.startContainer) &&
-      !closeSpan?.contains(range.startContainer)
-    ) {
-      const probe = document.createRange();
-      probe.setStartAfter(openSpan);
-      probe.setEnd(range.startContainer, range.startOffset);
-      if (
-        probe.toString().replace(/\u200B/g, "").length === 0 &&
-        !probe.cloneContents().querySelector("img, br")
-      ) {
-        const openTxt = openSpan.textContent || "";
-        if (openTxt.length > 0) {
-          openSpan.textContent = openTxt.slice(0, -1);
-          reconcileActiveMarkdownSyntax(editor);
-          syncLiveMarkdownSyntax(editor);
-          return true;
-        }
-      }
-    }
-  }
-
-  // 3. Heading or Blockquote: caret immediately after `<span data-md-syntax="heading|blockquote">` -> delete space & unwrap to `<p>`.
-  const block = getClosestBlock(range.startContainer, editor);
-  if (block && block.hasAttribute(MD_ACTIVE_ATTR)) {
-    const spec = getBlockSyntaxPrefix(block);
-    const blockSpan = spec ? getDirectSyntaxChild(block, spec.kind) : null;
-    if (blockSpan && !blockSpan.contains(range.startContainer)) {
-      const probe = document.createRange();
-      probe.setStartAfter(blockSpan);
-      probe.setEnd(range.startContainer, range.startOffset);
-      if (
-        probe.toString().replace(/\u200B/g, "").length === 0 &&
-        !probe.cloneContents().querySelector("img, br")
-      ) {
-        const spanText = (blockSpan.textContent || "").replace(/\u00A0/g, " ");
-        if (spanText.endsWith(" ")) {
-          blockSpan.textContent = spanText.slice(0, -1);
-          if (blockSpan.firstChild) {
-            placeCaret(blockSpan.firstChild, blockSpan.textContent.length);
-          }
-          reconcileActiveMarkdownSyntax(editor);
-          syncLiveMarkdownSyntax(editor);
-          return true;
-        }
-      }
-    }
-  }
-
-  return false;
-}
-
-export function toggleInlineWrapperCommand(
-  editor: HTMLElement,
-  tagName: "code" | "mark" | "s",
-): boolean {
-  if (tagName === "s") {
-    stripSyntaxBeforeExecCommand(editor);
-    document.execCommand("strikeThrough", false);
-    syncLiveMarkdownSyntax(editor);
-    return true;
-  }
-
-  const sel = window.getSelection();
-  if (!sel || sel.rangeCount === 0) return false;
-  const range = sel.getRangeAt(0);
-  if (!editor.contains(range.commonAncestorContainer)) return false;
-
-  const existing = isInsideTag(range.commonAncestorContainer, editor, [tagName]);
-  if (existing) {
-    existing.querySelectorAll(`:scope > [${MD_SYNTAX_ATTR}]`).forEach((s) => s.remove());
-    const text = (existing.textContent || "").replace(/\u200B/g, "");
-    const tn = document.createTextNode(text);
-    existing.parentNode?.replaceChild(tn, existing);
-    const nextRange = document.createRange();
-    nextRange.setStart(tn, 0);
-    nextRange.setEnd(tn, text.length);
-    sel.removeAllRanges();
-    sel.addRange(nextRange);
-    syncLiveMarkdownSyntax(editor);
-    return true;
-  }
-
-  if (range.collapsed) return false;
-  if (isInsideTag(range.commonAncestorContainer, editor, ["pre"])) return false;
-
-  const selectedText = range.toString();
-  if (!selectedText) return false;
-
-  const el = document.createElement(tagName);
-  el.textContent = selectedText;
-  range.deleteContents();
-  range.insertNode(el);
-  const nextRange = document.createRange();
-  nextRange.selectNodeContents(el);
-  sel.removeAllRanges();
-  sel.addRange(nextRange);
-  syncLiveMarkdownSyntax(editor);
-  return true;
-}
-
-/**
- * Cleans live syntax markers right before calling `document.execCommand` (toolbar Bold/Italic/etc.)
- * so browser commands wrap content without cloning or styling syntax delimiter spans.
- */
-export function stripSyntaxBeforeExecCommand(editor: HTMLElement): void {
-  const bookmark = getCaretBookmark(editor);
-  const actives = Array.from(
-    editor.querySelectorAll(`[${MD_ACTIVE_ATTR}="true"]`),
-  ) as HTMLElement[];
-  for (let i = actives.length - 1; i >= 0; i -= 1) {
-    deactivateElement(editor, actives[i]!);
-  }
-  if (bookmark) {
-    restoreCaretBookmark(editor, bookmark);
-  }
-}
-
-export function wrapSelectionAsLink(editor: HTMLElement, rawUrl: string): boolean {
-  const safeHref = sanitizeHttpUrl(rawUrl);
-  if (!safeHref) return false;
-  const sel = window.getSelection();
-  if (!sel || sel.rangeCount === 0) return false;
-  const range = sel.getRangeAt(0);
-  if (range.collapsed || !editor.contains(range.commonAncestorContainer)) return false;
-
-  const label = range.toString().trim();
-  if (!label) return false;
-
-  const a = document.createElement("a");
-  a.href = safeHref;
-  a.target = "_blank";
-  a.rel = "noopener noreferrer";
-  a.textContent = label;
-
-  range.deleteContents();
-  range.insertNode(a);
-  const anchor = document.createTextNode("\u200B");
-  a.parentNode?.insertBefore(anchor, a.nextSibling);
-  placeCaret(anchor, 1);
-  syncLiveMarkdownSyntax(editor);
-  return true;
-}
-
-function isInlineContentEdge(
-  inlineEl: HTMLElement,
-  range: Range,
-  edge: "start" | "end",
-  options?: { allowBeforeClose?: boolean },
-): boolean {
-  const openSpan = getDirectSyntaxChild(inlineEl, "open");
-  const closeSpan = getDirectSyntaxChild(inlineEl, "close");
-
-  if (edge === "end") {
-    if (closeSpan?.contains(range.startContainer)) {
-      const tailProbe = document.createRange();
-      tailProbe.setStart(range.startContainer, range.startOffset);
-      tailProbe.setEnd(closeSpan, closeSpan.childNodes.length);
-      return tailProbe.toString().replace(/\u200B/g, "").length === 0;
-    }
-    if (closeSpan && !options?.allowBeforeClose) {
-      return false;
-    }
-    const probe = document.createRange();
-    probe.setStart(range.startContainer, range.startOffset);
-    if (closeSpan) {
-      probe.setEndBefore(closeSpan);
-    } else {
-      probe.setEnd(inlineEl, inlineEl.childNodes.length);
-    }
-    if (probe.toString().replace(/\u200B/g, "").length > 0) return false;
-    return !probe.cloneContents().querySelector("img, br");
-  }
-
-  if (openSpan?.contains(range.startContainer)) {
-    const headProbe = document.createRange();
-    headProbe.setStart(openSpan, 0);
-    headProbe.setEnd(range.startContainer, range.startOffset);
-    return headProbe.toString().replace(/\u200B/g, "").length === 0;
-  }
-  if (openSpan && !options?.allowBeforeClose) {
-    return false;
-  }
-
-  const probe = document.createRange();
-  if (openSpan) {
-    probe.setStartAfter(openSpan);
-  } else {
-    probe.setStart(inlineEl, 0);
-  }
-  probe.setEnd(range.startContainer, range.startOffset);
-  if (probe.toString().replace(/\u200B/g, "").length > 0) return false;
-  return !probe.cloneContents().querySelector("img, br");
-}
-
-function findOuterInlineAtEdge(
-  editor: HTMLElement,
-  range: Range,
-  edge: "start" | "end",
-  options?: { allowBeforeClose?: boolean },
+  clientY: number,
+  tolerance = 8,
 ): HTMLElement | null {
-  if (isInsideTag(range.startContainer, editor, ["pre"])) return null;
-
-  let outer: HTMLElement | null = null;
-  let curr: Node | null = range.startContainer;
-  while (curr && curr !== editor) {
-    if (curr.nodeType === Node.ELEMENT_NODE) {
-      const el = curr as HTMLElement;
-      const tag = el.tagName.toLowerCase();
-      if (BLOCK_TAG_SET.has(tag)) break;
-      if (INLINE_MARK_TAGS.has(tag)) {
-        if (!isInlineContentEdge(el, range, edge, options)) break;
-        outer = el;
+  let best: HTMLElement | null = null;
+  let bestDist = Infinity;
+  const hrs = Array.from(editor.querySelectorAll("hr")) as HTMLElement[];
+  for (const hr of hrs) {
+    if (isInsideTag(hr, editor, ["pre"])) continue;
+    const rect = hr.getBoundingClientRect();
+    if (rect.width === 0) continue;
+    if (clientY >= rect.top - tolerance && clientY <= rect.bottom + tolerance) {
+      const center = (rect.top + rect.bottom) / 2;
+      const dist = Math.abs(clientY - center);
+      if (dist < bestDist) {
+        bestDist = dist;
+        best = hr;
       }
     }
-    curr = curr.parentNode;
   }
-  return outer;
+  return best;
 }
 
-function moveCaretAfterInline(inlineEl: HTMLElement): boolean {
-  const parent = inlineEl.parentNode;
-  if (!parent) return false;
-  let next = inlineEl.nextSibling;
-  while (
-    next &&
-    next.nodeType === Node.ELEMENT_NODE &&
-    (next as HTMLElement).hasAttribute("data-ghost")
-  ) {
-    next = next.nextSibling;
-  }
-
-  if (next && next.nodeType === Node.TEXT_NODE) {
-    const tn = next as Text;
-    const val = tn.nodeValue || "";
-    if (val.startsWith("\u200B")) {
-      placeCaret(tn, 1);
-      return true;
-    }
-  }
-
-  const anchor = document.createTextNode("\u200B");
-  parent.insertBefore(anchor, next);
-  placeCaret(anchor, 1);
+export function activateHorizontalRuleAtClient(
+  editor: HTMLElement,
+  hr: HTMLElement,
+  clientX: number,
+): boolean {
+  if (!editor.contains(hr) || hr.tagName.toLowerCase() !== "hr") return false;
+  editor.focus({ preventScroll: true });
+  expandHorizontalRuleAndFocus(editor, hr, { clientX });
   return true;
 }
 
-function moveCaretBeforeInline(inlineEl: HTMLElement): boolean {
-  const parent = inlineEl.parentNode;
-  if (!parent) return false;
-  const prev = inlineEl.previousSibling;
-
-  if (prev && prev.nodeType === Node.TEXT_NODE) {
-    const tn = prev as Text;
-    const val = tn.nodeValue || "";
-    if (val.endsWith("\u200B")) {
-      placeCaret(tn, val.length - 1);
-      return true;
+function getAdjacentHrSibling(
+  editor: HTMLElement,
+  block: HTMLElement,
+  direction: "prev" | "next",
+): HTMLElement | null {
+  if (block.tagName.toLowerCase() === "li") {
+    const topBlock = getTopLevelBlock(block, editor);
+    if (!topBlock || (topBlock.tagName !== "UL" && topBlock.tagName !== "OL")) return null;
+    if (direction === "prev") {
+      if (topBlock.querySelector("li") !== block) return null;
+      const prev = topBlock.previousElementSibling as HTMLElement | null;
+      return prev && prev.tagName.toLowerCase() === "hr" ? prev : null;
     }
+    const items = topBlock.querySelectorAll("li");
+    if (items[items.length - 1] !== block) return null;
+    const next = topBlock.nextElementSibling as HTMLElement | null;
+    return next && next.tagName.toLowerCase() === "hr" ? next : null;
   }
 
-  const anchor = document.createTextNode("\u200B");
-  parent.insertBefore(anchor, inlineEl);
-  placeCaret(anchor, 0);
-  return true;
-}
-
-function enterInlineAtRightEdge(editor: HTMLElement, inlineEl: HTMLElement): void {
-  activateInlineElement(inlineEl, null);
-  const closeSpan = getDirectSyntaxChild(inlineEl, "close");
-  if (closeSpan) {
-    const lastText = getLastDescendantTextNode(closeSpan);
-    if (lastText) {
-      placeCaret(lastText, lastText.nodeValue?.length ?? 0);
-      syncLiveMarkdownSyntax(editor);
-      return;
-    }
-  }
-  placeCaretAtEnd(inlineEl);
-  syncLiveMarkdownSyntax(editor);
+  const topBlock = block.parentElement === editor ? block : getTopLevelBlock(block, editor);
+  if (!topBlock) return null;
+  const sibling = (
+    direction === "prev" ? topBlock.previousElementSibling : topBlock.nextElementSibling
+  ) as HTMLElement | null;
+  return sibling && sibling.tagName.toLowerCase() === "hr" ? sibling : null;
 }
 
 /**
- * Obsidian-style inline formatting navigation:
- * - ArrowRight at the end of content inside an active inline mark steps cleanly outside and hides markers.
- * - ArrowLeft immediately after an inline mark enters its closing syntax so delimiters can be edited or deleted.
- * - Transparently skips over `\u200B` boundary anchors.
+ * Obsidian-style keyboard navigation into horizontal dividers (`<hr>`):
+ * moving the caret into `<hr>` via Arrow keys expands it back to editable `---` syntax.
  */
-export function resolveInlineBoundaryOnArrow(
+export function resolveArrowIntoHorizontalRule(
   editor: HTMLElement,
-  key: "ArrowLeft" | "ArrowRight",
+  key: "ArrowLeft" | "ArrowRight" | "ArrowUp" | "ArrowDown",
 ): boolean {
   const range = getCollapsedSelectionRange(editor);
   if (!range) return false;
-  if (isInsideTag(range.startContainer, editor, ["pre"])) return false;
 
-  const node = range.startContainer;
-  const offset = range.startOffset;
+  if (range.startContainer === editor) {
+    if (key === "ArrowDown" || key === "ArrowRight") {
+      const next = editor.childNodes[range.startOffset] as HTMLElement | undefined;
+      if (next && next.nodeType === Node.ELEMENT_NODE && next.tagName.toLowerCase() === "hr") {
+        expandHorizontalRuleAndFocus(editor, next, "start");
+        return true;
+      }
+    } else {
+      const prev = editor.childNodes[range.startOffset - 1] as HTMLElement | undefined;
+      if (prev && prev.nodeType === Node.ELEMENT_NODE && prev.tagName.toLowerCase() === "hr") {
+        expandHorizontalRuleAndFocus(editor, prev, key === "ArrowLeft" ? "end" : "start");
+        return true;
+      }
+    }
+    return false;
+  }
+
+  const block = getClosestBlock(range.startContainer, editor);
+  if (!block) return false;
+
+  const scope = getEditableScope(block);
 
   if (key === "ArrowRight") {
-    const outerRight = findOuterInlineAtEdge(editor, range, "end");
-    if (outerRight) {
-      moveCaretAfterInline(outerRight);
+    if (!isCaretAtEndOfScope(scope, range)) return false;
+    const nextHr = getAdjacentHrSibling(editor, block, "next");
+    if (!nextHr) return false;
+    expandHorizontalRuleAndFocus(editor, nextHr, "start");
+    return true;
+  }
+
+  if (key === "ArrowLeft") {
+    if (!isCaretAtBlockBoundaryStart(block, range)) return false;
+    const prevHr = getAdjacentHrSibling(editor, block, "prev");
+    if (!prevHr) return false;
+    expandHorizontalRuleAndFocus(editor, prevHr, "end");
+    return true;
+  }
+
+  const direction = key === "ArrowDown" ? "next" : "prev";
+  const edge = key === "ArrowDown" ? "last" : "first";
+  const targetHr = getAdjacentHrSibling(editor, block, direction);
+  if (!targetHr) return false;
+  if (!isCaretOnVisualEdgeLine(scope, range, edge)) return false;
+
+  const caretRects = range.getClientRects();
+  const caretRect =
+    Array.from(caretRects).find((r) => r.height > 0) ?? range.getBoundingClientRect();
+  const placement: "start" | { clientX: number } =
+    hasVisibleContent(scope) && caretRect.height > 0 ? { clientX: caretRect.left } : "start";
+  expandHorizontalRuleAndFocus(editor, targetHr, placement);
+  return true;
+}
+
+function getSyntaxSpanFirstTextNode(syntaxSpan: HTMLElement): Text | null {
+  const first = syntaxSpan.firstChild;
+  if (first && first.nodeType === Node.TEXT_NODE) {
+    return first as Text;
+  }
+  const walker = document.createTreeWalker(syntaxSpan, NodeFilter.SHOW_TEXT);
+  return walker.nextNode() as Text | null;
+}
+
+function getPrefixStopOffset(rawText: string): number {
+  return rawText.endsWith(" ") ? Math.max(0, rawText.length - 1) : rawText.length;
+}
+
+function isFocusRightAfterSyntaxSpan(syntaxSpan: HTMLElement, focusRange: Range): boolean {
+  if (syntaxSpan.contains(focusRange.startContainer)) return false;
+  const probe = document.createRange();
+  try {
+    probe.setStartAfter(syntaxSpan);
+    probe.setEnd(focusRange.startContainer, focusRange.startOffset);
+  } catch {
+    return false;
+  }
+  return (
+    stripZeroWidth(probe.toString()).length === 0 && !probe.cloneContents().querySelector("img, br")
+  );
+}
+
+function getContentStartTargetAfterSyntax(
+  block: HTMLElement,
+  syntaxSpan: HTMLElement | null,
+): { node: Node; offset: number } {
+  const scope = getEditableScope(block);
+  const firstTarget = getFirstEditableTarget(scope);
+  if (syntaxSpan && scope === block && firstTarget.node === block && firstTarget.offset === 0) {
+    const idx = Array.prototype.indexOf.call(block.childNodes, syntaxSpan);
+    if (idx >= 0) {
+      return { node: block, offset: idx + 1 };
+    }
+  }
+  if (firstTarget.node.nodeType === Node.TEXT_NODE && firstTarget.node.nodeValue === "\u200B") {
+    return { node: firstTarget.node, offset: 1 };
+  }
+  return firstTarget;
+}
+
+function applyArrowTarget(
+  sel: Selection,
+  node: Node,
+  offset: number,
+  shiftKey: boolean,
+  explicitAnchor?: { node: Node; offset: number },
+): void {
+  if (shiftKey && (explicitAnchor || sel.anchorNode)) {
+    const anchorNode = explicitAnchor ? explicitAnchor.node : sel.anchorNode!;
+    const anchorOffset = explicitAnchor ? explicitAnchor.offset : sel.anchorOffset;
+    sel.setBaseAndExtent(anchorNode, anchorOffset, node, offset);
+  } else {
+    placeCaret(node, offset);
+  }
+}
+
+/**
+ * Obsidian-style keyboard navigation across block prefix markers (`- `, `1. `, `- [ ] `, `> `, and `# `):
+ * - On `prefix` blocks, `ArrowLeft` from content start reveals the syntax prefix and stops right before the trailing space (`-| text`);
+ *   `ArrowRight` from that stop jumps straight to content start and immediately hides the prefix (`• |text`).
+ * - Supports both collapsed caret navigation and `Shift+Arrow` selection expansion/contraction.
+ */
+export function resolveBlockPrefixOnArrow(
+  editor: HTMLElement,
+  key: "ArrowLeft" | "ArrowRight",
+  shiftKey = false,
+): boolean {
+  const sel = window.getSelection();
+  if (!sel || sel.rangeCount === 0) return false;
+  if (!shiftKey && !sel.isCollapsed) return false;
+
+  const focusNode = shiftKey ? sel.focusNode : sel.getRangeAt(0).startContainer;
+  const focusOffset = shiftKey ? sel.focusOffset : sel.getRangeAt(0).startOffset;
+  if (!focusNode || !editor.contains(focusNode)) return false;
+  if (isInsideTag(focusNode, editor, ["pre"])) return false;
+
+  const block = getClosestBlock(focusNode, editor);
+  if (!block) return false;
+  const spec = getBlockSyntaxSpec(block);
+  if (!spec || spec.kind === "code") return false;
+
+  const focusRange = document.createRange();
+  try {
+    focusRange.setStart(focusNode, focusOffset);
+    focusRange.collapse(true);
+  } catch {
+    return false;
+  }
+
+  let syntaxSpan = getDirectSyntaxChild(block, spec.kind);
+
+  if (syntaxSpan && syntaxSpan.contains(focusNode)) {
+    const rawText = stripZeroWidth((syntaxSpan.textContent || "").replace(/\u00A0/g, " "));
+    const caretInSpan = getLogicalCaretOffsetInNode(syntaxSpan, focusNode, focusOffset);
+    const stopOffset = getPrefixStopOffset(rawText);
+
+    if (key === "ArrowRight" && caretInSpan >= stopOffset) {
+      const target = getContentStartTargetAfterSyntax(block, syntaxSpan);
+      applyArrowTarget(sel, target.node, target.offset, shiftKey);
       syncLiveMarkdownSyntax(editor);
       return true;
     }
 
-    if (node.nodeType === Node.TEXT_NODE) {
-      const tn = node as Text;
-      const val = tn.nodeValue || "";
-      if (offset < val.length && val[offset] === "\u200B") {
-        if (offset === val.length - 1) {
-          const next = tn.nextSibling;
-          if (
-            next &&
-            next.nodeType === Node.ELEMENT_NODE &&
-            INLINE_MARK_TAGS.has((next as HTMLElement).tagName.toLowerCase())
-          ) {
-            const nextInline = next as HTMLElement;
-            placeCaretAtStart(nextInline);
-            syncLiveMarkdownSyntax(editor);
-            return true;
-          }
-        }
-        placeCaret(tn, offset + 1);
+    if (key === "ArrowLeft" && caretInSpan >= rawText.length && rawText.endsWith(" ")) {
+      const spanText = getSyntaxSpanFirstTextNode(syntaxSpan);
+      if (spanText) {
+        applyArrowTarget(sel, spanText, stopOffset, shiftKey);
+        syncLiveMarkdownSyntax(editor);
         return true;
       }
     }
+
     return false;
   }
 
-  // key === "ArrowLeft"
-  const outerLeft = findOuterInlineAtEdge(editor, range, "start");
-  if (outerLeft) {
-    moveCaretBeforeInline(outerLeft);
-    syncLiveMarkdownSyntax(editor);
-    return true;
+  if (key === "ArrowRight") return false;
+
+  const contentScope = getEditableScope(block);
+  const atContentStart = syntaxSpan
+    ? isFocusRightAfterSyntaxSpan(syntaxSpan, focusRange)
+    : isCaretAtStartOfScope(contentScope, focusRange);
+  if (!atContentStart) return false;
+
+  let explicitAnchor: { node: Node; offset: number } | undefined;
+  const rawAnchorNode = shiftKey ? sel.anchorNode : null;
+  const rawAnchorOffset = shiftKey ? sel.anchorOffset : 0;
+  const anchorWasAtScopeBoundary = Boolean(
+    shiftKey &&
+    rawAnchorNode &&
+    (rawAnchorNode === block || rawAnchorNode === contentScope) &&
+    rawAnchorOffset === 0,
+  );
+
+  if (!syntaxSpan) {
+    activateBlockElement(block, null);
+    syntaxSpan = getDirectSyntaxChild(block, spec.kind);
+  }
+  if (!syntaxSpan) return false;
+
+  if (shiftKey && rawAnchorNode && (!rawAnchorNode.isConnected || anchorWasAtScopeBoundary)) {
+    explicitAnchor = getContentStartTargetAfterSyntax(block, syntaxSpan);
   }
 
-  if (node.nodeType === Node.TEXT_NODE) {
-    const tn = node as Text;
-    const val = tn.nodeValue || "";
-    if (offset > 0 && val[offset - 1] === "\u200B") {
-      if (offset === 1) {
-        const prev = tn.previousSibling;
-        if (
-          prev &&
-          prev.nodeType === Node.ELEMENT_NODE &&
-          INLINE_MARK_TAGS.has((prev as HTMLElement).tagName.toLowerCase())
-        ) {
-          enterInlineAtRightEdge(editor, prev as HTMLElement);
-          return true;
-        }
-      }
-      if (offset > 1) {
-        placeCaret(tn, offset - 1);
-        return true;
-      }
-    } else if (offset === 0) {
-      const prev = tn.previousSibling;
-      if (
-        prev &&
-        prev.nodeType === Node.ELEMENT_NODE &&
-        INLINE_MARK_TAGS.has((prev as HTMLElement).tagName.toLowerCase())
-      ) {
-        enterInlineAtRightEdge(editor, prev as HTMLElement);
-        return true;
-      }
-    }
-  }
-
-  return false;
+  const spanText = getSyntaxSpanFirstTextNode(syntaxSpan);
+  if (!spanText) return false;
+  const stopOffset = getPrefixStopOffset(
+    stripZeroWidth((syntaxSpan.textContent || "").replace(/\u00A0/g, " ")),
+  );
+  applyArrowTarget(sel, spanText, stopOffset, shiftKey, explicitAnchor);
+  syncLiveMarkdownSyntax(editor);
+  return true;
 }
 
-export function exitInlineMarkOnClick(editor: HTMLElement, clientX: number): boolean {
-  const range = getCollapsedSelectionRange(editor);
-  if (!range) return false;
-  if (isInsideTag(range.startContainer, editor, ["pre"])) return false;
+/**
+ * Returns the closest `prefix`-mode block (`li` or `blockquote`) when `(clientX, clientY)` falls in
+ * the left visual marker gutter (`•`, `1.`, `☐`, quote border) along the block's first visual line.
+ */
+export function findPrefixBlockInGutter(
+  editor: HTMLElement,
+  clientX: number,
+  clientY: number,
+): HTMLElement | null {
+  const candidates = Array.from(editor.querySelectorAll("li, blockquote")) as HTMLElement[];
+  for (let i = candidates.length - 1; i >= 0; i -= 1) {
+    const block = candidates[i]!;
+    if (isInsideTag(block, editor, ["pre"])) continue;
+    const spec = getBlockSyntaxSpec(block);
+    if (!spec || spec.revealMode !== "prefix") continue;
 
-  const outerRight = findOuterInlineAtEdge(editor, range, "end", { allowBeforeClose: true });
-  if (!outerRight) return false;
+    const blockRect = block.getBoundingClientRect();
+    if (blockRect.height <= 0) continue;
+    if (clientY < blockRect.top - 4 || clientY > blockRect.bottom + 4) continue;
 
-  const block = getClosestBlock(outerRight, editor);
-  if (block) {
-    const tailRange = document.createRange();
-    tailRange.setStartAfter(outerRight);
-    tailRange.setEnd(block, block.childNodes.length);
-    if (tailRange.toString().replace(/\u200B/g, "").length > 0) {
-      return false;
+    const scope = getEditableScope(block);
+    const firstTarget = getFirstEditableTarget(scope);
+    const probe = document.createRange();
+    let contentRect: DOMRect | null = null;
+    try {
+      probe.setStart(firstTarget.node, firstTarget.offset);
+      probe.collapse(true);
+      const rects = probe.getClientRects();
+      const firstRect =
+        Array.from(rects).find((r) => r.height > 0) ?? probe.getBoundingClientRect();
+      if (firstRect.height > 0) {
+        contentRect = firstRect;
+      }
+    } catch {
+      contentRect = null;
+    }
+
+    const scopeLeft =
+      scope !== block
+        ? scope.getBoundingClientRect().left
+        : blockRect.left + Number.parseFloat(getComputedStyle(block).paddingLeft || "0");
+    const contentLeft = contentRect ? contentRect.left : scopeLeft;
+    const lineTop = contentRect ? contentRect.top : blockRect.top;
+    const lineBottom = contentRect
+      ? contentRect.bottom
+      : Math.min(blockRect.bottom, blockRect.top + 32);
+
+    if (
+      clientY >= lineTop - 4 &&
+      clientY <= lineBottom + 4 &&
+      clientX >= blockRect.left - 8 &&
+      clientX < contentLeft - 2
+    ) {
+      return block;
     }
   }
-
-  const rect = outerRight.getBoundingClientRect();
-  if (rect.width > 0 && clientX > rect.right + 1) {
-    const moved = moveCaretAfterInline(outerRight);
-    if (moved) syncLiveMarkdownSyntax(editor);
-    return moved;
-  }
-  return false;
+  return null;
 }

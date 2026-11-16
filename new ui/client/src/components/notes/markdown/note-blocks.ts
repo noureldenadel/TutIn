@@ -1,66 +1,46 @@
 import {
   BLOCK_TAG_SET,
   HEADING_TAG_SET,
-  cleanTrailingEmptyNodes,
+  HR_LINE_REGEX,
+  MD_HR_SYNTAX_ATTR,
+  MD_SYNTAX_ATTR,
   ensureElementHasBreakIfEmpty,
   getCaretBookmark,
   getClosestBlock,
   getCollapsedSelectionRange,
+  getEditableScope,
   getFirstEditableTarget,
   getTaskContentSpan,
   getTextWithoutArtifacts,
+  hasOwnInlineContent,
   hasVisibleContent,
+  isCaretAtBlockBoundaryStart,
+  isCaretAtEndOfScope,
+  isCaretAtStartOfScope,
+  isEmptyTextBlockElement,
+  isInsideMarkdownSyntax,
   isInsideTag,
+  normalizeEmptyBreak,
   placeCaret,
   placeCaretAtEnd,
   placeCaretAtStart,
+  resolveFocusTarget,
   restoreCaretBookmark,
   sanitizeHttpUrl,
+  stripZeroWidth,
 } from "./note-dom";
 import { syncLiveMarkdownSyntax, unwrapBlockSyntaxToParagraph } from "./note-live-preview";
-
-export function createTaskListItem(
-  checked: boolean,
-  contentNodes?: DocumentFragment,
-): HTMLLIElement {
-  const li = document.createElement("li");
-  li.setAttribute("data-task", "true");
-  li.setAttribute("data-checked", String(checked));
-
-  const checkbox = document.createElement("input");
-  checkbox.type = "checkbox";
-  checkbox.setAttribute("data-task-checkbox", "true");
-  checkbox.contentEditable = "false";
-  checkbox.checked = checked;
-  if (checked) {
-    checkbox.setAttribute("checked", "");
-  }
-
-  const contentSpan = document.createElement("span");
-  contentSpan.setAttribute("data-task-content", "true");
-  if (contentNodes && contentNodes.childNodes.length > 0) {
-    contentSpan.appendChild(contentNodes);
-  }
-  cleanTrailingEmptyNodes(contentSpan);
-  ensureElementHasBreakIfEmpty(contentSpan);
-
-  li.appendChild(checkbox);
-  li.appendChild(contentSpan);
-  return li;
-}
-
-export function toggleTaskCheckboxElement(input: HTMLInputElement): void {
-  const checked = input.checked;
-  if (checked) {
-    input.setAttribute("checked", "");
-  } else {
-    input.removeAttribute("checked");
-  }
-  const li = input.closest("li[data-task]");
-  if (li) {
-    li.setAttribute("data-checked", String(checked));
-  }
-}
+import {
+  applyLiMarkerAttrs,
+  createListItemWithContent,
+  createTaskListItem,
+  getDirectSyntaxChild,
+  getLiBulletMarker,
+  getLiDelimMarker,
+  mergeListWithAdjacentSiblings,
+  splitListAroundItem,
+  toggleTaskCheckboxElement,
+} from "./note-specs";
 
 function getPreviousBrBeforeCaret(container: HTMLElement, caretRange: Range): HTMLElement | null {
   const brs = Array.from(container.querySelectorAll("br"));
@@ -79,6 +59,41 @@ function getPreviousBrBeforeCaret(container: HTMLElement, caretRange: Range): HT
     }
   }
   return lastBrBefore;
+}
+
+function isDirectInlineNode(node: Node): boolean {
+  return (
+    node.nodeType === Node.TEXT_NODE ||
+    (node.nodeType === Node.ELEMENT_NODE &&
+      !BLOCK_TAG_SET.has((node as HTMLElement).tagName.toLowerCase()) &&
+      !["ul", "ol", "hr", "table"].includes((node as HTMLElement).tagName.toLowerCase()))
+  );
+}
+
+function wrapInlineRunAroundNode(
+  editor: HTMLElement,
+  seed: Node,
+): { p: HTMLParagraphElement; nodes: Node[] } | null {
+  if (!isDirectInlineNode(seed)) return null;
+
+  const inlineRun: Node[] = [seed];
+  let prev = seed.previousSibling;
+  while (prev && isDirectInlineNode(prev)) {
+    inlineRun.unshift(prev);
+    prev = prev.previousSibling;
+  }
+  let next = seed.nextSibling;
+  while (next && isDirectInlineNode(next)) {
+    inlineRun.push(next);
+    next = next.nextSibling;
+  }
+
+  const p = document.createElement("p");
+  editor.insertBefore(p, inlineRun[0]!);
+  for (const node of inlineRun) {
+    p.appendChild(node);
+  }
+  return { p, nodes: inlineRun };
 }
 
 function findBlockOrWrapInlineRun(editor: HTMLElement, range: Range): HTMLElement | null {
@@ -100,11 +115,13 @@ function findBlockOrWrapInlineRun(editor: HTMLElement, range: Range): HTMLElemen
           return el;
         }
       }
-      const p = document.createElement("p");
-      editor.insertBefore(p, childAtBefore);
-      p.appendChild(childAtBefore);
-      placeCaretAtEnd(p);
-      return p;
+      const wrapped = wrapInlineRunAroundNode(editor, childAtBefore);
+      if (wrapped) {
+        const caretChildIdx =
+          offset === 0 ? 0 : Math.max(0, wrapped.nodes.indexOf(childAtBefore) + 1);
+        placeCaret(wrapped.p, caretChildIdx);
+        return wrapped.p;
+      }
     }
     return null;
   }
@@ -115,33 +132,10 @@ function findBlockOrWrapInlineRun(editor: HTMLElement, range: Range): HTMLElemen
   }
   if (!directChild || directChild === editor) return null;
 
-  const isInlineNode = (n: Node) =>
-    n.nodeType === Node.TEXT_NODE ||
-    (n.nodeType === Node.ELEMENT_NODE &&
-      !BLOCK_TAG_SET.has((n as HTMLElement).tagName.toLowerCase()) &&
-      !["ul", "ol", "hr", "table"].includes((n as HTMLElement).tagName.toLowerCase()));
-
-  if (!isInlineNode(directChild)) return null;
-
-  const inlineRun: Node[] = [directChild];
-  let prev = directChild.previousSibling;
-  while (prev && isInlineNode(prev)) {
-    inlineRun.unshift(prev);
-    prev = prev.previousSibling;
-  }
-  let next = directChild.nextSibling;
-  while (next && isInlineNode(next)) {
-    inlineRun.push(next);
-    next = next.nextSibling;
-  }
-
-  const p = document.createElement("p");
-  editor.insertBefore(p, inlineRun[0]!);
-  for (const node of inlineRun) {
-    p.appendChild(node);
-  }
+  const wrapped = wrapInlineRunAroundNode(editor, directChild);
+  if (!wrapped) return null;
   placeCaret(container, offset);
-  return p;
+  return wrapped.p;
 }
 
 interface LineBlockContext {
@@ -162,10 +156,7 @@ function getLineContextAtCaret(editor: HTMLElement, initialRange: Range): LineBl
       ? sel.getRangeAt(0)
       : initialRange;
 
-  const editableScope =
-    block.tagName.toLowerCase() === "li" && block.hasAttribute("data-task")
-      ? getTaskContentSpan(block) || block
-      : block;
+  const editableScope = getEditableScope(block);
 
   if (!editableScope.contains(range.startContainer)) return null;
 
@@ -295,44 +286,6 @@ function resolveReplacementTarget(editor: HTMLElement, originalBlock: HTMLElemen
   return originalBlock;
 }
 
-function mergeListWithAdjacentSiblings(list: HTMLUListElement | HTMLOListElement): void {
-  const isTask = list.hasAttribute("data-task-list");
-  const tag = list.tagName.toLowerCase();
-
-  const prev = list.previousElementSibling;
-  if (
-    prev &&
-    prev.tagName.toLowerCase() === tag &&
-    prev.hasAttribute("data-task-list") === isTask
-  ) {
-    while (list.firstChild) {
-      prev.appendChild(list.firstChild);
-    }
-    list.remove();
-    list = prev as HTMLUListElement | HTMLOListElement;
-  }
-
-  const next = list.nextElementSibling;
-  if (
-    next &&
-    next.tagName.toLowerCase() === tag &&
-    next.hasAttribute("data-task-list") === isTask
-  ) {
-    while (next.firstChild) {
-      list.appendChild(next.firstChild);
-    }
-    next.remove();
-  }
-}
-
-function createListItemWithContent(trailingFrag: DocumentFragment): HTMLLIElement {
-  const li = document.createElement("li");
-  li.appendChild(trailingFrag);
-  cleanTrailingEmptyNodes(li);
-  ensureElementHasBreakIfEmpty(li);
-  return li;
-}
-
 function insertBlockReplacement(
   editor: HTMLElement,
   target: HTMLElement,
@@ -349,33 +302,7 @@ function insertBlockReplacement(
     mergeListWithAdjacentSiblings(replacement as HTMLUListElement | HTMLOListElement);
   }
   placeCaretAtStart(focusTarget || replacement);
-}
-
-function splitListAroundItem(list: HTMLElement, li: HTMLElement, replacementNode: Node): void {
-  const parent = list.parentNode;
-  if (!parent) return;
-  const items = Array.from(list.children);
-  const idx = items.indexOf(li);
-  if (idx < 0) return;
-
-  const afterItems = items.slice(idx + 1);
-  li.remove();
-
-  if (list.children.length === 0) {
-    parent.replaceChild(replacementNode, list);
-  } else {
-    parent.insertBefore(replacementNode, list.nextSibling);
-  }
-
-  if (afterItems.length > 0) {
-    const newList = list.cloneNode(false) as HTMLElement;
-    if (newList.tagName === "OL") {
-      const startAttr = Number.parseInt(list.getAttribute("start") || "1", 10);
-      newList.setAttribute("start", String((Number.isFinite(startAttr) ? startAttr : 1) + idx + 1));
-    }
-    afterItems.forEach((item) => newList.appendChild(item));
-    parent.insertBefore(newList, replacementNode.nextSibling);
-  }
+  syncLiveMarkdownSyntax(editor);
 }
 
 function tryAutoLinkBareUrlBeforeCaret(range: Range, insertSpaceAfter: boolean): boolean {
@@ -455,16 +382,20 @@ function replaceWithHorizontalRule(
   editor: HTMLElement,
   target: HTMLElement,
   trailingFrag: DocumentFragment,
+  syntaxText = "---",
 ): void {
   const hr = document.createElement("hr");
+  if (HR_LINE_REGEX.test(syntaxText)) {
+    hr.setAttribute(MD_HR_SYNTAX_ATTR, syntaxText);
+  }
   const pAfter = document.createElement("p");
   pAfter.appendChild(trailingFrag);
-  cleanTrailingEmptyNodes(pAfter);
-  ensureElementHasBreakIfEmpty(pAfter);
+  normalizeEmptyBreak(pAfter);
   const parent = target.parentNode || editor;
   parent.insertBefore(hr, target);
   parent.replaceChild(pAfter, target);
   placeCaretAtStart(pAfter);
+  syncLiveMarkdownSyntax(editor);
 }
 
 function replaceWithCodeBlock(
@@ -476,7 +407,7 @@ function replaceWithCodeBlock(
   const pre = document.createElement("pre");
   const code = document.createElement("code");
   if (lang) code.setAttribute("data-lang", lang);
-  const trailingText = (trailingFrag.textContent || "").replace(/\u200B/g, "");
+  const trailingText = stripZeroWidth(trailingFrag.textContent || "");
   if (trailingText) {
     code.textContent = trailingText;
   } else {
@@ -504,9 +435,10 @@ export function applyMarkdownOnSpace(editor: HTMLElement): boolean {
     const taskInLiMatch = /^\[([ xX]?)\]$/.exec(trimmedStart);
     if (taskInLiMatch) {
       const checked = taskInLiMatch[1]?.toLowerCase() === "x";
+      const bullet = getLiBulletMarker(ctx.block);
       const trailingFrag = ctx.extractTriggerAndSplitLine();
       const target = resolveReplacementTarget(editor, ctx.block);
-      const taskLi = createTaskListItem(checked, trailingFrag);
+      const taskLi = createTaskListItem(checked, trailingFrag, bullet);
       const parentList = target.parentElement;
 
       if (parentList && parentList.tagName.toLowerCase() === "ul") {
@@ -529,35 +461,37 @@ export function applyMarkdownOnSpace(editor: HTMLElement): boolean {
         mergeListWithAdjacentSiblings(taskUl);
       }
       placeCaretAtStart(taskLi);
+      syncLiveMarkdownSyntax(editor);
       return true;
     }
   }
 
   if (tag !== "li") {
     // 2. Direct Task checkbox
-    const taskMatch = /^(?:[-*+]\s+)?\[([ xX]?)\]$/.exec(trimmedStart);
+    const taskMatch = /^(?:([-*+])\s+)?\[([ xX]?)\]$/.exec(trimmedStart);
     if (taskMatch) {
-      const checked = taskMatch[1]?.toLowerCase() === "x";
+      const bullet = (taskMatch[1] as "-" | "*" | "+" | undefined) ?? "-";
+      const checked = taskMatch[2]?.toLowerCase() === "x";
       const trailingFrag = ctx.extractTriggerAndSplitLine();
       const target = resolveReplacementTarget(editor, ctx.block);
       const taskUl = document.createElement("ul");
       taskUl.setAttribute("data-task-list", "true");
-      const taskLi = createTaskListItem(checked, trailingFrag);
+      const taskLi = createTaskListItem(checked, trailingFrag, bullet);
       taskUl.appendChild(taskLi);
       insertBlockReplacement(editor, target, taskUl, taskLi);
       return true;
     }
 
     // 3. Horizontal rule
-    if (/^(?:-{3,}|\*{3,}|_{3,})$/.test(trimmedStart)) {
+    if (HR_LINE_REGEX.test(trimmedStart)) {
       const trailingFrag = ctx.extractTriggerAndSplitLine();
       const target = resolveReplacementTarget(editor, ctx.block);
-      replaceWithHorizontalRule(editor, target, trailingFrag);
+      replaceWithHorizontalRule(editor, target, trailingFrag, trimmedStart);
       return true;
     }
 
     // 4. Fenced code block
-    const codeBlockMatch = /^```([a-zA-Z0-9_-]*)$/.exec(trimmedStart);
+    const codeBlockMatch = /^```([a-zA-Z0-9_+#.-]*)$/.exec(trimmedStart);
     if (codeBlockMatch) {
       const trailingFrag = ctx.extractTriggerAndSplitLine();
       const target = resolveReplacementTarget(editor, ctx.block);
@@ -575,10 +509,8 @@ export function applyMarkdownOnSpace(editor: HTMLElement): boolean {
         const target = resolveReplacementTarget(editor, ctx.block);
         const heading = document.createElement(nextHeadingTag);
         heading.appendChild(trailingFrag);
-        cleanTrailingEmptyNodes(heading);
-        ensureElementHasBreakIfEmpty(heading);
+        normalizeEmptyBreak(heading);
         insertBlockReplacement(editor, target, heading);
-        syncLiveMarkdownSyntax(editor);
         return true;
       }
     }
@@ -589,15 +521,14 @@ export function applyMarkdownOnSpace(editor: HTMLElement): boolean {
       const target = resolveReplacementTarget(editor, ctx.block);
       const bq = document.createElement("blockquote");
       bq.appendChild(trailingFrag);
-      cleanTrailingEmptyNodes(bq);
-      ensureElementHasBreakIfEmpty(bq);
+      normalizeEmptyBreak(bq);
       insertBlockReplacement(editor, target, bq);
-      syncLiveMarkdownSyntax(editor);
       return true;
     }
 
     // 7. Unordered bullet list
     if (/^[-*+]$/.test(trimmedStart)) {
+      const bullet = trimmedStart as "-" | "*" | "+";
       const trailingFrag = ctx.extractTriggerAndSplitLine();
       const target = resolveReplacementTarget(editor, ctx.block);
       const prevEl = target.previousElementSibling;
@@ -609,31 +540,33 @@ export function applyMarkdownOnSpace(editor: HTMLElement): boolean {
           subUl = document.createElement("ul");
           parentLi.appendChild(subUl);
         }
-        const li = createListItemWithContent(trailingFrag);
+        const li = createListItemWithContent(trailingFrag, { bullet });
         subUl.appendChild(li);
         target.remove();
         placeCaretAtStart(li);
+        syncLiveMarkdownSyntax(editor);
         return true;
       }
 
       const ul = document.createElement("ul");
-      const li = createListItemWithContent(trailingFrag);
+      const li = createListItemWithContent(trailingFrag, { bullet });
       ul.appendChild(li);
       insertBlockReplacement(editor, target, ul, li);
       return true;
     }
 
     // 8. Ordered list
-    const orderedMatch = /^(\d{1,4})[.)]$/.exec(trimmedStart);
+    const orderedMatch = /^(\d{1,4})([.)])$/.exec(trimmedStart);
     if (orderedMatch) {
       const startNum = Number.parseInt(orderedMatch[1]!, 10);
+      const delim = orderedMatch[2]! as "." | ")";
       const trailingFrag = ctx.extractTriggerAndSplitLine();
       const target = resolveReplacementTarget(editor, ctx.block);
       const ol = document.createElement("ol");
       if (Number.isFinite(startNum) && startNum !== 1) {
         ol.setAttribute("start", String(startNum));
       }
-      const li = createListItemWithContent(trailingFrag);
+      const li = createListItemWithContent(trailingFrag, { delim });
       ol.appendChild(li);
       insertBlockReplacement(editor, target, ol, li);
       return true;
@@ -658,11 +591,37 @@ function exitBlockToParagraph(block: HTMLElement): HTMLElement {
   return p;
 }
 
-function handleEnterInsideCodeBlock(pre: HTMLElement, range: Range, shiftKey: boolean): boolean {
-  const code = pre.querySelector("code") || pre;
+function handleEnterInsideCodeBlock(
+  editor: HTMLElement,
+  pre: HTMLElement,
+  range: Range,
+  shiftKey: boolean,
+): boolean {
+  const code = pre.querySelector(":scope > code") || pre;
 
   if (shiftKey) {
     exitBlockToParagraph(pre);
+    syncLiveMarkdownSyntax(editor);
+    return true;
+  }
+
+  const syntaxSpan = isInsideMarkdownSyntax(range.startContainer, pre);
+  if (syntaxSpan) {
+    const kind = syntaxSpan.getAttribute(MD_SYNTAX_ATTR);
+    if (kind === "code-open") {
+      placeCaretAtStart(code as HTMLElement);
+      syncLiveMarkdownSyntax(editor);
+      return true;
+    }
+    if (kind === "code-close") {
+      exitBlockToParagraph(pre);
+      syncLiveMarkdownSyntax(editor);
+      return true;
+    }
+  }
+
+  if (!code.contains(range.startContainer)) {
+    placeCaretAtStart(code as HTMLElement);
     return true;
   }
 
@@ -673,14 +632,15 @@ function handleEnterInsideCodeBlock(pre: HTMLElement, range: Range, shiftKey: bo
   afterRange.setStart(range.startContainer, range.startOffset);
   afterRange.setEnd(code, code.childNodes.length);
 
-  const beforeText = beforeRange.toString().replace(/\u200B/g, "");
-  const afterText = afterRange.toString().replace(/\u200B/g, "");
+  const beforeText = stripZeroWidth(beforeRange.toString());
+  const afterText = stripZeroWidth(afterRange.toString());
 
   if (afterText.length === 0 && beforeText.endsWith("\n")) {
     const trimmed = beforeText.slice(0, -1);
     code.textContent = trimmed;
     if (!trimmed) code.appendChild(document.createElement("br"));
     exitBlockToParagraph(pre);
+    syncLiveMarkdownSyntax(editor);
     return true;
   }
 
@@ -699,39 +659,50 @@ function handleEnterInsideCodeBlock(pre: HTMLElement, range: Range, shiftKey: bo
   return true;
 }
 
-function outdentListItem(li: HTMLElement): boolean {
+function outdentListItem(editor: HTMLElement, li: HTMLElement): boolean {
   const list = li.parentElement;
   if (!list) return false;
+  li.querySelectorAll(`:scope > [${MD_SYNTAX_ATTR}]`).forEach((s) => s.remove());
   const parentLi = list.parentElement;
 
   if (!parentLi || parentLi.tagName.toLowerCase() !== "li" || !parentLi.parentElement) {
     const bookmark = getCaretBookmark(li);
     const isTask = li.hasAttribute("data-task");
+    const nestedLists: HTMLElement[] = [];
     const p = document.createElement("p");
     if (isTask) {
       const span = getTaskContentSpan(li);
       if (span) {
         while (span.firstChild) p.appendChild(span.firstChild);
       }
+      Array.from(li.children).forEach((child) => {
+        const cTag = child.tagName.toLowerCase();
+        if (cTag === "ul" || cTag === "ol") nestedLists.push(child as HTMLElement);
+      });
     } else {
       Array.from(li.childNodes).forEach((child) => {
         if (
           child.nodeType === Node.ELEMENT_NODE &&
           ["ul", "ol"].includes((child as HTMLElement).tagName.toLowerCase())
         ) {
+          nestedLists.push(child as HTMLElement);
           return;
         }
         p.appendChild(child);
       });
     }
-    cleanTrailingEmptyNodes(p);
-    ensureElementHasBreakIfEmpty(p);
-    splitListAroundItem(list, li, p);
+    nestedLists.forEach((nl) => nl.remove());
+    normalizeEmptyBreak(p);
+    splitListAroundItem(list, li, [p, ...nestedLists]);
+    nestedLists.forEach((nl) => {
+      if (nl.isConnected) mergeListWithAdjacentSiblings(nl as HTMLUListElement | HTMLOListElement);
+    });
     if (bookmark && !isTask) {
       restoreCaretBookmark(p, bookmark);
     } else {
       placeCaretAtStart(p);
     }
+    syncLiveMarkdownSyntax(editor);
     return true;
   }
 
@@ -757,10 +728,11 @@ function outdentListItem(li: HTMLElement): boolean {
     list.remove();
   }
   placeCaretAtStart(li);
+  syncLiveMarkdownSyntax(editor);
   return true;
 }
 
-function indentListItem(li: HTMLElement): boolean {
+function indentListItem(editor: HTMLElement, li: HTMLElement): boolean {
   const prevLi = li.previousElementSibling as HTMLElement | null;
   const list = li.parentElement;
   if (!prevLi || !list || prevLi.tagName.toLowerCase() !== "li") return true;
@@ -778,6 +750,7 @@ function indentListItem(li: HTMLElement): boolean {
   }
   subList.appendChild(li);
   placeCaretAtStart(li);
+  syncLiveMarkdownSyntax(editor);
   return true;
 }
 
@@ -787,7 +760,7 @@ export function applyMarkdownOnEnter(editor: HTMLElement, shiftKey: boolean): bo
 
   const pre = isInsideTag(range.startContainer, editor, ["pre"]);
   if (pre) {
-    return handleEnterInsideCodeBlock(pre, range, shiftKey);
+    return handleEnterInsideCodeBlock(editor, pre, range, shiftKey);
   }
 
   if (shiftKey) return false;
@@ -799,14 +772,14 @@ export function applyMarkdownOnEnter(editor: HTMLElement, shiftKey: boolean): bo
   const trimmed = ctx.lineBeforeText.trim();
 
   if (tag !== "li" && !isInsideTag(range.startContainer, editor, ["code"])) {
-    if (/^(?:-{3,}|\*{3,}|_{3,})$/.test(trimmed)) {
+    if (HR_LINE_REGEX.test(trimmed)) {
       const trailingFrag = ctx.extractTriggerAndSplitLine();
       const target = resolveReplacementTarget(editor, ctx.block);
-      replaceWithHorizontalRule(editor, target, trailingFrag);
+      replaceWithHorizontalRule(editor, target, trailingFrag, trimmed);
       return true;
     }
 
-    const codeMatch = /^```([a-zA-Z0-9_-]*)$/.exec(trimmed);
+    const codeMatch = /^```([a-zA-Z0-9_+#.-]*)$/.exec(trimmed);
     if (codeMatch) {
       const trailingFrag = ctx.extractTriggerAndSplitLine();
       const target = resolveReplacementTarget(editor, ctx.block);
@@ -815,41 +788,84 @@ export function applyMarkdownOnEnter(editor: HTMLElement, shiftKey: boolean): bo
     }
   }
 
-  if (tag === "li" && ctx.block.hasAttribute("data-task")) {
-    const scope = ctx.editableScope;
-    const nestedLists = Array.from(ctx.block.querySelectorAll(":scope > ul, :scope > ol"));
-    if (!hasVisibleContent(scope) && nestedLists.length === 0) {
-      return outdentListItem(ctx.block);
+  if (tag === "blockquote" || HEADING_TAG_SET.has(tag)) {
+    const syntaxSpan = ctx.block.querySelector(":scope > [data-md-syntax]");
+    if (syntaxSpan && syntaxSpan.contains(range.startContainer)) {
+      const atPrefixStart = isCaretAtStartOfScope(ctx.block, range);
+      const p = document.createElement("p");
+      p.appendChild(document.createElement("br"));
+      ctx.block.parentNode?.insertBefore(p, ctx.block);
+      if (atPrefixStart && syntaxSpan.firstChild) {
+        placeCaret(syntaxSpan.firstChild, 0);
+      } else {
+        const firstTextTarget = getFirstEditableTarget(ctx.block);
+        placeCaret(firstTextTarget.node, firstTextTarget.offset);
+      }
+      syncLiveMarkdownSyntax(editor);
+      return true;
     }
-
-    const afterRange = document.createRange();
-    afterRange.setStart(range.startContainer, range.startOffset);
-    afterRange.setEnd(scope, scope.childNodes.length);
-    const afterFrag = afterRange.extractContents();
-    cleanTrailingEmptyNodes(scope);
-    ensureElementHasBreakIfEmpty(scope);
-
-    const newTaskLi = createTaskListItem(false, afterFrag);
-    ctx.block.parentNode?.insertBefore(newTaskLi, ctx.block.nextSibling);
-    placeCaretAtStart(newTaskLi);
-    return true;
   }
 
-  if (tag === "li" && !ctx.block.hasAttribute("data-task")) {
-    const ownText = Array.from(ctx.block.childNodes)
-      .filter(
-        (n) => n.nodeType !== Node.ELEMENT_NODE || !["UL", "OL"].includes((n as Element).tagName),
-      )
-      .map((n) => getTextWithoutArtifacts(n))
-      .join("")
-      .trim();
-    const hasImg = Array.from(ctx.block.children).some(
-      (el) =>
-        el.tagName === "IMG" || (!["UL", "OL"].includes(el.tagName) && el.querySelector("img")),
-    );
-    if (!ownText && !hasImg && !ctx.block.querySelector(":scope > ul, :scope > ol")) {
-      return outdentListItem(ctx.block);
+  if (tag === "li") {
+    const bullet = getLiBulletMarker(ctx.block);
+    const delim = getLiDelimMarker(ctx.block);
+    const syntaxSpan = ctx.block.querySelector(":scope > [data-md-syntax]");
+    if (syntaxSpan && syntaxSpan.contains(range.startContainer)) {
+      const atPrefixStart = isCaretAtStartOfScope(ctx.block, range);
+      if (atPrefixStart) {
+        const emptySibling = ctx.block.hasAttribute("data-task")
+          ? createTaskListItem(false, undefined, bullet)
+          : createListItemWithContent(document.createDocumentFragment(), { bullet, delim });
+        ctx.block.parentNode?.insertBefore(emptySibling, ctx.block);
+        syncLiveMarkdownSyntax(editor);
+        return true;
+      }
+      placeCaretAtStart(ctx.block);
+      syncLiveMarkdownSyntax(editor);
+      return true;
     }
+
+    const hasNestedLists = Boolean(ctx.block.querySelector(":scope > ul, :scope > ol"));
+    if (!hasOwnInlineContent(ctx.block) && !hasNestedLists) {
+      return outdentListItem(editor, ctx.block);
+    }
+
+    if (ctx.block.hasAttribute("data-task")) {
+      const scope = ctx.editableScope;
+      const afterRange = document.createRange();
+      afterRange.setStart(range.startContainer, range.startOffset);
+      afterRange.setEnd(scope, scope.childNodes.length);
+      const afterFrag = afterRange.extractContents();
+      normalizeEmptyBreak(scope);
+
+      const newTaskLi = createTaskListItem(false, afterFrag, bullet);
+      ctx.block.parentNode?.insertBefore(newTaskLi, ctx.block.nextSibling);
+      placeCaretAtStart(newTaskLi);
+      syncLiveMarkdownSyntax(editor);
+      return true;
+    }
+
+    const firstNested = ctx.block.querySelector(":scope > ul, :scope > ol");
+    const afterRange = document.createRange();
+    afterRange.setStart(range.startContainer, range.startOffset);
+    if (firstNested) {
+      afterRange.setEndBefore(firstNested);
+    } else {
+      afterRange.setEnd(ctx.block, ctx.block.childNodes.length);
+    }
+    const afterFrag = afterRange.extractContents();
+    ctx.block.querySelectorAll(`:scope > [${MD_SYNTAX_ATTR}]`).forEach((s) => s.remove());
+    if (!hasOwnInlineContent(ctx.block)) {
+      if (!ctx.block.querySelector(":scope > br")) {
+        ctx.block.insertBefore(document.createElement("br"), firstNested);
+      }
+    }
+
+    const newLi = createListItemWithContent(afterFrag, { bullet, delim });
+    ctx.block.parentNode?.insertBefore(newLi, ctx.block.nextSibling);
+    placeCaretAtStart(newLi);
+    syncLiveMarkdownSyntax(editor);
+    return true;
   }
 
   if (tag === "blockquote") {
@@ -893,20 +909,7 @@ export function applyMarkdownOnEnter(editor: HTMLElement, shiftKey: boolean): bo
     return true;
   }
 
-  // Heading Enter: if caret sits at start of heading BEFORE syntax span, insert <p> above;
-  // otherwise split into <p> below and collapse heading markers immediately.
   if (HEADING_TAG_SET.has(tag)) {
-    const firstTextTarget = getFirstEditableTarget(ctx.block);
-    const syntaxSpan = ctx.block.querySelector(':scope > span[data-md-syntax="heading"]');
-    if (syntaxSpan && syntaxSpan.contains(range.startContainer)) {
-      const p = document.createElement("p");
-      p.appendChild(document.createElement("br"));
-      ctx.block.parentNode?.insertBefore(p, ctx.block);
-      placeCaret(firstTextTarget.node, firstTextTarget.offset);
-      syncLiveMarkdownSyntax(editor);
-      return true;
-    }
-
     const afterRange = document.createRange();
     afterRange.setStart(range.startContainer, range.startOffset);
     afterRange.setEnd(ctx.block, ctx.block.childNodes.length);
@@ -915,8 +918,7 @@ export function applyMarkdownOnEnter(editor: HTMLElement, shiftKey: boolean): bo
 
     const p = document.createElement("p");
     p.appendChild(afterFrag);
-    cleanTrailingEmptyNodes(p);
-    ensureElementHasBreakIfEmpty(p);
+    normalizeEmptyBreak(p);
     ctx.block.parentNode?.insertBefore(p, ctx.block.nextSibling);
     placeCaretAtStart(p);
     syncLiveMarkdownSyntax(editor);
@@ -930,18 +932,6 @@ export function applyMarkdownOnEnter(editor: HTMLElement, shiftKey: boolean): bo
   return false;
 }
 
-function isCaretAtStartOfScope(scope: HTMLElement, range: Range): boolean {
-  const before = document.createRange();
-  before.setStart(scope, 0);
-  before.setEnd(range.startContainer, range.startOffset);
-  const frag = before.cloneContents();
-  frag.querySelectorAll("[data-ghost], [data-task-checkbox]").forEach((el) => el.remove());
-  const text = (frag.textContent || "").replace(/\u00A0/g, " ").replace(/\u200B/g, "");
-  if (text.length > 0) return false;
-  if (frag.querySelector("img, br")) return false;
-  return true;
-}
-
 export function applyMarkdownOnBackspace(editor: HTMLElement): boolean {
   const range = getCollapsedSelectionRange(editor);
   if (!range) return false;
@@ -951,16 +941,21 @@ export function applyMarkdownOnBackspace(editor: HTMLElement): boolean {
   const tag = block.tagName.toLowerCase();
 
   if (tag === "li" && block.hasAttribute("data-task")) {
-    const scope = getTaskContentSpan(block) || block;
-    if (scope.contains(range.startContainer) && isCaretAtStartOfScope(scope, range)) {
+    const scope = getEditableScope(block);
+    if (isCaretAtStartOfScope(scope, range)) {
       const list = block.parentElement;
       if (!hasVisibleContent(scope)) {
-        return outdentListItem(block);
+        return outdentListItem(editor, block);
       }
       const plainLi = document.createElement("li");
+      applyLiMarkerAttrs(plainLi, { bullet: getLiBulletMarker(block) });
       while (scope.firstChild) plainLi.appendChild(scope.firstChild);
       Array.from(block.children).forEach((child) => {
-        if (child !== scope && !child.hasAttribute("data-task-checkbox")) {
+        if (
+          child !== scope &&
+          !child.hasAttribute("data-task-checkbox") &&
+          !child.hasAttribute(MD_SYNTAX_ATTR)
+        ) {
           plainLi.appendChild(child);
         }
       });
@@ -976,45 +971,147 @@ export function applyMarkdownOnBackspace(editor: HTMLElement): boolean {
         mergeListWithAdjacentSiblings(plainUl);
       }
       placeCaretAtStart(plainLi);
+      syncLiveMarkdownSyntax(editor);
       return true;
     }
   }
 
-  if (tag === "li" && !block.hasAttribute("data-task") && isCaretAtStartOfScope(block, range)) {
-    return outdentListItem(block);
+  if (tag === "li" && isCaretAtBlockBoundaryStart(block, range)) {
+    return outdentListItem(editor, block);
   }
 
+  if (tag === "pre") {
+    const openSpan = getDirectSyntaxChild(block, "code-open");
+    const closeSpan = getDirectSyntaxChild(block, "code-close");
+    const codeEl = getEditableScope(block);
+
+    if (closeSpan?.contains(range.startContainer) && isCaretAtStartOfScope(closeSpan, range)) {
+      placeCaretAtEnd(codeEl);
+      syncLiveMarkdownSyntax(editor);
+      return true;
+    }
+
+    if (openSpan?.contains(range.startContainer)) {
+      if (isCaretAtStartOfScope(openSpan, range)) {
+        const prev = block.previousElementSibling as HTMLElement | null;
+        if (prev && (prev.tagName.toLowerCase() === "hr" || isEmptyTextBlockElement(prev))) {
+          prev.remove();
+          return true;
+        }
+      }
+      return false;
+    }
+
+    if (codeEl.contains(range.startContainer) && isCaretAtStartOfScope(codeEl, range)) {
+      const prev = block.previousElementSibling as HTMLElement | null;
+      if (!hasVisibleContent(codeEl)) {
+        const p = document.createElement("p");
+        p.appendChild(document.createElement("br"));
+        block.parentNode?.replaceChild(p, block);
+        placeCaretAtStart(p);
+        syncLiveMarkdownSyntax(editor);
+        return true;
+      }
+      if (prev && (prev.tagName.toLowerCase() === "hr" || isEmptyTextBlockElement(prev))) {
+        prev.remove();
+        return true;
+      }
+      if (openSpan) {
+        placeCaretAtEnd(openSpan);
+        syncLiveMarkdownSyntax(editor);
+        return true;
+      }
+      return false;
+    }
+
+    return false;
+  }
+
+  if (!isCaretAtStartOfScope(block, range)) return false;
+
+  const prev = block.previousElementSibling as HTMLElement | null;
+
+  // Deleting an empty line or divider directly above a block preserves headings, quotes, and inline marks.
   if (
-    (HEADING_TAG_SET.has(tag) || tag === "blockquote" || tag === "pre") &&
-    isCaretAtStartOfScope(block, range)
+    block.parentElement === editor &&
+    prev &&
+    (prev.tagName.toLowerCase() === "hr" || isEmptyTextBlockElement(prev))
   ) {
-    if (tag === "pre") {
-      const text = (block.textContent || "").replace(/\u200B/g, "");
-      if (text.trim().length > 0) return false;
-    } else if (block.querySelector(":scope > [data-md-syntax]")) {
-      // Caret is before the visible `#`/`>` prefix at offset 0: on line 1 preserve the block,
-      // otherwise demote with literal prefix text and let Backspace merge onto the previous line.
-      if (!block.previousElementSibling) {
+    const syntaxSpan = block.querySelector(":scope > [data-md-syntax]");
+    prev.remove();
+    if (syntaxSpan?.firstChild && range.startContainer === block) {
+      placeCaret(syntaxSpan.firstChild, 0);
+    }
+    syncLiveMarkdownSyntax(editor);
+    return true;
+  }
+
+  if (HEADING_TAG_SET.has(tag) || tag === "blockquote") {
+    if (block.querySelector(":scope > [data-md-syntax]")) {
+      if (!prev) {
         return true;
       }
       unwrapBlockSyntaxToParagraph(block, false);
       return false;
     }
     const p = document.createElement("p");
-    block.querySelectorAll(":scope > [data-md-syntax]").forEach((s) => s.remove());
     while (block.firstChild) {
-      if (block.firstChild.nodeName === "CODE") {
-        while (block.firstChild.firstChild) p.appendChild(block.firstChild.firstChild);
-        block.firstChild.remove();
-      } else {
-        p.appendChild(block.firstChild);
-      }
+      p.appendChild(block.firstChild);
     }
-    ensureElementHasBreakIfEmpty(p);
+    normalizeEmptyBreak(p);
     block.parentNode?.replaceChild(p, block);
     placeCaretAtStart(p);
     syncLiveMarkdownSyntax(editor);
     return true;
+  }
+
+  return false;
+}
+
+export function applyMarkdownOnDelete(editor: HTMLElement): boolean {
+  const range = getCollapsedSelectionRange(editor);
+  if (!range) return false;
+
+  const block = getClosestBlock(range.startContainer, editor);
+  if (!block) return false;
+  const tag = block.tagName.toLowerCase();
+
+  if (tag === "pre") {
+    const openSpan = getDirectSyntaxChild(block, "code-open");
+    const closeSpan = getDirectSyntaxChild(block, "code-close");
+    const codeEl = getEditableScope(block);
+    if (openSpan?.contains(range.startContainer) && isCaretAtEndOfScope(openSpan, range)) {
+      placeCaretAtStart(codeEl);
+      syncLiveMarkdownSyntax(editor);
+      return true;
+    }
+    if (codeEl.contains(range.startContainer) && isCaretAtEndOfScope(codeEl, range) && closeSpan) {
+      placeCaretAtStart(closeSpan);
+      syncLiveMarkdownSyntax(editor);
+      return true;
+    }
+  }
+
+  if (block.parentElement !== editor) return false;
+  if (!isCaretAtEndOfScope(getEditableScope(block), range)) return false;
+
+  const next = block.nextElementSibling as HTMLElement | null;
+  if (!next) return false;
+
+  if (next.tagName.toLowerCase() === "hr") {
+    next.remove();
+    return true;
+  }
+
+  // Forward-deleting an empty plain line above a styled block removes only the blank line.
+  if ((tag === "p" || tag === "div") && !hasVisibleContent(block)) {
+    const nextTag = next.tagName.toLowerCase();
+    if (BLOCK_TAG_SET.has(nextTag) || nextTag === "ul" || nextTag === "ol") {
+      block.remove();
+      placeCaretAtStart(resolveFocusTarget(next, "start"));
+      syncLiveMarkdownSyntax(editor);
+      return true;
+    }
   }
 
   return false;
@@ -1026,6 +1123,7 @@ export function applyMarkdownOnTab(editor: HTMLElement, shiftKey: boolean): bool
 
   const pre = isInsideTag(range.startContainer, editor, ["pre"]);
   if (pre) {
+    if (isInsideMarkdownSyntax(range.startContainer, pre)) return true;
     if (!shiftKey) {
       const spaces = document.createTextNode("  ");
       range.deleteContents();
@@ -1048,7 +1146,7 @@ export function applyMarkdownOnTab(editor: HTMLElement, shiftKey: boolean): bool
 
   const block = getClosestBlock(range.startContainer, editor);
   if (block && block.tagName.toLowerCase() === "li") {
-    return shiftKey ? outdentListItem(block) : indentListItem(block);
+    return shiftKey ? outdentListItem(editor, block) : indentListItem(editor, block);
   }
 
   return false;
@@ -1069,22 +1167,28 @@ export function toggleTaskListCommand(editor: HTMLElement): boolean {
     if (input) {
       input.checked = !input.checked;
       toggleTaskCheckboxElement(input);
+      syncLiveMarkdownSyntax(editor);
       return true;
     }
   }
 
   if (tag === "li") {
+    const bullet = getLiBulletMarker(block);
+    const nestedLists: HTMLElement[] = [];
     const frag = document.createDocumentFragment();
     Array.from(block.childNodes).forEach((child) => {
-      if (
-        child.nodeType === Node.ELEMENT_NODE &&
-        ["UL", "OL"].includes((child as HTMLElement).tagName)
-      ) {
-        return;
+      if (child.nodeType === Node.ELEMENT_NODE) {
+        const el = child as HTMLElement;
+        if (el.hasAttribute(MD_SYNTAX_ATTR)) return;
+        if (el.tagName === "UL" || el.tagName === "OL") {
+          nestedLists.push(el);
+          return;
+        }
       }
       frag.appendChild(child);
     });
-    const taskLi = createTaskListItem(false, frag);
+    const taskLi = createTaskListItem(false, frag, bullet);
+    nestedLists.forEach((nl) => taskLi.appendChild(nl));
     const parentList = block.parentElement;
     if (parentList && parentList.tagName === "UL" && parentList.children.length === 1) {
       parentList.setAttribute("data-task-list", "true");
@@ -1098,11 +1202,12 @@ export function toggleTaskListCommand(editor: HTMLElement): boolean {
       mergeListWithAdjacentSiblings(taskUl);
     }
     placeCaretAtEnd(taskLi);
+    syncLiveMarkdownSyntax(editor);
     return true;
   }
 
   const frag = document.createDocumentFragment();
-  block.querySelectorAll(":scope > [data-md-syntax]").forEach((s) => s.remove());
+  block.querySelectorAll(`:scope > [${MD_SYNTAX_ATTR}]`).forEach((s) => s.remove());
   while (block.firstChild) {
     frag.appendChild(block.firstChild);
   }

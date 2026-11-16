@@ -6,14 +6,248 @@ import { RichNoteHtmlContent, RichNoteSurface } from "@/components/notes/rich-no
 import { getArtboardAccentVar } from "@/components/canvas/canvas-tokens";
 import { formatTimestamp } from "@/lib/course-lessons";
 import { hasMeaningfulHtmlContent } from "@/lib/course-notes";
-import type { CanvasCard, CanvasSide } from "@/lib/course-canvas";
+import {
+  CARD_FIT_MAX_WIDTH,
+  getCardMinHeight,
+  getCardMinWidth,
+  type CanvasCard,
+  type CanvasSide,
+} from "@/lib/course-canvas";
 import { useMediaUrl } from "@/lib/media-store";
 import { cn } from "@/lib/utils";
 
 const CONNECTOR_SIDES: CanvasSide[] = ["top", "right", "bottom", "left"];
 
+function measureVideoHeaderMinWidth(cardRootEl: HTMLElement): number {
+  const headerEl = cardRootEl.querySelector("[data-card-header='true']") as HTMLElement | null;
+  if (!headerEl) return 0;
+
+  const cs = window.getComputedStyle(headerEl);
+  const padX = (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0);
+  const borderX = Math.max(0, cardRootEl.offsetWidth - cardRootEl.clientWidth);
+  const leftEl = headerEl.children[0] as HTMLElement | undefined;
+  const rightEl = headerEl.children[1] as HTMLElement | undefined;
+
+  let leftW = 0;
+  if (leftEl) {
+    const children = Array.from(leftEl.children) as HTMLElement[];
+    if (children.length > 0) {
+      for (const child of children) {
+        leftW += child.offsetWidth;
+      }
+      leftW += Math.max(0, children.length - 1) * 6;
+    } else {
+      leftW = leftEl.scrollWidth;
+    }
+  }
+  const rightW = rightEl?.offsetWidth ?? 0;
+  return Math.ceil(leftW + rightW + padX + borderX + 8);
+}
+
+function computeInlineRightChrome(startEl: HTMLElement, boundaryEl: HTMLElement): number {
+  let extra = 0;
+  let el: HTMLElement | null = startEl;
+  while (el && el !== boundaryEl) {
+    const cs = window.getComputedStyle(el);
+    const isInline = cs.display.startsWith("inline");
+    if (isInline || el.tagName === "PRE" || el.tagName === "BLOCKQUOTE") {
+      extra += (parseFloat(cs.paddingRight) || 0) + (parseFloat(cs.borderRightWidth) || 0);
+      if (isInline) {
+        extra += Math.max(0, parseFloat(cs.marginRight) || 0);
+      }
+    }
+    el = el.parentElement;
+  }
+  return extra;
+}
+
+function measureNoteContentWidth(
+  cardRootEl: HTMLElement,
+  contentEl: HTMLElement,
+  card: CanvasCard,
+  scale: number,
+  horizontalChrome: number,
+  headerMinWidth: number,
+): number {
+  const contentRect = contentEl.getBoundingClientRect();
+  const contentLeft = contentRect.left;
+  const contentTop = contentRect.top;
+  const floatEl = cardRootEl.querySelector("[data-text-delete-float='true']") as HTMLElement | null;
+  const floatRect = floatEl?.getBoundingClientRect() ?? null;
+  const floatReserve = card.type === "text" ? (floatEl ? (floatEl.offsetWidth || 20) + 4 : 24) : 0;
+
+  let maxInnerW = 0;
+  const walker = document.createTreeWalker(contentEl, NodeFilter.SHOW_TEXT);
+  const range = document.createRange();
+
+  let textNode: Node | null;
+  while ((textNode = walker.nextNode())) {
+    const rawText = textNode.textContent;
+    if (!rawText) continue;
+    const parentEl = textNode.parentElement;
+    if (!parentEl) continue;
+    const insidePre = Boolean(parentEl.closest("pre"));
+    if (!insidePre && !rawText.trim() && !rawText.includes("\u00A0")) continue;
+
+    range.selectNodeContents(textNode);
+    const rects = range.getClientRects();
+    if (rects.length === 0) continue;
+
+    const extraRight = computeInlineRightChrome(parentEl, contentEl);
+    for (let i = 0; i < rects.length; i++) {
+      const rect = rects[i]!;
+      if (rect.width <= 0.5 || rect.height <= 0.5) continue;
+
+      let right = (rect.right - contentLeft) / scale + extraRight;
+      if (floatReserve > 0) {
+        const overlapsFloat = floatRect
+          ? rect.top < floatRect.bottom - 1 && rect.bottom > floatRect.top + 1
+          : (rect.top - contentTop) / scale < 26;
+        if (overlapsFloat) right += floatReserve;
+      }
+      if (right > maxInnerW) maxInnerW = right;
+    }
+  }
+
+  for (const img of Array.from(contentEl.querySelectorAll("img"))) {
+    const rect = img.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) continue;
+    const imgBoxW = rect.width / scale;
+    const blockHolder = img.closest("[data-note-image-block='true'], div, p, li");
+    const isCenteredBlock =
+      window.getComputedStyle(img).display === "block" ||
+      Boolean(img.closest("[data-note-image-block='true']"));
+    if (isCenteredBlock) {
+      const holderLeft = blockHolder
+        ? Math.max(0, (blockHolder.getBoundingClientRect().left - contentLeft) / scale)
+        : 0;
+      maxInnerW = Math.max(maxInnerW, holderLeft + imgBoxW);
+    } else {
+      maxInnerW = Math.max(maxInnerW, (rect.right - contentLeft) / scale);
+    }
+  }
+
+  for (const pre of Array.from(contentEl.querySelectorAll("pre"))) {
+    if (pre.scrollWidth > pre.clientWidth + 1) {
+      const preOffsetLeft = Math.max(0, (pre.getBoundingClientRect().left - contentLeft) / scale);
+      const preBorderX = Math.max(0, pre.offsetWidth - pre.clientWidth);
+      const neededPreW = preOffsetLeft + pre.scrollWidth + preBorderX;
+      maxInnerW = Math.max(
+        maxInnerW,
+        Math.min(neededPreW, Math.max(card.width, CARD_FIT_MAX_WIDTH) - horizontalChrome),
+      );
+    }
+  }
+
+  for (const cb of Array.from(contentEl.querySelectorAll("input[data-task-checkbox='true']"))) {
+    const rect = cb.getBoundingClientRect();
+    if (rect.width > 0) {
+      maxInnerW = Math.max(maxInnerW, (rect.right - contentLeft) / scale + 6);
+    }
+  }
+
+  if (maxInnerW <= 0) {
+    return card.type === "video-note"
+      ? Math.max(headerMinWidth, 200)
+      : card.type === "text"
+        ? 130
+        : 160;
+  }
+
+  return Math.max(headerMinWidth, Math.ceil(maxInnerW + horizontalChrome + 4));
+}
+
+function measureImageCardFittedSize(
+  cardRootEl: HTMLElement,
+  card: CanvasCard,
+  axis: "width" | "height" | "both",
+  minW: number,
+  minH: number,
+): { width: number; height: number } | null {
+  const imgEl = cardRootEl.querySelector("img") as HTMLImageElement | null;
+  const imgBox = cardRootEl.querySelector("[data-card-image-box='true']") as HTMLElement | null;
+  if (!imgEl || !imgBox || imgEl.naturalWidth <= 0 || imgEl.naturalHeight <= 0) return null;
+
+  const borderX = Math.max(0, cardRootEl.offsetWidth - cardRootEl.clientWidth);
+  const chromeY = Math.max(0, cardRootEl.offsetHeight - imgBox.clientHeight);
+  const aspect = imgEl.naturalWidth / imgEl.naturalHeight;
+
+  let nextW = card.width;
+  let nextH = card.height;
+
+  if (axis === "width") {
+    const idealW = borderX + Math.round(imgBox.clientHeight * aspect);
+    nextW = Math.max(minW, Math.min(2400, idealW));
+  } else if (axis === "height") {
+    const idealH = chromeY + Math.round(cardRootEl.clientWidth / aspect);
+    nextH = Math.max(minH, Math.min(12000, idealH));
+  } else {
+    const renderedH = Math.min(imgBox.clientHeight, imgBox.clientWidth / aspect);
+    const renderedW = renderedH * aspect;
+    nextW = Math.max(minW, Math.min(2400, borderX + Math.round(renderedW)));
+    nextH = Math.max(minH, Math.min(12000, chromeY + Math.round(renderedH)));
+  }
+
+  return { width: nextW, height: nextH };
+}
+
+function measureFittedCardDimensions(
+  cardRootEl: HTMLElement,
+  card: CanvasCard,
+  axis: "width" | "height" | "both",
+): { width: number; height: number } | null {
+  const headerMinW = card.type === "video-note" ? measureVideoHeaderMinWidth(cardRootEl) : 0;
+  const minW = Math.max(getCardMinWidth(card.type), headerMinW);
+  const minH = getCardMinHeight(card.type);
+
+  if (card.type === "image") {
+    return measureImageCardFittedSize(cardRootEl, card, axis, minW, minH);
+  }
+
+  const contentEl = cardRootEl.querySelector(".note-editor, .note-content") as HTMLElement | null;
+  const rootRect = cardRootEl.getBoundingClientRect();
+  const scale =
+    cardRootEl.offsetWidth > 0 && rootRect.width > 0 ? rootRect.width / cardRootEl.offsetWidth : 1;
+
+  let nextW = card.width;
+  if (axis !== "height" && contentEl) {
+    const horizontalChrome = Math.max(0, cardRootEl.offsetWidth - contentEl.clientWidth);
+    const measuredW = measureNoteContentWidth(
+      cardRootEl,
+      contentEl,
+      card,
+      scale,
+      horizontalChrome,
+      headerMinW,
+    );
+    const maxFitW = Math.max(card.width, CARD_FIT_MAX_WIDTH);
+    nextW = Math.max(minW, Math.min(maxFitW, measuredW));
+  }
+
+  let nextH = card.height;
+  if (axis !== "width") {
+    const prevWidth = cardRootEl.style.width;
+    const prevMinHeight = cardRootEl.style.minHeight;
+    let measuredH = card.height;
+    try {
+      if (nextW !== card.width) {
+        cardRootEl.style.width = `${nextW}px`;
+      }
+      cardRootEl.style.minHeight = "0px";
+      measuredH = Math.ceil(cardRootEl.offsetHeight);
+    } finally {
+      cardRootEl.style.width = prevWidth;
+      cardRootEl.style.minHeight = prevMinHeight;
+    }
+    nextH = Math.max(minH, Math.min(12000, measuredH));
+  }
+
+  return { width: nextW, height: nextH };
+}
+
 function ImageCardBody({
   card,
+  hasAccentStrip,
   editingCaption,
   onCommitCaption,
   onCancelCaption,
@@ -21,6 +255,7 @@ function ImageCardBody({
   onOpenLightbox,
 }: {
   card: CanvasCard;
+  hasAccentStrip: boolean;
   editingCaption: boolean;
   onCommitCaption: (caption: string) => void;
   onCancelCaption: () => void;
@@ -35,8 +270,14 @@ function ImageCardBody({
   }, [card.caption]);
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+    <div
+      className={cn(
+        "flex min-h-0 flex-1 flex-col overflow-hidden",
+        hasAccentStrip ? "rounded-b-[7px]" : "rounded-[7px]",
+      )}
+    >
       <div
+        data-card-image-box="true"
         className="group/img relative flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-secondary/45"
         onDoubleClick={(e) => {
           if (!resolvedUrl) return;
@@ -123,6 +364,7 @@ export const CanvasCardView = memo(function CanvasCardView({
   onSelect,
   onStartDrag,
   onStartResize,
+  onFitDimensions,
   onStartEdit,
   onFinishEdit,
   onDraftChange,
@@ -154,6 +396,7 @@ export const CanvasCardView = memo(function CanvasCardView({
     e: React.PointerEvent,
     axis?: "both" | "width" | "height",
   ) => void;
+  onFitDimensions?: ((cardId: string, width: number, height: number) => void) | undefined;
   onStartEdit: (cardId: string) => void;
   onFinishEdit: () => void;
   onDraftChange?: ((cardId: string, html: string) => void) | undefined;
@@ -206,6 +449,22 @@ export const CanvasCardView = memo(function CanvasCardView({
   const isImage = card.type === "image";
   const isTextOnly = card.type === "text";
   const isEmptyCard = !isImage && !hasMeaningfulHtmlContent(card.htmlContent);
+  // Shared 1:1 Read/Edit padding prevents width or baseline jumps when toggling edit mode.
+  const bodyPaddingClassName = isTextOnly ? "px-4 py-3" : isVideoNote ? "px-4 pt-3 pb-4" : "p-4";
+
+  const handleEdgeFitDoubleClick = (
+    axis: "width" | "height" | "both",
+    e: React.MouseEvent<HTMLDivElement>,
+  ) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const el = cardRootRef.current;
+    if (!el || !onFitDimensions) return;
+    const fitted = measureFittedCardDimensions(el, card, axis);
+    if (fitted && (fitted.width !== card.width || fitted.height !== card.height)) {
+      onFitDimensions(card.id, fitted.width, fitted.height);
+    }
+  };
 
   useEffect(() => {
     const el = cardRootRef.current;
@@ -417,42 +676,36 @@ export const CanvasCardView = memo(function CanvasCardView({
         />
       )}
 
-      {/* Card Header */}
-      {!isTextOnly && (
+      {/* Video Note Header (linked course timestamp & artboard controls) */}
+      {isVideoNote && (
         <div
           data-card-header="true"
-          className="flex shrink-0 items-center justify-between gap-1.5 border-b border-border/45 px-3 py-2 text-xs"
+          className="flex shrink-0 items-center justify-between gap-1.5 border-b border-border/45 px-4 py-2.5 text-xs"
         >
           <div className="flex min-w-0 items-center gap-1.5">
-            {isVideoNote ? (
-              <Link
-                to="/learn/$courseId"
-                params={{ courseId }}
-                search={{
-                  lesson: card.originLessonIdx ?? 0,
-                  t: Math.floor(card.timestamp ?? 0),
-                  tab: "notes",
-                }}
-                onPointerDown={(e) => e.stopPropagation()}
-                onClick={(e) => e.stopPropagation()}
-                title={lessonTooltip ?? "Jump to video timestamp"}
-                className="inline-flex items-center gap-1 rounded-sm bg-primary-soft px-1.5 py-0.5 font-mono text-[11px] font-semibold tabular-nums text-primary transition-colors hover:bg-primary/20"
-              >
-                <Clock className="size-3 stroke-[1.75]" />
-                <span>{lessonLabel}</span>
-              </Link>
-            ) : (
-              <span className="rounded-sm bg-secondary px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
-                {isImage ? "Image" : "Canvas"}
-              </span>
-            )}
+            <Link
+              to="/learn/$courseId"
+              params={{ courseId }}
+              search={{
+                lesson: card.originLessonIdx ?? 0,
+                t: Math.floor(card.timestamp ?? 0),
+                tab: "notes",
+              }}
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={(e) => e.stopPropagation()}
+              title={lessonTooltip ?? "Jump to video timestamp"}
+              className="inline-flex items-center gap-1 rounded-sm bg-primary-soft px-1.5 py-0.5 font-mono text-[11px] font-semibold tabular-nums text-primary transition-colors hover:bg-primary/20"
+            >
+              <Clock className="size-3 stroke-[1.75]" />
+              <span>{lessonLabel}</span>
+            </Link>
 
-            {isVideoNote && card.membershipState === "detached" && (
+            {card.membershipState === "detached" && (
               <span className="rounded-sm bg-secondary px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
                 Detached
               </span>
             )}
-            {isVideoNote && card.membershipState === "reassigned" && (
+            {card.membershipState === "reassigned" && (
               <span className="rounded-sm bg-amber-500/12 px-1.5 py-0.5 text-[10px] font-medium text-amber-600 dark:text-amber-400">
                 Moved
               </span>
@@ -464,8 +717,7 @@ export const CanvasCardView = memo(function CanvasCardView({
             onPointerDown={(e) => e.stopPropagation()}
             className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover/card:opacity-100 focus-within:opacity-100 [&_svg]:stroke-[1.75]"
           >
-            {isVideoNote &&
-              (card.membershipState === "detached" || card.membershipState === "reassigned") &&
+            {(card.membershipState === "detached" || card.membershipState === "reassigned") &&
               card.originLessonIdx !== undefined && (
                 <button
                   type="button"
@@ -480,7 +732,7 @@ export const CanvasCardView = memo(function CanvasCardView({
                 </button>
               )}
 
-            {!isImage && !isEditing && (
+            {!isEditing && (
               <button
                 type="button"
                 aria-label="Edit note"
@@ -497,8 +749,8 @@ export const CanvasCardView = memo(function CanvasCardView({
 
             <button
               type="button"
-              aria-label={isVideoNote ? "Remove from canvas" : "Delete card"}
-              title={isVideoNote ? "Hide from canvas" : "Delete card"}
+              aria-label="Remove from canvas"
+              title="Hide from canvas"
               onClick={(e) => {
                 e.stopPropagation();
                 onDelete(card.id);
@@ -515,6 +767,7 @@ export const CanvasCardView = memo(function CanvasCardView({
       {isImage ? (
         <ImageCardBody
           card={card}
+          hasAccentStrip={Boolean(accentVar)}
           editingCaption={editingCaption}
           onStartEditCaption={() => setEditingCaption(true)}
           onCommitCaption={(caption) => {
@@ -537,7 +790,7 @@ export const CanvasCardView = memo(function CanvasCardView({
               e.stopPropagation();
             }
           }}
-          className="flex min-h-0 flex-1 flex-col overflow-hidden"
+          className="flex min-h-0 flex-1 flex-col"
         >
           <RichNoteSurface
             courseId={courseId}
@@ -552,8 +805,10 @@ export const CanvasCardView = memo(function CanvasCardView({
             onSubmit={onFinishEdit}
             onCancel={onFinishEdit}
             onOpenImage={(src) => onOpenLightbox(src, card)}
-            compactToolbar={!isTextOnly}
-            minHeightClassName={isTextOnly ? "min-h-[60px]" : "min-h-[90px]"}
+            toolbarPlacement="floating"
+            wrapperPaddingClassName={bodyPaddingClassName}
+            editorClassName={isTextOnly ? "min-h-0 text-base font-medium leading-[1.6]" : "min-h-0"}
+            minHeightClassName=""
             maxHeightClassName=""
             className="flex min-h-0 flex-1 flex-col"
             wrapperClassName="flex-1"
@@ -561,9 +816,10 @@ export const CanvasCardView = memo(function CanvasCardView({
           />
         </div>
       ) : (
-        <div className={cn("px-3 py-2.5", isTextOnly && "px-3.5 py-2")}>
+        <div className={bodyPaddingClassName}>
           {isTextOnly && (
             <div
+              data-text-delete-float="true"
               onPointerDown={(e) => e.stopPropagation()}
               className="float-right ml-1 flex items-center gap-0.5 opacity-0 transition-opacity group-hover/card:opacity-100"
             >
@@ -583,7 +839,7 @@ export const CanvasCardView = memo(function CanvasCardView({
 
           <RichNoteHtmlContent
             html={card.htmlContent || "<p></p>"}
-            className={isTextOnly ? "text-base font-medium leading-6" : undefined}
+            className={isTextOnly ? "text-base font-medium leading-[1.6]" : undefined}
             onImageClick={(src) => onOpenLightbox(src, card)}
             onHtmlChange={onCommitHtml ? (nextHtml) => onCommitHtml(card.id, nextHtml) : undefined}
           />
@@ -649,42 +905,62 @@ export const CanvasCardView = memo(function CanvasCardView({
       {!pointerEventsDisabled && !isConnectMode && (
         <>
           <div
+            data-resize-handle="true"
+            style={{ width: "clamp(6px, calc(8px / var(--canvas-zoom, 1)), 18px)" }}
+            onMouseDown={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+            }}
             onPointerDown={(e) => {
               if (e.button !== 0) return;
-              e.preventDefault();
               e.stopPropagation();
               setHoveredPortSide(null);
               onStartResize(card.id, e, "width");
             }}
-            title="Drag edge to resize width"
-            className="absolute inset-y-2.5 right-0 z-10 w-1.5 cursor-ew-resize"
+            onClick={(e) => e.stopPropagation()}
+            onDoubleClick={(e) => handleEdgeFitDoubleClick("width", e)}
+            title="Drag or double-click to fit width"
+            className="absolute inset-y-2.5 right-0 z-10 cursor-ew-resize select-none after:pointer-events-none after:absolute after:inset-y-1 after:right-0 after:w-[2px] after:rounded-full after:bg-primary/50 after:opacity-0 after:transition-opacity hover:after:opacity-100"
           />
           <div
+            data-resize-handle="true"
+            style={{ height: "clamp(6px, calc(8px / var(--canvas-zoom, 1)), 18px)" }}
+            onMouseDown={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+            }}
             onPointerDown={(e) => {
               if (e.button !== 0) return;
-              e.preventDefault();
               e.stopPropagation();
               setHoveredPortSide(null);
               onStartResize(card.id, e, "height");
             }}
-            title="Drag edge to resize height"
-            className="absolute inset-x-2.5 bottom-0 z-10 h-1.5 cursor-ns-resize"
+            onClick={(e) => e.stopPropagation()}
+            onDoubleClick={(e) => handleEdgeFitDoubleClick("height", e)}
+            title="Drag or double-click to fit height"
+            className="absolute inset-x-2.5 bottom-0 z-10 cursor-ns-resize select-none after:pointer-events-none after:absolute after:inset-x-1 after:bottom-0 after:h-[2px] after:rounded-full after:bg-primary/50 after:opacity-0 after:transition-opacity hover:after:opacity-100"
           />
           <div
+            data-resize-handle="true"
+            onMouseDown={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+            }}
             onPointerDown={(e) => {
               if (e.button !== 0) return;
-              e.preventDefault();
               e.stopPropagation();
               setHoveredPortSide(null);
               onStartResize(card.id, e, "both");
             }}
-            title="Drag to resize"
+            onClick={(e) => e.stopPropagation()}
+            onDoubleClick={(e) => handleEdgeFitDoubleClick("both", e)}
+            title="Drag or double-click to fit"
             className={cn(
-              "absolute bottom-1 right-1 z-20 flex size-4 cursor-nwse-resize items-end justify-end rounded-br-lg p-0.5 transition-opacity",
+              "absolute bottom-1 right-1 z-20 flex size-4 cursor-nwse-resize select-none items-end justify-end rounded-br-lg p-0.5 transition-opacity hover:[&>span]:border-primary",
               selected || isEditing ? "opacity-90" : "opacity-0 group-hover/card:opacity-100",
             )}
           >
-            <span className="size-2 rounded-br-[3px] border-b-2 border-r-2 border-muted-foreground/65" />
+            <span className="size-2 rounded-br-[3px] border-b-2 border-r-2 border-muted-foreground/65 transition-colors" />
           </div>
         </>
       )}

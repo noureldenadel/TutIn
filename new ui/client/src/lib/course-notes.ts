@@ -83,7 +83,7 @@ function appendMissingImagesToHtml(content: string, images: string[]): string {
   const extraHtml = missing
     .map((src) => {
       const escaped = src.replace(/"/g, "&quot;");
-      return `<div style="margin: 6px 0"><img src="${escaped}" alt="Note image" style="max-width: 100%; border-radius: 6px"></div>`;
+      return `<div data-note-image-block="true"><img src="${escaped}" alt="Note image"></div>`;
     })
     .join("");
   return content ? `${content}${extraHtml}` : extraHtml;

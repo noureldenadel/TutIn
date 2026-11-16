@@ -18,6 +18,13 @@ export interface TranscribeVideoTarget {
   youtubeId?: string | null | undefined;
 }
 
+export interface TranscriptJobStep {
+  id: string;
+  label: string;
+  detail?: string | undefined;
+  status: "running" | "done";
+}
+
 export interface TranscriptJobItem {
   videoId: string;
   courseId: string;
@@ -29,6 +36,8 @@ export interface TranscriptJobItem {
   status: "queued" | "running" | "completed" | "failed" | "cancelled";
   progress: number; // 0 to 100
   message: string;
+  steps: TranscriptJobStep[];
+  startedAt?: number | undefined;
   error?: string | undefined;
 }
 
@@ -674,6 +683,74 @@ export function useVideoTranscriptJob(videoId?: string | null): TranscriptJobIte
   return null;
 }
 
+function normalizeStepEntry(upd: TranscriptProgressUpdate): {
+  id: string;
+  label: string;
+  detail?: string | undefined;
+} {
+  const rawMsg = upd.message.replace(/…+$/, "").trim();
+  const isPrepStep = rawMsg.startsWith("Step 1/2");
+  const cleanMsg = rawMsg.replace(/^Step 1\/2\s*·\s*/i, "");
+  const stepKey = `${isPrepStep ? "prep:" : ""}${upd.step || "working"}`;
+
+  // Split trailing parenthetical detail like "Translating (42%)" -> label + detail
+  const parenMatch = cleanMsg.match(/^(.+?)\s*\(([^()]+)\)$/);
+  if (parenMatch) {
+    return {
+      id: stepKey,
+      label: parenMatch[1]!.trim(),
+      detail: parenMatch[2]!.trim(),
+    };
+  }
+  return {
+    id: stepKey,
+    label: cleanMsg || (upd.step === "done" ? "Finishing" : "Processing"),
+    detail: upd.progress > 0 && upd.progress < 100 ? `${upd.progress}%` : undefined,
+  };
+}
+
+function advanceJobWithProgress(
+  prev: TranscriptJobItem,
+  upd: TranscriptProgressUpdate,
+): TranscriptJobItem {
+  const nextEntry = normalizeStepEntry(upd);
+  const existingIdx = prev.steps.findIndex((s) => s.id === nextEntry.id);
+
+  let nextSteps: TranscriptJobStep[];
+  if (upd.step === "done") {
+    nextSteps = prev.steps.map((s) => ({ ...s, status: "done" as const }));
+  } else if (existingIdx !== -1) {
+    nextSteps = prev.steps.map((s, idx) => {
+      if (idx === existingIdx) {
+        return {
+          ...s,
+          label: nextEntry.label,
+          detail: nextEntry.detail,
+          status: "running" as const,
+        };
+      }
+      return idx < existingIdx || s.status === "running" ? { ...s, status: "done" as const } : s;
+    });
+  } else {
+    nextSteps = [
+      ...prev.steps.map((s) => ({ ...s, status: "done" as const })),
+      {
+        id: nextEntry.id,
+        label: nextEntry.label,
+        detail: nextEntry.detail,
+        status: "running" as const,
+      },
+    ];
+  }
+
+  return {
+    ...prev,
+    progress: upd.progress,
+    message: upd.message,
+    steps: nextSteps,
+  };
+}
+
 export function enqueueTranscriptJobs(
   items: Array<{
     videoId: string;
@@ -704,6 +781,13 @@ export function enqueueTranscriptJobs(
       status: "queued",
       progress: 0,
       message: "Queued…",
+      steps: [
+        {
+          id: "queued",
+          label: "Waiting in queue",
+          status: "running",
+        },
+      ],
     };
     (jobsState[item.videoId] as TranscriptJobItem & { youtubeId?: string | null }).youtubeId =
       item.youtubeId ?? null;
@@ -756,16 +840,38 @@ async function processQueueLoop(): Promise<void> {
       const controller = new AbortController();
       jobAbortControllers.set(vid, controller);
 
+      const initialMessage =
+        nextJob.mode === "transcribe"
+          ? `Transcribing (${getLanguageLabel(nextJob.targetLanguage)})…`
+          : `Translating to ${getLanguageLabel(nextJob.targetLanguage)}…`;
       jobsState[vid] = {
         ...nextJob,
         status: "running",
+        startedAt: Date.now(),
         progress: 5,
-        message:
-          nextJob.mode === "transcribe"
-            ? `Transcribing (${getLanguageLabel(nextJob.targetLanguage)})…`
-            : `Translating to ${getLanguageLabel(nextJob.targetLanguage)}…`,
+        message: initialMessage,
+        steps: [
+          {
+            id: "queued",
+            label: "Queued",
+            status: "done",
+          },
+          {
+            id: nextJob.mode === "transcribe" ? "starting-transcribe" : "starting-translate",
+            label:
+              nextJob.mode === "transcribe" ? "Starting transcription" : "Starting translation",
+            detail: getLanguageLabel(nextJob.targetLanguage),
+            status: "running",
+          },
+        ],
       };
       emitJobsChange();
+
+      const pushProgress = (upd: TranscriptProgressUpdate) => {
+        if (!jobsState[vid]) return;
+        jobsState[vid] = advanceJobWithProgress(jobsState[vid]!, upd);
+        emitJobsChange();
+      };
 
       try {
         if (nextJob.mode === "transcribe") {
@@ -777,15 +883,7 @@ async function processQueueLoop(): Promise<void> {
               youtubeId: nextJob.youtubeId,
             },
             nextJob.targetLanguage,
-            (upd) => {
-              if (!jobsState[vid]) return;
-              jobsState[vid] = {
-                ...jobsState[vid]!,
-                progress: upd.progress,
-                message: upd.message,
-              };
-              emitJobsChange();
-            },
+            pushProgress,
             controller.signal,
           );
         } else {
@@ -802,15 +900,7 @@ async function processQueueLoop(): Promise<void> {
               sourceTrackId: nextJob.sourceTrackId,
               ensureSourceFirst: true,
             },
-            (upd) => {
-              if (!jobsState[vid]) return;
-              jobsState[vid] = {
-                ...jobsState[vid]!,
-                progress: upd.progress,
-                message: upd.message,
-              };
-              emitJobsChange();
-            },
+            pushProgress,
             controller.signal,
           );
         }
@@ -818,9 +908,7 @@ async function processQueueLoop(): Promise<void> {
         delete jobsState[vid];
         jobAbortControllers.delete(vid);
         emitJobsChange();
-        toast.success(
-          `${getLanguageLabel(nextJob.targetLanguage)} · AI subtitles ready`,
-        );
+        toast.success(`${getLanguageLabel(nextJob.targetLanguage)} · AI subtitles ready`);
       } catch (err) {
         jobAbortControllers.delete(vid);
         if (controller.signal.aborted || !jobsState[vid]) {

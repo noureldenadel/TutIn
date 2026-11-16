@@ -1,5 +1,8 @@
 import { useEffect, useState } from "react";
-import { stripLiveSyntaxArtifacts } from "@/components/notes/markdown/note-dom";
+import {
+  stripChromiumInlineArtifacts,
+  stripLiveSyntaxArtifacts,
+} from "@/components/notes/markdown/note-dom";
 import { API_BASE_URL, apiJson, apiUrl } from "@/lib/api";
 
 const DB_NAME = "tutin_media_store";
@@ -570,7 +573,10 @@ export function serializeContainerMediaHtml(container: HTMLElement): string {
   const clone = container.cloneNode(true) as HTMLElement;
   clone.querySelectorAll("[data-ghost]").forEach((el) => el.remove());
   stripLiveSyntaxArtifacts(clone);
-  clone.querySelectorAll("img.is-selected").forEach((img) => img.classList.remove("is-selected"));
+  stripChromiumInlineArtifacts(clone, false);
+  clone.querySelectorAll("img.is-selected, img.is-range-selected").forEach((img) => {
+    img.classList.remove("is-selected", "is-range-selected");
+  });
   clone.querySelectorAll("br[data-code-eol]").forEach((br) => br.remove());
   clone.querySelectorAll("[data-note-image-block]").forEach((el) => {
     el.removeAttribute("contenteditable");

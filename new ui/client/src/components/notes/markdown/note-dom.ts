@@ -49,6 +49,11 @@ export const NOTE_IMAGE_TAIL_ATTR = "data-image-tail";
 export const MD_SYNTAX_ATTR = "data-md-syntax";
 export const MD_ACTIVE_ATTR = "data-md-active";
 export const MD_URL_ATTR = "data-md-url";
+export const MD_BULLET_ATTR = "data-md-bullet";
+export const MD_DELIM_ATTR = "data-md-delim";
+export const MD_HR_SYNTAX_ATTR = "data-md-hr";
+export const MD_HR_ACTIVE_ATTR = "data-md-hr-active";
+export const HR_LINE_REGEX = /^(?:-{3,}|\*{3,}|_{3,})$/;
 
 export interface CaretBookmark {
   path: number[];
@@ -69,7 +74,7 @@ export function sanitizeHttpUrl(rawUrl: string): string | null {
   return null;
 }
 
-export function isMarkdownSyntaxNode(node: Node | null): boolean {
+function isMarkdownSyntaxNode(node: Node | null): boolean {
   return (
     Boolean(node) &&
     node!.nodeType === Node.ELEMENT_NODE &&
@@ -124,6 +129,10 @@ export function getClosestBlock(node: Node | null, root: HTMLElement): HTMLEleme
   return null;
 }
 
+export function stripZeroWidth(text: string): string {
+  return text.replace(/\u200B/g, "");
+}
+
 export function getTextWithoutArtifacts(node: Node): string {
   const clone = node.cloneNode(true) as HTMLElement | DocumentFragment;
   if ("querySelectorAll" in clone) {
@@ -131,7 +140,7 @@ export function getTextWithoutArtifacts(node: Node): string {
       .querySelectorAll(`[data-ghost], [data-task-checkbox], [${MD_SYNTAX_ATTR}]`)
       .forEach((el) => el.remove());
   }
-  return (clone.textContent || "").replace(/\u00A0/g, " ").replace(/\u200B/g, "");
+  return stripZeroWidth((clone.textContent || "").replace(/\u00A0/g, " "));
 }
 
 export function hasVisibleContent(el: HTMLElement): boolean {
@@ -159,13 +168,108 @@ export function ensureElementHasBreakIfEmpty(el: HTMLElement): void {
 export function cleanTrailingEmptyNodes(el: HTMLElement): void {
   const children = Array.from(el.childNodes);
   for (const child of children) {
-    if (
-      child.nodeType === Node.TEXT_NODE &&
-      (child.nodeValue || "").replace(/\u200B/g, "") === ""
-    ) {
+    if (child.nodeType === Node.TEXT_NODE && stripZeroWidth(child.nodeValue || "") === "") {
       child.remove();
     }
   }
+}
+
+export function normalizeEmptyBreak(el: HTMLElement): void {
+  cleanTrailingEmptyNodes(el);
+  ensureElementHasBreakIfEmpty(el);
+}
+
+export function getTopLevelBlock(node: Node | null, root: HTMLElement): HTMLElement | null {
+  let curr: Node | null = node;
+  while (curr && curr.parentNode !== root) {
+    curr = curr.parentNode;
+  }
+  if (curr && curr.parentNode === root && curr.nodeType === Node.ELEMENT_NODE) {
+    return curr as HTMLElement;
+  }
+  return null;
+}
+
+export function getEditableScope(block: HTMLElement): HTMLElement {
+  const tag = block.tagName.toLowerCase();
+  if (tag === "li" && block.hasAttribute("data-task")) {
+    return getTaskContentSpan(block) || block;
+  }
+  if (tag === "pre") {
+    return (block.querySelector(":scope > code") as HTMLElement | null) || block;
+  }
+  return block;
+}
+
+export function resolveFocusTarget(el: HTMLElement, edge: "start" | "end"): HTMLElement {
+  let curr: HTMLElement = el;
+  while (curr.tagName.toLowerCase() === "ul" || curr.tagName.toLowerCase() === "ol") {
+    const items = Array.from(curr.children).filter(
+      (c): c is HTMLElement => c.tagName.toLowerCase() === "li",
+    );
+    const chosen = edge === "start" ? items[0] : items[items.length - 1];
+    if (!chosen) break;
+    curr = chosen;
+    if (edge === "end") {
+      const nestedLists = Array.from(curr.children).filter((c) => {
+        const t = c.tagName.toLowerCase();
+        return t === "ul" || t === "ol";
+      }) as HTMLElement[];
+      const lastNested = nestedLists[nestedLists.length - 1];
+      if (lastNested) {
+        curr = lastNested;
+        continue;
+      }
+    }
+    break;
+  }
+  return getEditableScope(curr);
+}
+
+export function isStandaloneHrBlock(el: HTMLElement): string | null {
+  const tag = el.tagName.toLowerCase();
+  if (tag !== "p" && tag !== "div") return null;
+  if (el.hasAttribute(NOTE_IMAGE_BLOCK_ATTR)) return null;
+  if (el.querySelector("img, ul, ol, pre, blockquote, hr")) return null;
+  const brs = Array.from(el.querySelectorAll("br"));
+  if (brs.some((br) => br.parentNode !== el || br.nextSibling !== null)) return null;
+  const cleanText = getTextWithoutArtifacts(el).trim();
+  return HR_LINE_REGEX.test(cleanText) ? cleanText : null;
+}
+
+export function getLiOwnChildLimit(li: HTMLElement): number | undefined {
+  const firstNested = li.querySelector(":scope > ul, :scope > ol");
+  if (!firstNested) return undefined;
+  const idx = Array.prototype.indexOf.call(li.childNodes, firstNested);
+  return idx >= 0 ? idx : undefined;
+}
+
+export function hasOwnInlineContent(el: HTMLElement): boolean {
+  const tag = el.tagName.toLowerCase();
+  const limit = tag === "li" && !el.hasAttribute("data-task") ? getLiOwnChildLimit(el) : undefined;
+  if (limit === undefined) {
+    return hasVisibleContent(getEditableScope(el));
+  }
+  for (let i = 0; i < limit; i += 1) {
+    const child = el.childNodes[i];
+    if (!child) continue;
+    if (child.nodeType === Node.TEXT_NODE) {
+      if (stripZeroWidth((child.nodeValue || "").replace(/\u00A0/g, " ")).trim().length > 0) {
+        return true;
+      }
+    } else if (child.nodeType === Node.ELEMENT_NODE) {
+      const ce = child as HTMLElement;
+      if (
+        ce.hasAttribute(MD_SYNTAX_ATTR) ||
+        ce.hasAttribute("data-task-checkbox") ||
+        ce.hasAttribute("data-ghost")
+      ) {
+        continue;
+      }
+      if (ce.tagName === "IMG" || hasVisibleContent(ce)) return true;
+    }
+  }
+  return false;
 }
 
 export function getLastDescendantTextNode(el: Node): Text | null {
@@ -244,6 +348,102 @@ export function placeCaretAtEnd(el: HTMLElement): void {
   placeCaret(target, 0);
 }
 
+export function isEmptyTextBlockElement(node: Element | null): node is HTMLElement {
+  if (!node || node.nodeType !== Node.ELEMENT_NODE) return false;
+  const el = node as HTMLElement;
+  if (el.hasAttribute(NOTE_IMAGE_BLOCK_ATTR)) return false;
+  const tag = el.tagName.toLowerCase();
+  return (
+    (tag === "p" || tag === "div" || tag === "blockquote" || HEADING_TAG_SET.has(tag)) &&
+    !hasVisibleContent(el)
+  );
+}
+
+export function isCaretAtStartOfScope(scope: HTMLElement, range: Range): boolean {
+  if (range.startContainer !== scope && !scope.contains(range.startContainer)) {
+    return false;
+  }
+  const before = document.createRange();
+  before.setStart(scope, 0);
+  before.setEnd(range.startContainer, range.startOffset);
+  const frag = before.cloneContents();
+  frag.querySelectorAll("[data-ghost], [data-task-checkbox]").forEach((el) => el.remove());
+  const text = (frag.textContent || "").replace(/\u00A0/g, " ").replace(/\u200B/g, "");
+  if (text.length > 0) return false;
+  if (frag.querySelector("img, br")) return false;
+  return true;
+}
+
+/**
+ * Checks if caret is at the very first editable offset of a block, including any
+ * active `[data-md-syntax]` prefix span before `<span data-task-content>` on task items.
+ */
+export function isCaretAtBlockBoundaryStart(block: HTMLElement, range: Range): boolean {
+  const tag = block.tagName.toLowerCase();
+  const firstSyntax = block.querySelector(
+    tag === "pre" ? `:scope > [${MD_SYNTAX_ATTR}="code-open"]` : `:scope > [${MD_SYNTAX_ATTR}]`,
+  ) as HTMLElement | null;
+  if (firstSyntax) {
+    return isCaretAtStartOfScope(firstSyntax, range);
+  }
+  return isCaretAtStartOfScope(getEditableScope(block), range);
+}
+
+export function isCaretAtEndOfScope(scope: HTMLElement, range: Range): boolean {
+  if (!hasVisibleContent(scope)) return true;
+  const after = document.createRange();
+  after.setStart(range.endContainer, range.endOffset);
+  after.setEnd(scope, scope.childNodes.length);
+  const frag = after.cloneContents();
+  if (frag.querySelector("img")) return false;
+  return getTextWithoutArtifacts(frag).length === 0;
+}
+
+function getCaretVisualRect(range: Range): DOMRect | null {
+  const rects = range.getClientRects();
+  for (const r of Array.from(rects)) {
+    if (r.height > 0) return r;
+  }
+  const rect = range.getBoundingClientRect();
+  return rect.height > 0 ? rect : null;
+}
+
+export function isCaretOnVisualEdgeLine(
+  scope: HTMLElement,
+  range: Range,
+  edge: "first" | "last",
+): boolean {
+  if (!hasVisibleContent(scope)) return true;
+
+  const currentRect = getCaretVisualRect(range);
+  if (!currentRect) {
+    return edge === "first"
+      ? isCaretAtStartOfScope(scope, range)
+      : isCaretAtEndOfScope(scope, range);
+  }
+
+  const probeRange = document.createRange();
+  if (edge === "first") {
+    const first = getFirstEditableTarget(scope);
+    probeRange.setStart(first.node, first.offset);
+  } else {
+    const lastText = getLastDescendantTextNode(scope);
+    if (lastText) {
+      probeRange.setStart(lastText, lastText.nodeValue?.length ?? 0);
+    } else {
+      probeRange.setStart(scope, scope.childNodes.length);
+    }
+  }
+  probeRange.collapse(true);
+  const edgeRect = getCaretVisualRect(probeRange);
+  if (!edgeRect) {
+    return edge === "first"
+      ? isCaretAtStartOfScope(scope, range)
+      : isCaretAtEndOfScope(scope, range);
+  }
+  return Math.abs(currentRect.top - edgeRect.top) < 4;
+}
+
 export function getCollapsedSelectionRange(editor: HTMLElement): Range | null {
   const sel = window.getSelection();
   if (!sel || sel.rangeCount === 0) return null;
@@ -268,10 +468,23 @@ export function getCaretBookmark(root: HTMLElement): CaretBookmark | null {
 
   const syntaxEl = isInsideMarkdownSyntax(curr, root);
   if (syntaxEl && syntaxEl.parentNode) {
-    const parent = syntaxEl.parentNode;
-    const target = getFirstEditableTarget(parent as HTMLElement);
-    curr = target.node;
-    offset = target.offset;
+    const parent = syntaxEl.parentNode as HTMLElement;
+    const kind = syntaxEl.getAttribute(MD_SYNTAX_ATTR);
+    if (kind === "code-close" && parent.tagName.toLowerCase() === "pre") {
+      const codeEl = getEditableScope(parent);
+      const lastText = getLastDescendantTextNode(codeEl);
+      if (lastText) {
+        curr = lastText;
+        offset = lastText.nodeValue?.length ?? 0;
+      } else {
+        curr = codeEl;
+        offset = codeEl.childNodes.length;
+      }
+    } else {
+      const target = getFirstEditableTarget(parent);
+      curr = target.node;
+      offset = target.offset;
+    }
   }
 
   const path: number[] = [];
@@ -327,6 +540,17 @@ export function normalizeEmptyEditorOnMount(editor: HTMLElement): void {
  * empty inline pairs) from a cloned or exported container without affecting content.
  */
 export function stripLiveSyntaxArtifacts(container: HTMLElement): void {
+  container.querySelectorAll(`[${MD_HR_ACTIVE_ATTR}]`).forEach((el) => {
+    const htmlEl = el as HTMLElement;
+    if (isStandaloneHrBlock(htmlEl)) {
+      htmlEl.replaceWith(document.createElement("hr"));
+    } else {
+      htmlEl.removeAttribute(MD_HR_ACTIVE_ATTR);
+    }
+  });
+  container.querySelectorAll(`hr[${MD_HR_SYNTAX_ATTR}]`).forEach((hr) => {
+    hr.removeAttribute(MD_HR_SYNTAX_ATTR);
+  });
   container.querySelectorAll(`[${MD_SYNTAX_ATTR}]`).forEach((el) => el.remove());
   container.querySelectorAll(`[${MD_ACTIVE_ATTR}]`).forEach((el) => {
     el.removeAttribute(MD_ACTIVE_ATTR);
@@ -390,11 +614,77 @@ function unwrapElement(el: HTMLElement): void {
   el.remove();
 }
 
-function isSafeClipboardImageSrc(rawSrc: string): boolean {
+function isSafeStoredMediaSrc(rawSrc: string): boolean {
   const trimmed = rawSrc.trim();
   if (!trimmed) return false;
-  if (trimmed.startsWith("data:image/") || trimmed.startsWith("blob:")) return true;
+  if (trimmed.startsWith("media://") || trimmed.startsWith("blob:")) return true;
+  if (trimmed.startsWith("/api/") && !trimmed.startsWith("//")) return true;
+  if (/^data:image\/(?:png|jpe?g|gif|webp|bmp|avif);base64,/i.test(trimmed)) return true;
   return sanitizeHttpUrl(trimmed) !== null;
+}
+
+export interface ClipboardRangePayload {
+  html: string;
+  plain: string;
+  hasContent: boolean;
+}
+
+/**
+ * Serializes a selected note range (text, rich formatting, and inline/vault images)
+ * into clean `text/html` + `text/plain` clipboard strings.
+ */
+export function extractRangeClipboardPayload(
+  range: Range,
+  selectionPlainText?: string,
+): ClipboardRangePayload {
+  const div = document.createElement("div");
+  div.appendChild(range.cloneContents());
+  stripLiveSyntaxArtifacts(div);
+  stripChromiumInlineArtifacts(div, false);
+  div.querySelectorAll("img.is-selected, img.is-range-selected").forEach((img) => {
+    img.classList.remove("is-selected", "is-range-selected");
+  });
+  div.querySelectorAll("br[data-code-eol]").forEach((br) => br.remove());
+  div.querySelectorAll(`[${NOTE_IMAGE_BLOCK_ATTR}]`).forEach((el) => {
+    el.removeAttribute("contenteditable");
+  });
+  div.querySelectorAll(`p[${NOTE_IMAGE_TAIL_ATTR}="true"]`).forEach((p) => {
+    const text = (p.textContent || "")
+      .replace(/\u00A0/g, "")
+      .replace(/\u200B/g, "")
+      .trim();
+    if (!text && !p.querySelector("img, hr, pre, ul, ol")) {
+      p.remove();
+    } else {
+      p.removeAttribute(NOTE_IMAGE_TAIL_ATTR);
+    }
+  });
+
+  div.querySelectorAll("img").forEach((img) => {
+    const rawUri = img.getAttribute("data-media-uri") || "";
+    const attrSrc = img.getAttribute("src") || "";
+    if (rawUri.startsWith("/api/") && typeof window !== "undefined") {
+      img.setAttribute("src", `${window.location.origin}${rawUri}`);
+    } else if (attrSrc.startsWith("/api/") && typeof window !== "undefined") {
+      img.setAttribute("data-media-uri", attrSrc);
+      img.setAttribute("src", `${window.location.origin}${attrSrc}`);
+    }
+  });
+
+  const html = div.innerHTML.replace(/\u200B/g, "");
+  const cleanSelectionText = selectionPlainText ? selectionPlainText.replace(/\u200B/g, "") : "";
+  const fallbackPlain = Array.from(div.childNodes)
+    .map((node) => {
+      if (node.nodeType === Node.ELEMENT_NODE) {
+        return ((node as HTMLElement).textContent ?? "").replace(/\u200B/g, "");
+      }
+      return (node.nodeValue ?? "").replace(/\u200B/g, "");
+    })
+    .filter((part, idx, arr) => part.length > 0 || (idx > 0 && idx < arr.length - 1))
+    .join("\n");
+  const plain = cleanSelectionText || fallbackPlain;
+  const hasContent = plain.trim().length > 0 || Boolean(div.querySelector("img, hr"));
+  return { html, plain, hasContent };
 }
 
 /**
@@ -446,8 +736,14 @@ export function sanitizeClipboardHtml(rawHtml: string): string {
       }
 
       if (tag === "img") {
-        const src = el.getAttribute("src") || "";
-        if (!isSafeClipboardImageSrc(src)) {
+        const rawUri = (el.getAttribute("data-media-uri") || "").trim();
+        const rawSrc = (el.getAttribute("src") || rawUri).trim();
+        const chosenSrc = isSafeStoredMediaSrc(rawSrc)
+          ? rawSrc
+          : isSafeStoredMediaSrc(rawUri)
+            ? rawUri
+            : "";
+        if (!chosenSrc) {
           el.remove();
           continue;
         }
@@ -455,7 +751,10 @@ export function sanitizeClipboardHtml(rawHtml: string): string {
         for (const attr of Array.from(el.attributes)) {
           el.removeAttribute(attr.name);
         }
-        el.setAttribute("src", src.trim());
+        el.setAttribute("src", chosenSrc);
+        if (rawUri && (rawUri.startsWith("/api/") || rawUri.startsWith("media://"))) {
+          el.setAttribute("data-media-uri", rawUri);
+        }
         if (alt) el.setAttribute("alt", alt);
         continue;
       }
@@ -483,6 +782,9 @@ export function sanitizeClipboardHtml(rawHtml: string): string {
           isTaskItem &&
           (el.getAttribute("data-checked") === "true" ||
             Boolean(el.querySelector(':scope > input[type="checkbox"][checked]')));
+        const bulletMarker = tag === "li" ? el.getAttribute(MD_BULLET_ATTR) : null;
+        const delimMarker = tag === "li" ? el.getAttribute(MD_DELIM_ATTR) : null;
+        const olStart = tag === "ol" ? el.getAttribute("start") : null;
         const codeLang = tag === "code" ? el.getAttribute("data-lang") : null;
         for (const attr of Array.from(el.attributes)) {
           el.removeAttribute(attr.name);
@@ -491,6 +793,15 @@ export function sanitizeClipboardHtml(rawHtml: string): string {
         if (isTaskItem) {
           el.setAttribute("data-task", "true");
           el.setAttribute("data-checked", String(taskChecked));
+        }
+        if (bulletMarker && ["-", "*", "+"].includes(bulletMarker)) {
+          el.setAttribute(MD_BULLET_ATTR, bulletMarker);
+        }
+        if (delimMarker && [".", ")"].includes(delimMarker)) {
+          el.setAttribute(MD_DELIM_ATTR, delimMarker);
+        }
+        if (olStart && /^\d+$/.test(olStart)) {
+          el.setAttribute("start", olStart);
         }
         if (codeLang) el.setAttribute("data-lang", codeLang);
         continue;
@@ -548,6 +859,94 @@ export function sanitizeClipboardHtml(rawHtml: string): string {
   return doc.body.innerHTML.trim();
 }
 
+const CHROMIUM_STYLE_ARTIFACT_SELECTOR =
+  "[style]:not([data-ghost]), font, span:not([data-task-content]):not([data-md-syntax]):not([data-md-url]):not([data-ghost])";
+
+/**
+ * Removes Chromium-injected inline styles (`<span style="font-size: ...">`, `<font>`,
+ * computed `style="..."` copied on Backspace merges/execCommand) while preserving
+ * semantic editor elements and keeping the live selection anchored cleanly.
+ */
+export function stripChromiumInlineArtifacts(
+  container: HTMLElement,
+  preserveSelection = false,
+): void {
+  if (!container.querySelector(CHROMIUM_STYLE_ARTIFACT_SELECTOR)) return;
+
+  const sel = preserveSelection ? window.getSelection() : null;
+  const activeRange =
+    sel && sel.rangeCount > 0 && container.contains(sel.getRangeAt(0).startContainer)
+      ? sel.getRangeAt(0)
+      : null;
+
+  let startNode: Node | null = activeRange ? activeRange.startContainer : null;
+  let startOffset = activeRange ? activeRange.startOffset : 0;
+  let endNode: Node | null = activeRange ? activeRange.endContainer : null;
+  let endOffset = activeRange ? activeRange.endOffset : 0;
+  let selectionAdjusted = false;
+
+  const remapIfPointingAt = (el: HTMLElement): void => {
+    const parent = el.parentNode;
+    if (!parent) return;
+    const idx = Array.prototype.indexOf.call(parent.childNodes, el);
+    if (startNode === el) {
+      startNode = parent;
+      startOffset = idx + Math.min(startOffset, el.childNodes.length);
+      selectionAdjusted = true;
+    }
+    if (endNode === el) {
+      endNode = parent;
+      endOffset = idx + Math.min(endOffset, el.childNodes.length);
+      selectionAdjusted = true;
+    }
+  };
+
+  const dirtyWrappers = Array.from(
+    container.querySelectorAll(
+      "font, span:not([data-task-content]):not([data-md-syntax]):not([data-md-url]):not([data-ghost])",
+    ),
+  ).reverse();
+
+  for (const el of dirtyWrappers) {
+    if (!el.isConnected) continue;
+    const htmlEl = el as HTMLElement;
+    const closestBlock = getClosestBlock(htmlEl.parentNode, container);
+    remapIfPointingAt(htmlEl);
+    unwrapElement(htmlEl);
+    if (closestBlock && closestBlock.isConnected && !hasVisibleContent(closestBlock)) {
+      ensureElementHasBreakIfEmpty(closestBlock);
+    }
+  }
+
+  container.querySelectorAll("[style]:not([data-ghost])").forEach((el) => {
+    el.removeAttribute("style");
+  });
+
+  if (preserveSelection && sel && startNode && startNode.isConnected) {
+    const endValid = endNode && endNode.isConnected ? endNode : startNode;
+    const endOffValid = endNode && endNode.isConnected ? endOffset : startOffset;
+    if (selectionAdjusted || !container.contains(sel.anchorNode)) {
+      try {
+        const nextRange = document.createRange();
+        const maxStart =
+          startNode.nodeType === Node.TEXT_NODE
+            ? (startNode.nodeValue?.length ?? 0)
+            : startNode.childNodes.length;
+        const maxEnd =
+          endValid.nodeType === Node.TEXT_NODE
+            ? (endValid.nodeValue?.length ?? 0)
+            : endValid.childNodes.length;
+        nextRange.setStart(startNode, Math.max(0, Math.min(startOffset, maxStart)));
+        nextRange.setEnd(endValid, Math.max(0, Math.min(endOffValid, maxEnd)));
+        sel.removeAllRanges();
+        sel.addRange(nextRange);
+      } catch {
+        // ignore invalid selection range
+      }
+    }
+  }
+}
+
 const SAFE_STORED_NOTE_TAGS = new Set([
   "h1",
   "h2",
@@ -598,6 +997,8 @@ const SAFE_STORED_ATTRS = new Set([
   "data-code-eol",
   "data-image-tail",
   "data-lang",
+  "data-md-bullet",
+  "data-md-delim",
   "data-media-uri",
   "data-note-image-block",
   "data-task",
@@ -610,21 +1011,12 @@ const SAFE_STORED_ATTRS = new Set([
   "href",
   "rel",
   "src",
-  "style",
+  "start",
   "target",
   "title",
   "type",
   "width",
 ]);
-
-function isSafeStoredMediaSrc(rawSrc: string): boolean {
-  const trimmed = rawSrc.trim();
-  if (!trimmed) return false;
-  if (trimmed.startsWith("media://") || trimmed.startsWith("blob:")) return true;
-  if (trimmed.startsWith("/api/") && !trimmed.startsWith("//")) return true;
-  if (/^data:image\/(?:png|jpe?g|gif|webp|bmp|avif);base64,/i.test(trimmed)) return true;
-  return sanitizeHttpUrl(trimmed) !== null;
-}
 
 function isSafeStoredHref(rawHref: string): string | null {
   const trimmed = rawHref.trim();
@@ -665,6 +1057,23 @@ export function sanitizeStoredNoteHtml(rawHtml: string): string {
         continue;
       }
 
+      if (tag === "span" && !el.hasAttribute("data-task-content")) {
+        unwrapElement(el);
+        continue;
+      }
+
+      if (tag === "p" && parent !== doc.body) {
+        const parentTag = parent.tagName.toLowerCase();
+        if (parentTag === "p" || HEADING_TAG_SET.has(parentTag)) {
+          if (!hasVisibleContent(el)) {
+            el.remove();
+          } else {
+            unwrapElement(el);
+          }
+          continue;
+        }
+      }
+
       if (tag === "input") {
         if (el.getAttribute("type")?.toLowerCase() !== "checkbox") {
           el.remove();
@@ -700,16 +1109,6 @@ export function sanitizeStoredNoteHtml(rawHtml: string): string {
           el.removeAttribute(attr.name);
           continue;
         }
-        if (name === "style") {
-          if (
-            /expression\s*\(|javascript:|vbscript:|behavior\s*:|-moz-binding|url\s*\(/i.test(
-              attr.value,
-            )
-          ) {
-            el.removeAttribute(attr.name);
-          }
-          continue;
-        }
         if (name === "src" && !isSafeStoredMediaSrc(attr.value)) {
           el.removeAttribute(attr.name);
           continue;
@@ -723,5 +1122,335 @@ export function sanitizeStoredNoteHtml(rawHtml: string): string {
 
   sanitizeNodeTree(doc.body);
   stripLiveSyntaxArtifacts(doc.body);
+  convertStandaloneHrLines(doc.body);
+
   return doc.body.innerHTML;
+}
+
+/**
+ * Returns `true` when a non-collapsed selection range strictly spans across `<hr>`.
+ */
+export function doesRangeOverlapHr(range: Range, hr: Node): boolean {
+  if (range.collapsed) return false;
+  const parent = hr.parentNode;
+  if (!parent) return false;
+  const idx = Array.prototype.indexOf.call(parent.childNodes, hr);
+  if (idx < 0) return false;
+  const doc = hr.ownerDocument || document;
+  const rStart = doc.createRange();
+  rStart.setStart(range.startContainer, range.startOffset);
+  rStart.collapse(true);
+  const rEnd = doc.createRange();
+  rEnd.setStart(range.endContainer, range.endOffset);
+  rEnd.collapse(true);
+  try {
+    return rStart.comparePoint(parent, idx) >= 0 && rEnd.comparePoint(parent, idx + 1) <= 0;
+  } catch {
+    return range.intersectsNode(hr);
+  }
+}
+
+/**
+ * Returns `true` when `range` meaningfully overlaps `el`'s content, ignoring zero-width
+ * boundary touches such as triple-click selections ending at `(el, 0)`.
+ */
+export function doesRangeOverlapElement(
+  range: Range,
+  el: HTMLElement,
+  maxChildOffset?: number,
+): boolean {
+  const endOffset = maxChildOffset ?? el.childNodes.length;
+  if (range.collapsed) {
+    if (!el.contains(range.startContainer)) return false;
+    if (maxChildOffset === undefined) return true;
+    const doc = el.ownerDocument || document;
+    const rStart = doc.createRange();
+    rStart.setStart(range.startContainer, range.startOffset);
+    rStart.collapse(true);
+    try {
+      return rStart.comparePoint(el, endOffset) > 0;
+    } catch {
+      return true;
+    }
+  }
+  if (!range.intersectsNode(el)) return false;
+  if (
+    maxChildOffset === undefined &&
+    el.contains(range.startContainer) &&
+    el.contains(range.endContainer)
+  ) {
+    return true;
+  }
+  const doc = el.ownerDocument || document;
+  const rStart = doc.createRange();
+  rStart.setStart(range.startContainer, range.startOffset);
+  rStart.collapse(true);
+  const rEnd = doc.createRange();
+  rEnd.setStart(range.endContainer, range.endOffset);
+  rEnd.collapse(true);
+  try {
+    const startCmp = rStart.comparePoint(el, 0);
+    const endCmp = rEnd.comparePoint(el, endOffset);
+    if (startCmp > 0 && endCmp < 0) return true;
+
+    const clamped = doc.createRange();
+    if (startCmp >= 0) {
+      clamped.setStart(el, 0);
+    } else {
+      clamped.setStart(range.startContainer, range.startOffset);
+    }
+    if (endCmp <= 0) {
+      clamped.setEnd(el, endOffset);
+    } else {
+      clamped.setEnd(range.endContainer, range.endOffset);
+    }
+    if (clamped.collapsed) {
+      return (
+        el.hasAttribute(MD_HR_ACTIVE_ATTR) &&
+        ((range.startContainer.nodeType === Node.TEXT_NODE && el.contains(range.startContainer)) ||
+          (range.endContainer.nodeType === Node.TEXT_NODE && el.contains(range.endContainer)))
+      );
+    }
+    if (stripZeroWidth(clamped.toString()).length > 0) return true;
+    const frag = clamped.cloneContents();
+    return Boolean(
+      frag.querySelector("img, hr, input") || (startCmp > 0 && frag.querySelector("br")),
+    );
+  } catch {
+    return range.intersectsNode(el);
+  }
+}
+
+/**
+ * Returns true if a non-collapsed range crosses outside `(el, 0)` or `(el, maxChildOffset)`,
+ * keeping prefix-only reveal blocks rendered during pure inner-text selections (e.g. double-clicking a word).
+ */
+export function doesRangeCrossElementScope(
+  range: Range,
+  el: HTMLElement,
+  maxChildOffset?: number,
+): boolean {
+  if (range.collapsed || !range.intersectsNode(el)) return false;
+  const endOffset =
+    maxChildOffset === undefined
+      ? el.childNodes.length
+      : Math.max(0, Math.min(maxChildOffset, el.childNodes.length));
+  const doc = el.ownerDocument || document;
+  const rStart = doc.createRange();
+  rStart.setStart(range.startContainer, range.startOffset);
+  rStart.collapse(true);
+  const rEnd = doc.createRange();
+  rEnd.setStart(range.endContainer, range.endOffset);
+  rEnd.collapse(true);
+  try {
+    return rStart.comparePoint(el, 0) > 0 || rEnd.comparePoint(el, endOffset) < 0;
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * Converts standalone plain `---` / `***` / `___` lines inside a container into semantic `<hr>` dividers,
+ * skipping any line currently intersected by `activeRange` (when editing live in the DOM).
+ */
+export function convertStandaloneHrLines(
+  container: HTMLElement,
+  options?: {
+    activeRange?: Range | null;
+    preserveSyntaxAttr?: boolean;
+    onNodeReplaced?: (oldNode: Node, newNode: Node) => void;
+  },
+): boolean {
+  const range = options?.activeRange ?? null;
+  const sel = typeof window !== "undefined" ? window.getSelection() : null;
+  const savedEndpoints =
+    range && sel && range.intersectsNode(container)
+      ? {
+          anchorNode: sel.anchorNode,
+          anchorOffset: sel.anchorOffset,
+          focusNode: sel.focusNode,
+          focusOffset: sel.focusOffset,
+        }
+      : null;
+
+  let converted = false;
+
+  const isRangeTouchingNodes = (
+    block: HTMLElement,
+    nodes: Node[],
+    segStartIdx: number,
+    segEndIdx: number,
+  ): boolean => {
+    if (!range) return false;
+    for (const n of nodes) {
+      if (n.contains(range.startContainer) || n.contains(range.endContainer)) return true;
+      if (!range.collapsed && range.intersectsNode(n)) return true;
+    }
+    if (
+      range.startContainer === block &&
+      range.startOffset >= segStartIdx &&
+      range.startOffset <= segEndIdx
+    ) {
+      return true;
+    }
+    if (
+      !range.collapsed &&
+      range.endContainer === block &&
+      range.endOffset >= segStartIdx &&
+      range.endOffset <= segEndIdx
+    ) {
+      return true;
+    }
+    return false;
+  };
+
+  for (const child of Array.from(container.children)) {
+    const tag = child.tagName.toLowerCase();
+    if (tag !== "p" && tag !== "div") continue;
+    const block = child as HTMLElement;
+    if (
+      block.hasAttribute(NOTE_IMAGE_BLOCK_ATTR) ||
+      block.hasAttribute(MD_ACTIVE_ATTR) ||
+      block.hasAttribute(MD_HR_ACTIVE_ATTR)
+    ) {
+      continue;
+    }
+    // Single-line paragraph (`<p>---</p>` or `<p>---<br></p>`).
+    const standaloneHrSyntax = isStandaloneHrBlock(block);
+    if (standaloneHrSyntax) {
+      if (range && doesRangeOverlapElement(range, block)) continue;
+      const hr = document.createElement("hr");
+      if (options?.preserveSyntaxAttr) hr.setAttribute(MD_HR_SYNTAX_ATTR, standaloneHrSyntax);
+      block.replaceWith(hr);
+      options?.onNodeReplaced?.(block, hr);
+      converted = true;
+      continue;
+    }
+
+    if (block.querySelector("img, ul, ol, pre, blockquote, hr")) continue;
+    const directBrs = Array.from(block.children).filter((c) => c.tagName.toLowerCase() === "br");
+    const hasNestedBr = block.querySelectorAll("br").length > directBrs.length;
+    if (hasNestedBr || directBrs.length === 0) continue;
+
+    // Multi-line soft-break paragraph (`<p>text<br>---</p>`): split only around untouched `---` lines.
+    const children = Array.from(block.childNodes);
+    const segments: {
+      nodes: Node[];
+      startIdx: number;
+      endIdx: number;
+      isHr: boolean;
+      syntax: string;
+    }[] = [];
+    let curNodes: Node[] = [];
+    let segStart = 0;
+
+    const flushSegment = (endIdx: number) => {
+      const onlyTextLike = curNodes.every((n) => n.nodeType === Node.TEXT_NODE);
+      const text = onlyTextLike
+        ? curNodes
+            .map((n) => n.nodeValue || "")
+            .join("")
+            .replace(/\u200B/g, "")
+            .replace(/\u00A0/g, " ")
+            .trim()
+        : "";
+      const isCandidate = Boolean(onlyTextLike && HR_LINE_REGEX.test(text));
+      const touched = isCandidate && isRangeTouchingNodes(block, curNodes, segStart, endIdx);
+      segments.push({
+        nodes: curNodes,
+        startIdx: segStart,
+        endIdx,
+        isHr: Boolean(isCandidate && !touched),
+        syntax: text,
+      });
+      curNodes = [];
+    };
+
+    children.forEach((n, idx) => {
+      if (n.nodeType === Node.ELEMENT_NODE && (n as HTMLElement).tagName.toLowerCase() === "br") {
+        flushSegment(idx);
+        segStart = idx + 1;
+      } else {
+        curNodes.push(n);
+      }
+    });
+    flushSegment(children.length);
+
+    if (!segments.some((s) => s.isHr)) continue;
+
+    const frag = document.createDocumentFragment();
+    let activeChunk: HTMLElement | null = null;
+    const ensureChunk = () => {
+      if (!activeChunk) {
+        activeChunk = document.createElement("p");
+        frag.appendChild(activeChunk);
+      }
+      return activeChunk;
+    };
+
+    for (let i = 0; i < segments.length; i += 1) {
+      const seg = segments[i]!;
+      if (seg.isHr) {
+        if (activeChunk) {
+          cleanTrailingEmptyNodes(activeChunk);
+          ensureElementHasBreakIfEmpty(activeChunk);
+          activeChunk = null;
+        }
+        const hr = document.createElement("hr");
+        if (options?.preserveSyntaxAttr) hr.setAttribute(MD_HR_SYNTAX_ATTR, seg.syntax);
+        frag.appendChild(hr);
+        continue;
+      }
+
+      const segHasNodes =
+        seg.nodes.length > 0 &&
+        seg.nodes.some(
+          (n) => n.nodeType !== Node.TEXT_NODE || Boolean(n.nodeValue?.replace(/\u200B/g, "")),
+        );
+      const segHoldsCursor = Boolean(
+        range && isRangeTouchingNodes(block, seg.nodes, seg.startIdx, seg.endIdx),
+      );
+      if (!segHasNodes && !segHoldsCursor && i === segments.length - 1) {
+        // Drop bogus empty trailing segment left by `<br>` right after `---` unless caret sits there.
+        continue;
+      }
+      const prevWasRegular = i > 0 && !segments[i - 1]!.isHr && activeChunk !== null;
+      const chunk = ensureChunk();
+      if (prevWasRegular) {
+        chunk.appendChild(document.createElement("br"));
+      }
+      for (const n of seg.nodes) {
+        chunk.appendChild(n);
+      }
+      if (!segHasNodes && seg.nodes.length === 0) {
+        chunk.appendChild(document.createElement("br"));
+      }
+    }
+
+    if (activeChunk) {
+      cleanTrailingEmptyNodes(activeChunk);
+      ensureElementHasBreakIfEmpty(activeChunk);
+    }
+
+    block.replaceWith(frag);
+    converted = true;
+  }
+
+  if (converted && savedEndpoints && sel) {
+    try {
+      const { anchorNode, anchorOffset, focusNode, focusOffset } = savedEndpoints;
+      if (
+        anchorNode &&
+        focusNode &&
+        container.contains(anchorNode) &&
+        container.contains(focusNode)
+      ) {
+        sel.setBaseAndExtent(anchorNode, anchorOffset, focusNode, focusOffset);
+      }
+    } catch {
+      // ignore invalid endpoint restore
+    }
+  }
+
+  return converted;
 }

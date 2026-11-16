@@ -3,21 +3,24 @@ import {
   INLINE_WRAPPER_TAGS,
   NOTE_IMAGE_BLOCK_ATTR,
   NOTE_IMAGE_TAIL_ATTR,
-  cleanTrailingEmptyNodes,
-  ensureElementHasBreakIfEmpty,
   getClosestBlock,
   getCollapsedSelectionRange,
-  getFirstEditableTarget,
-  getLastDescendantTextNode,
-  getTaskContentSpan,
+  getEditableScope,
   getTextWithoutArtifacts,
+  getTopLevelBlock,
   hasVisibleContent,
   hasVisibleFragmentContent,
+  isCaretAtBlockBoundaryStart,
+  isCaretAtEndOfScope,
+  isCaretAtStartOfScope,
+  isCaretOnVisualEdgeLine,
+  normalizeEmptyBreak,
   placeCaretAtEnd,
   placeCaretAtStart,
+  resolveFocusTarget,
 } from "./note-dom";
-import { createTaskListItem } from "./note-blocks";
-import { syncLiveMarkdownSyntax } from "./note-live-preview";
+import { createTaskListItem } from "./note-specs";
+import { expandHorizontalRuleAndFocus, syncLiveMarkdownSyntax } from "./note-live-preview";
 
 export function isImageBlockElement(node: Node | null): boolean {
   return (
@@ -35,14 +38,6 @@ export function createImageAtomBlock(img: HTMLImageElement): HTMLDivElement {
   img.setAttribute("draggable", "false");
   block.appendChild(img);
   return block;
-}
-
-function findDirectChild(node: Node | null, root: HTMLElement): HTMLElement | null {
-  let curr: Node | null = node;
-  while (curr && curr.parentNode !== root) {
-    curr = curr.parentNode;
-  }
-  return curr && curr.nodeType === Node.ELEMENT_NODE ? (curr as HTMLElement) : null;
 }
 
 function isExclusiveImageContainer(el: HTMLElement): boolean {
@@ -136,7 +131,7 @@ export function normalizeEditorImageBlocks(editor: HTMLElement): boolean {
       continue;
     }
 
-    const topBlock = findDirectChild(img, editor);
+    const topBlock = getTopLevelBlock(img, editor);
     if (!topBlock) continue;
 
     if (topBlock.tagName === "P" && isExclusiveImageContainer(topBlock)) {
@@ -185,8 +180,7 @@ export function normalizeEditorImageBlocks(editor: HTMLElement): boolean {
             } else {
               const newLi = document.createElement("li");
               newLi.appendChild(trailingLiFrag);
-              cleanTrailingEmptyNodes(newLi);
-              ensureElementHasBreakIfEmpty(newLi);
+              normalizeEmptyBreak(newLi);
               contList.appendChild(newLi);
             }
           }
@@ -223,8 +217,7 @@ export function normalizeEditorImageBlocks(editor: HTMLElement): boolean {
       const afterTag = HEADING_TAG_SET.has(topTag) || topTag === "blockquote" ? topTag : "p";
       const trailingBlock = document.createElement(afterTag);
       trailingBlock.appendChild(trailingFrag);
-      cleanTrailingEmptyNodes(trailingBlock);
-      ensureElementHasBreakIfEmpty(trailingBlock);
+      normalizeEmptyBreak(trailingBlock);
       editor.insertBefore(trailingBlock, anchor);
     }
 
@@ -255,8 +248,7 @@ export function normalizeEditorImageBlocks(editor: HTMLElement): boolean {
       for (const n of inlineRun) {
         p.appendChild(n);
       }
-      cleanTrailingEmptyNodes(p);
-      ensureElementHasBreakIfEmpty(p);
+      normalizeEmptyBreak(p);
       editor.insertBefore(p, beforeNode);
     }
     inlineRun = [];
@@ -294,32 +286,13 @@ export function syncImageTailParagraphs(editor: HTMLElement): void {
   });
 }
 
-function isCaretAtEndOfScope(scope: HTMLElement, range: Range): boolean {
-  if (!hasVisibleContent(scope)) return true;
-  const after = document.createRange();
-  after.setStart(range.endContainer, range.endOffset);
-  after.setEnd(scope, scope.childNodes.length);
-  const frag = after.cloneContents();
-  if (frag.querySelector("img")) return false;
-  return getTextWithoutArtifacts(frag).length === 0;
-}
-
-function isCaretAtStartOfBlock(scope: HTMLElement, range: Range): boolean {
-  const before = document.createRange();
-  before.setStart(scope, 0);
-  before.setEnd(range.startContainer, range.startOffset);
-  const frag = before.cloneContents();
-  if (frag.querySelector("img, br")) return false;
-  return getTextWithoutArtifacts(frag).length === 0;
-}
-
 function getAdjacentImageBlock(
   editor: HTMLElement,
   block: HTMLElement,
   direction: "prev" | "next",
 ): HTMLElement | null {
   if (block.tagName.toLowerCase() === "li") {
-    const topBlock = findDirectChild(block, editor);
+    const topBlock = getTopLevelBlock(block, editor);
     if (!topBlock || (topBlock.tagName !== "UL" && topBlock.tagName !== "OL")) return null;
     if (direction === "prev") {
       if (topBlock.querySelector("li") !== block) return null;
@@ -334,69 +307,28 @@ function getAdjacentImageBlock(
       : null;
   }
 
-  const topBlock = block.parentElement === editor ? block : findDirectChild(block, editor);
+  const topBlock = block.parentElement === editor ? block : getTopLevelBlock(block, editor);
   if (!topBlock) return null;
   const sibling =
     direction === "prev" ? topBlock.previousElementSibling : topBlock.nextElementSibling;
   return isImageBlockElement(sibling) ? (sibling as HTMLElement) : null;
 }
 
-function getCaretVisualRect(range: Range): DOMRect | null {
-  const rects = range.getClientRects();
-  for (const r of Array.from(rects)) {
-    if (r.height > 0) return r;
-  }
-  const rect = range.getBoundingClientRect();
-  return rect.height > 0 ? rect : null;
-}
-
-function isCaretOnVisualEdgeLine(
-  scope: HTMLElement,
-  range: Range,
-  edge: "first" | "last",
-): boolean {
-  if (!hasVisibleContent(scope)) return true;
-
-  const currentRect = getCaretVisualRect(range);
-  if (!currentRect) {
-    return edge === "first"
-      ? isCaretAtStartOfBlock(scope, range)
-      : isCaretAtEndOfScope(scope, range);
-  }
-
-  const probeRange = document.createRange();
-  if (edge === "first") {
-    const first = getFirstEditableTarget(scope);
-    probeRange.setStart(first.node, first.offset);
-  } else {
-    const lastText = getLastDescendantTextNode(scope);
-    if (lastText) {
-      probeRange.setStart(lastText, lastText.nodeValue?.length ?? 0);
-    } else {
-      probeRange.setStart(scope, scope.childNodes.length);
-    }
-  }
-  probeRange.collapse(true);
-  const edgeRect = getCaretVisualRect(probeRange);
-  if (!edgeRect) {
-    return edge === "first"
-      ? isCaretAtStartOfBlock(scope, range)
-      : isCaretAtEndOfScope(scope, range);
-  }
-  return Math.abs(currentRect.top - edgeRect.top) < 4;
-}
-
 export function resolveImageBoundaryBeforeBackspace(editor: HTMLElement): HTMLImageElement | null {
   const range = getCollapsedSelectionRange(editor);
   if (!range) return null;
   const block = getClosestBlock(range.startContainer, editor);
-  if (!block || block.tagName.toLowerCase() !== "p") return null;
-  if (!isCaretAtStartOfBlock(block, range)) return null;
+  if (!block || block.tagName.toLowerCase() === "li") return null;
+  if (!isCaretAtStartOfScope(block, range)) return null;
 
   const prevImgBlock = getAdjacentImageBlock(editor, block, "prev");
   if (!prevImgBlock) return null;
 
-  if (!hasVisibleContent(block) && block.nextElementSibling) {
+  if (
+    block.tagName.toLowerCase() === "p" &&
+    !hasVisibleContent(block) &&
+    block.nextElementSibling
+  ) {
     block.remove();
   }
   return prevImgBlock.querySelector("img");
@@ -407,10 +339,7 @@ export function resolveImageBoundaryBeforeDelete(editor: HTMLElement): HTMLImage
   if (!range) return null;
   const block = getClosestBlock(range.startContainer, editor);
   if (!block) return null;
-  const scope =
-    block.tagName.toLowerCase() === "li" && block.hasAttribute("data-task")
-      ? getTaskContentSpan(block) || block
-      : block;
+  const scope = getEditableScope(block);
   if (!isCaretAtEndOfScope(scope, range)) return null;
 
   const nextImgBlock = getAdjacentImageBlock(editor, block, "next");
@@ -426,10 +355,7 @@ export function resolveArrowIntoImageBlock(
   const block = getClosestBlock(range.startContainer, editor);
   if (!block) return null;
 
-  const scope =
-    block.tagName.toLowerCase() === "li" && block.hasAttribute("data-task")
-      ? getTaskContentSpan(block) || block
-      : block;
+  const scope = getEditableScope(block);
 
   if (key === "ArrowRight") {
     if (!isCaretAtEndOfScope(scope, range)) return null;
@@ -438,7 +364,7 @@ export function resolveArrowIntoImageBlock(
   }
 
   if (key === "ArrowLeft") {
-    if (!isCaretAtStartOfBlock(scope, range)) return null;
+    if (!isCaretAtBlockBoundaryStart(block, range)) return null;
     const prevImgBlock = getAdjacentImageBlock(editor, block, "prev");
     return prevImgBlock ? prevImgBlock.querySelector("img") : null;
   }
@@ -456,30 +382,12 @@ export function resolveArrowIntoImageBlock(
   return prevImgBlock.querySelector("img");
 }
 
-function focusEditableBlockEdge(el: HTMLElement, edge: "start" | "end"): void {
-  const tag = el.tagName.toLowerCase();
-  if (tag === "ul" || tag === "ol") {
-    const items = el.querySelectorAll("li");
-    const targetLi =
-      edge === "start"
-        ? (items[0] as HTMLElement | undefined)
-        : (items[items.length - 1] as HTMLElement | undefined);
-    if (targetLi) {
-      if (edge === "start") placeCaretAtStart(targetLi);
-      else placeCaretAtEnd(targetLi);
-      return;
-    }
-  }
-  if (edge === "start") placeCaretAtStart(el);
-  else placeCaretAtEnd(el);
-}
-
 export function moveCaretOutOfImageBlock(
   editor: HTMLElement,
   imgEl: HTMLImageElement,
   direction: "before" | "after" | "enter",
 ): { nextSelectedImage: HTMLImageElement | null; mutatedDom: boolean } {
-  const block = findDirectChild(imgEl, editor);
+  const block = getTopLevelBlock(imgEl, editor);
   if (!block) return { nextSelectedImage: null, mutatedDom: false };
 
   if (direction === "before") {
@@ -487,9 +395,14 @@ export function moveCaretOutOfImageBlock(
     if (prev && isImageBlockElement(prev)) {
       return { nextSelectedImage: prev.querySelector("img"), mutatedDom: false };
     }
-    if (prev && prev.tagName !== "HR") {
+    if (prev && prev.tagName === "HR") {
       editor.focus({ preventScroll: true });
-      focusEditableBlockEdge(prev, "end");
+      expandHorizontalRuleAndFocus(editor, prev, "end");
+      return { nextSelectedImage: null, mutatedDom: false };
+    }
+    if (prev) {
+      editor.focus({ preventScroll: true });
+      placeCaretAtEnd(resolveFocusTarget(prev, "end"));
       syncLiveMarkdownSyntax(editor);
       return { nextSelectedImage: null, mutatedDom: false };
     }
@@ -506,6 +419,11 @@ export function moveCaretOutOfImageBlock(
   if (direction === "after" && next && isImageBlockElement(next)) {
     return { nextSelectedImage: next.querySelector("img"), mutatedDom: false };
   }
+  if (direction === "after" && next && next.tagName === "HR") {
+    editor.focus({ preventScroll: true });
+    expandHorizontalRuleAndFocus(editor, next, "start");
+    return { nextSelectedImage: null, mutatedDom: false };
+  }
 
   const canReuseNext =
     direction === "enter"
@@ -514,7 +432,7 @@ export function moveCaretOutOfImageBlock(
 
   if (canReuseNext && next) {
     editor.focus({ preventScroll: true });
-    focusEditableBlockEdge(next, "start");
+    placeCaretAtStart(resolveFocusTarget(next, "start"));
     syncLiveMarkdownSyntax(editor);
     return { nextSelectedImage: null, mutatedDom: false };
   }
@@ -564,7 +482,7 @@ export function placeCaretInEditableBlockAtY(editor: HTMLElement, clientY: numbe
     const lastAfter = blocksAfterLastImage[blocksAfterLastImage.length - 1]!;
     if (clientY >= lastAfter.getBoundingClientRect().top) {
       editor.focus({ preventScroll: true });
-      focusEditableBlockEdge(lastAfter, "end");
+      placeCaretAtEnd(resolveFocusTarget(lastAfter, "end"));
       syncLiveMarkdownSyntax(editor);
       return true;
     }
@@ -580,16 +498,30 @@ export function placeCaretInEditableBlockAtY(editor: HTMLElement, clientY: numbe
       }
     }
     editor.focus({ preventScroll: true });
-    focusEditableBlockEdge(closestAfter, "end");
+    placeCaretAtEnd(resolveFocusTarget(closestAfter, "end"));
     syncLiveMarkdownSyntax(editor);
     return true;
   }
 
   const lastChild = children[children.length - 1];
+  if (
+    lastChild &&
+    lastChild.tagName === "HR" &&
+    clientY > lastChild.getBoundingClientRect().bottom + 8
+  ) {
+    const pTail = document.createElement("p");
+    pTail.setAttribute(NOTE_IMAGE_TAIL_ATTR, "true");
+    pTail.appendChild(document.createElement("br"));
+    editor.appendChild(pTail);
+    editor.focus({ preventScroll: true });
+    placeCaretAtStart(pTail);
+    syncLiveMarkdownSyntax(editor);
+    return true;
+  }
   if (lastChild && clientY > lastChild.getBoundingClientRect().bottom) {
     const target = editableBlocks[editableBlocks.length - 1]!;
     editor.focus({ preventScroll: true });
-    focusEditableBlockEdge(target, "end");
+    placeCaretAtEnd(resolveFocusTarget(target, "end"));
     syncLiveMarkdownSyntax(editor);
     return true;
   }
@@ -606,7 +538,7 @@ export function placeCaretInEditableBlockAtY(editor: HTMLElement, clientY: numbe
     }
   }
   editor.focus({ preventScroll: true });
-  focusEditableBlockEdge(closest, "end");
+  placeCaretAtEnd(resolveFocusTarget(closest, "end"));
   syncLiveMarkdownSyntax(editor);
   return true;
 }

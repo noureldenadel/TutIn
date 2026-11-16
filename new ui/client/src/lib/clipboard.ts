@@ -25,6 +25,77 @@ export async function copyTextToClipboard(text: string): Promise<void> {
   }
 }
 
+/**
+ * Copies rich HTML alongside a plain-text representation so mixed text + images
+ * stay intact when copying from context menus or read views.
+ */
+export async function copyRichContentToClipboard(html: string, plainText: string): Promise<void> {
+  if (!html) {
+    await copyTextToClipboard(plainText);
+    return;
+  }
+
+  if (navigator.clipboard?.write && typeof ClipboardItem !== "undefined") {
+    try {
+      await navigator.clipboard.write([
+        new ClipboardItem({
+          "text/html": new Blob([html], { type: "text/html" }),
+          "text/plain": new Blob([plainText], { type: "text/plain" }),
+        }),
+      ]);
+      return;
+    } catch {
+      // Fallback to DOM selection copy below
+    }
+  }
+
+  const sel = window.getSelection();
+  const savedRanges: Range[] = [];
+  if (sel) {
+    for (let i = 0; i < sel.rangeCount; i++) {
+      savedRanges.push(sel.getRangeAt(i).cloneRange());
+    }
+  }
+  const activeEl = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+
+  const sandbox = document.createElement("div");
+  sandbox.contentEditable = "true";
+  sandbox.style.position = "fixed";
+  sandbox.style.left = "-9999px";
+  sandbox.style.top = "0";
+  sandbox.style.opacity = "0";
+  sandbox.innerHTML = html;
+  document.body.appendChild(sandbox);
+
+  let copied = false;
+  try {
+    const copyRange = document.createRange();
+    copyRange.selectNodeContents(sandbox);
+    sel?.removeAllRanges();
+    sel?.addRange(copyRange);
+    copied = document.execCommand("copy");
+  } finally {
+    sandbox.remove();
+    if (activeEl && activeEl.isConnected) {
+      activeEl.focus({ preventScroll: true });
+    }
+    if (sel) {
+      sel.removeAllRanges();
+      for (const r of savedRanges) {
+        try {
+          sel.addRange(r);
+        } catch {
+          // ignore stale range
+        }
+      }
+    }
+  }
+
+  if (!copied) {
+    await copyTextToClipboard(plainText);
+  }
+}
+
 async function renderImageToPngBlob(src: string): Promise<Blob> {
   const img = new Image();
   if (!src.startsWith("data:") && !src.startsWith("blob:")) {

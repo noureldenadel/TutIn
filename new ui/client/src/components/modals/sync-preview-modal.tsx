@@ -227,7 +227,7 @@ export function SyncPreviewModal({
                 className={cn(
                   "h-8 shrink-0 rounded-sm px-3 text-xs font-normal text-muted-foreground transition-colors",
                   activeTab === tab.id &&
-                    "bg-card font-medium text-foreground shadow-card hover:bg-card",
+                    "bg-card font-medium text-foreground shadow-card hover:bg-card dark:bg-accent dark:hover:bg-accent",
                 )}
               >
                 {tab.label}

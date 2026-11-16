@@ -31,18 +31,26 @@ import {
 import { Button } from "@/components/ui/button";
 import {
   type CaretBookmark,
+  MD_SYNTAX_ATTR,
   NOTE_IMAGE_BLOCK_ATTR,
   NOTE_IMAGE_TAIL_ATTR,
+  activateHorizontalRuleAtClient,
   applyInlineMarkdownAtCaret,
   applyMarkdownOnBackspace,
+  applyMarkdownOnDelete,
   applyMarkdownOnEnter,
   applyMarkdownOnSpace,
   applyMarkdownOnTab,
   clearAllLiveMarkdownSyntax,
   exitInlineMarkOnClick,
+  extractRangeClipboardPayload,
+  findHorizontalRuleAtClientY,
   getCaretBookmark,
+  getTopLevelBlock,
+  findPrefixBlockInGutter,
   handleMarkdownDelimiterBackspace,
   handleMarkdownDelimiterKeyDown,
+  hasVisibleContent,
   isImageBlockElement,
   isInsideMarkdownSyntax,
   moveCaretOutOfImageBlock,
@@ -52,7 +60,10 @@ import {
   placeCaretAtStart,
   placeCaretInEditableBlockAtY,
   reconcileActiveMarkdownSyntax,
+  resolveArrowIntoHorizontalRule,
   resolveArrowIntoImageBlock,
+  resolveBlockPrefixOnArrow,
+  resolveFocusTarget,
   resolveImageBoundaryBeforeBackspace,
   resolveImageBoundaryBeforeDelete,
   resolveInlineBoundaryOnArrow,
@@ -60,7 +71,7 @@ import {
   sanitizeClipboardHtml,
   sanitizeHttpUrl,
   sanitizeStoredNoteHtml,
-  stripLiveSyntaxArtifacts,
+  stripChromiumInlineArtifacts,
   stripSyntaxBeforeExecCommand,
   syncImageTailParagraphs,
   syncLiveMarkdownSyntax,
@@ -110,12 +121,113 @@ export interface RichNoteSurfaceProps {
   onSuspendSmartTimers?: (() => void) | undefined;
   placeholder?: string | undefined;
   compactToolbar?: boolean | undefined;
+  toolbarPlacement?: "docked" | "floating" | undefined;
+  wrapperPaddingClassName?: string | undefined;
+  editorClassName?: string | undefined;
   maxHeightClassName?: string | undefined;
   minHeightClassName?: string | undefined;
   wrapperClassName?: string | undefined;
   wrapperStyle?: CSSProperties | undefined;
   autoFocus?: boolean | undefined;
   className?: string | undefined;
+}
+
+function findImageBlockAtClientY(ed: HTMLElement, clientY: number): HTMLElement | null {
+  const blocks = ed.querySelectorAll(`[${NOTE_IMAGE_BLOCK_ATTR}="true"]`);
+  for (const block of Array.from(blocks)) {
+    const rect = block.getBoundingClientRect();
+    if (clientY >= rect.top && clientY <= rect.bottom) {
+      return block as HTMLElement;
+    }
+  }
+  return null;
+}
+
+function findImageBlockAtPointerOrBand(
+  ed: HTMLElement,
+  clientX: number,
+  clientY: number,
+): HTMLElement | null {
+  const hit = document.elementFromPoint(clientX, clientY) as HTMLElement | null;
+  const hitBlock = hit?.closest(`[${NOTE_IMAGE_BLOCK_ATTR}="true"]`) as HTMLElement | null;
+  if (hitBlock && ed.contains(hitBlock)) {
+    return hitBlock;
+  }
+  return findImageBlockAtClientY(ed, clientY);
+}
+
+function getCaretPointFromClient(
+  ed: HTMLElement,
+  clientX: number,
+  clientY: number,
+): { node: Node; offset: number } | null {
+  const doc = ed.ownerDocument as Document & {
+    caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null;
+  };
+  let node: Node | null = null;
+  let offset = 0;
+  if (typeof doc.caretRangeFromPoint === "function") {
+    const r = doc.caretRangeFromPoint(clientX, clientY);
+    if (r) {
+      node = r.startContainer;
+      offset = r.startOffset;
+    }
+  } else if (typeof doc.caretPositionFromPoint === "function") {
+    const pos = doc.caretPositionFromPoint(clientX, clientY);
+    if (pos) {
+      node = pos.offsetNode;
+      offset = pos.offset;
+    }
+  }
+  if (!node || !ed.contains(node)) return null;
+  const el = node.nodeType === Node.ELEMENT_NODE ? (node as HTMLElement) : node.parentElement;
+  if (el?.closest(`[${NOTE_IMAGE_BLOCK_ATTR}="true"]`)) return null;
+  return { node, offset };
+}
+
+function syncRangeSelectedImages(container: HTMLElement): void {
+  const imgs = container.getElementsByTagName("img");
+  if (imgs.length === 0) return;
+
+  const sel = window.getSelection();
+  const range = sel && sel.rangeCount > 0 ? sel.getRangeAt(0) : null;
+  const hasActiveRange = Boolean(range && !range.collapsed && range.intersectsNode(container));
+
+  for (let i = 0; i < imgs.length; i++) {
+    const img = imgs[i]!;
+    const selected = Boolean(hasActiveRange && range && range.intersectsNode(img));
+    img.classList.toggle("is-range-selected", selected);
+  }
+}
+
+function writeSelectionRangeToClipboardEvent<T extends HTMLElement>(
+  e: ReactClipboardEvent<HTMLElement>,
+  root: T | null,
+): { ed: T; range: Range } | null {
+  const sel = window.getSelection();
+  if (!sel || sel.rangeCount === 0 || !root) return null;
+  const range = sel.getRangeAt(0);
+  if (range.collapsed) return null;
+  let copyRange = range;
+  if (!root.contains(range.commonAncestorContainer)) {
+    if (!range.intersectsNode(root)) return null;
+    const clamped = range.cloneRange();
+    const rootRange = root.ownerDocument.createRange();
+    rootRange.selectNodeContents(root);
+    if (clamped.compareBoundaryPoints(Range.START_TO_START, rootRange) < 0) {
+      clamped.setStart(root, 0);
+    }
+    if (clamped.compareBoundaryPoints(Range.END_TO_END, rootRange) > 0) {
+      clamped.setEnd(root, root.childNodes.length);
+    }
+    copyRange = clamped;
+  }
+  const payload = extractRangeClipboardPayload(copyRange, sel.toString());
+  if (!payload.hasContent) return null;
+  e.preventDefault();
+  e.clipboardData.setData("text/html", payload.html);
+  e.clipboardData.setData("text/plain", payload.plain);
+  return { ed: root, range: copyRange };
 }
 
 export function RichNoteHtmlContent({
@@ -139,13 +251,36 @@ export function RichNoteHtmlContent({
     sourceEvent: React.MouseEvent<HTMLDivElement>;
   } | null>(null);
 
+  useEffect(() => {
+    const root = contentRef.current;
+    if (!root || root.getElementsByTagName("img").length === 0) return;
+    const sync = () => syncRangeSelectedImages(root);
+    sync();
+    document.addEventListener("selectionchange", sync);
+    return () => {
+      document.removeEventListener("selectionchange", sync);
+      root.querySelectorAll("img.is-range-selected").forEach((img) => {
+        img.classList.remove("is-range-selected");
+      });
+    };
+  }, [resolvedHtml]);
+
   return (
     <>
       <div
         ref={contentRef}
-        className={cn("note-content select-text text-sm leading-[1.5] text-foreground", className)}
+        className={cn("note-content select-text text-sm leading-[1.6] text-foreground", className)}
         dir="auto"
         onDoubleClick={onDoubleClick}
+        onCopy={(e) => {
+          writeSelectionRangeToClipboardEvent(e, contentRef.current);
+        }}
+        onDragStart={(e) => {
+          const target = e.target as HTMLElement | null;
+          if (target?.tagName === "IMG") {
+            e.preventDefault();
+          }
+        }}
         onPointerDown={(e) => {
           const target = e.target as HTMLElement | null;
           if (target?.closest("input[data-task-checkbox], a")) {
@@ -159,7 +294,7 @@ export function RichNoteHtmlContent({
             clientY: e.clientY,
             target: e.target,
           });
-          if (!analysis.imageSrc && !analysis.selectedText) return;
+          if (!analysis.imageSrc && !analysis.hasSelection) return;
           e.preventDefault();
           e.stopPropagation();
           setContextMenu({
@@ -200,6 +335,15 @@ export function RichNoteHtmlContent({
           }
 
           if (!onImageClick) return;
+          const sel = window.getSelection();
+          if (
+            sel &&
+            sel.rangeCount > 0 &&
+            !sel.isCollapsed &&
+            contentRef.current?.contains(sel.getRangeAt(0).commonAncestorContainer)
+          ) {
+            return;
+          }
           if (target.tagName === "IMG") {
             const img = target as HTMLImageElement;
             const src = img.currentSrc || img.src;
@@ -693,22 +837,9 @@ function InPlaceImageCropOverlay({
   );
 }
 
-function getTopLevelEditorChild(node: Node | null, editor: HTMLElement): HTMLElement | null {
-  let curr: Node | null = node;
-  while (curr && curr.parentNode !== editor) {
-    curr = curr.parentNode;
-  }
-  return curr && curr.nodeType === Node.ELEMENT_NODE ? (curr as HTMLElement) : null;
-}
-
 function isBlockEmptyForImage(el: Element | null): boolean {
-  if (!el) return false;
-  if (el.tagName === "HR" || el.hasAttribute(NOTE_IMAGE_BLOCK_ATTR)) return false;
-  if (el.querySelector("img, hr, pre, ul, ol")) return false;
-  return !(el.textContent || "")
-    .replace(/\u00A0/g, "")
-    .replace(/\u200B/g, "")
-    .trim();
+  if (!el || el.tagName === "HR" || el.hasAttribute(NOTE_IMAGE_BLOCK_ATTR)) return false;
+  return !hasVisibleContent(el as HTMLElement);
 }
 
 function createImageTailParagraph(): HTMLParagraphElement {
@@ -734,7 +865,7 @@ function insertImageBlockCleanly(
   imgWrapper: HTMLElement,
 ): { caretTarget: HTMLElement | null } {
   range.deleteContents();
-  const topBlock = getTopLevelEditorChild(range.startContainer, ed);
+  const topBlock = getTopLevelBlock(range.startContainer, ed);
 
   // Break out of lists so images sit centered across the card rather than indented under list markers
   if (topBlock && (topBlock.tagName === "UL" || topBlock.tagName === "OL")) {
@@ -848,6 +979,9 @@ export function RichNoteSurface({
   onSuspendSmartTimers,
   placeholder = "Write a note…",
   compactToolbar = false,
+  toolbarPlacement = "docked",
+  wrapperPaddingClassName = "px-3.5 py-3 pb-8",
+  editorClassName,
   maxHeightClassName = "max-h-[280px]",
   minHeightClassName = "min-h-[100px]",
   wrapperClassName,
@@ -872,6 +1006,17 @@ export function RichNoteSurface({
   const contextMenuOpenRef = useRef(false);
   const forcePlainPasteRef = useRef(false);
   const blurTimeoutRef = useRef<number | null>(null);
+  const isMouseDraggingRef = useRef(false);
+  const isSyncingLiveSyntaxRef = useRef(false);
+  const prefixRevealStateRef = useRef<{
+    forcedBlocks: Set<HTMLElement>;
+    selectAll: boolean;
+  }>({
+    forcedBlocks: new Set(),
+    selectAll: false,
+  });
+  const suppressClickUntilRef = useRef(0);
+  const dragCleanupRef = useRef<(() => void) | null>(null);
 
   const [croppingImage, setCroppingImage] = useState<{
     element: HTMLImageElement;
@@ -904,10 +1049,16 @@ export function RichNoteSurface({
   onWritingActivityRef.current = onWritingActivity;
 
   useEffect(() => {
+    const ed = editorRef.current;
     return () => {
+      dragCleanupRef.current?.();
+      dragCleanupRef.current = null;
       if (blurTimeoutRef.current !== null) {
         window.clearTimeout(blurTimeoutRef.current);
         blurTimeoutRef.current = null;
+      }
+      if (ed && clearAllLiveMarkdownSyntax(ed)) {
+        onChangeRef.current(serializeContainerMediaHtml(ed));
       }
     };
   }, []);
@@ -950,22 +1101,36 @@ export function RichNoteSurface({
     }
   }, []);
 
+  const runGuardedLiveSyntaxSync = useCallback(
+    (ed: HTMLDivElement, clearAll = false) => {
+      if (isSyncingLiveSyntaxRef.current) return;
+      isSyncingLiveSyntaxRef.current = true;
+      try {
+        const sel = window.getSelection();
+        if (clearAll || !sel || sel.rangeCount === 0 || sel.isCollapsed) {
+          prefixRevealStateRef.current.selectAll = false;
+          if (clearAll || !isMouseDraggingRef.current) {
+            prefixRevealStateRef.current.forcedBlocks.clear();
+          }
+        }
+        const semanticChanged = syncLiveMarkdownSyntax(ed, {
+          clearAll,
+          forcedPrefixBlocks: prefixRevealStateRef.current.forcedBlocks,
+          revealAllPrefixBlocks: prefixRevealStateRef.current.selectAll,
+        });
+        if (semanticChanged) {
+          handleInput();
+        }
+      } finally {
+        isSyncingLiveSyntaxRef.current = false;
+      }
+    },
+    [handleInput],
+  );
+
   const writeCleanSelectionToClipboard = useCallback(
     (e: ReactClipboardEvent<HTMLDivElement>): { ed: HTMLDivElement; range: Range } | null => {
-      const sel = window.getSelection();
-      const ed = editorRef.current;
-      if (!sel || sel.rangeCount === 0 || !ed) return null;
-      const range = sel.getRangeAt(0);
-      if (range.collapsed || !ed.contains(range.commonAncestorContainer)) return null;
-      const div = document.createElement("div");
-      div.appendChild(range.cloneContents());
-      stripLiveSyntaxArtifacts(div);
-      const html = div.innerHTML.replace(/\u200B/g, "");
-      const plain = (div.textContent || "").replace(/\u200B/g, "");
-      e.preventDefault();
-      e.clipboardData.setData("text/html", html);
-      e.clipboardData.setData("text/plain", plain);
-      return { ed, range };
+      return writeSelectionRangeToClipboardEvent(e, editorRef.current);
     },
     [],
   );
@@ -1158,24 +1323,9 @@ export function RichNoteSurface({
     triggerWritingActivity();
   };
 
-  const getDirectEditorChild = useCallback((node: Node | null): HTMLElement | null => {
-    if (!editorRef.current || !node) return null;
-    let curr: Node | null = node;
-    while (curr && curr.parentNode !== editorRef.current) {
-      curr = curr.parentNode;
-    }
-    if (curr && curr.parentNode === editorRef.current && curr.nodeType === Node.ELEMENT_NODE) {
-      return curr as HTMLElement;
-    }
-    return null;
+  const getImageBlock = useCallback((imgEl: HTMLImageElement): HTMLElement | null => {
+    return (editorRef.current ? getTopLevelBlock(imgEl, editorRef.current) : null) || imgEl;
   }, []);
-
-  const getImageBlock = useCallback(
-    (imgEl: HTMLImageElement): HTMLElement | null => {
-      return getDirectEditorChild(imgEl) || imgEl;
-    },
-    [getDirectEditorChild],
-  );
 
   const updateSelectedImgPos = useCallback((imgEl: HTMLImageElement) => {
     const wrap = wrapperRef.current;
@@ -1260,20 +1410,6 @@ export function RichNoteSurface({
     [updateSelectedImgPos],
   );
 
-  const findImageBlockAtClientY = useCallback(
-    (ed: HTMLElement, clientY: number): HTMLElement | null => {
-      const blocks = ed.querySelectorAll(`[${NOTE_IMAGE_BLOCK_ATTR}="true"]`);
-      for (const block of Array.from(blocks)) {
-        const rect = block.getBoundingClientRect();
-        if (clientY >= rect.top && clientY <= rect.bottom) {
-          return block as HTMLElement;
-        }
-      }
-      return null;
-    },
-    [],
-  );
-
   const moveImageBlock = useCallback(
     (imgEl: HTMLImageElement, direction: "up" | "down") => {
       const ed = editorRef.current;
@@ -1343,18 +1479,10 @@ export function RichNoteSurface({
 
         if (prevSib && prevSib.isConnected && !isImageBlockElement(prevSib)) {
           ed.focus({ preventScroll: true });
-          const target =
-            prevSib.tagName === "UL" || prevSib.tagName === "OL"
-              ? ((prevSib.querySelector("li:last-child") as HTMLElement | null) ?? prevSib)
-              : prevSib;
-          placeCaretAtEnd(target);
+          placeCaretAtEnd(resolveFocusTarget(prevSib, "end"));
         } else if (nextSib && nextSib.isConnected && !isImageBlockElement(nextSib)) {
           ed.focus({ preventScroll: true });
-          const target =
-            nextSib.tagName === "UL" || nextSib.tagName === "OL"
-              ? ((nextSib.querySelector("li") as HTMLElement | null) ?? nextSib)
-              : nextSib;
-          placeCaretAtStart(target);
+          placeCaretAtStart(resolveFocusTarget(nextSib, "start"));
         } else if (ed.children.length === 0) {
           ed.focus();
         } else {
@@ -1498,6 +1626,47 @@ export function RichNoteSurface({
     [capturePreAwaitRange, captureUndoSnapshot, commitInsertedImageUri],
   );
 
+  const cutEditorRange = useCallback(
+    (ed: HTMLDivElement, range: Range) => {
+      captureUndoSnapshot(true);
+      range.deleteContents();
+      ed.querySelectorAll(`[${NOTE_IMAGE_BLOCK_ATTR}="true"]`).forEach((block) => {
+        if (!block.querySelector("img")) block.remove();
+      });
+      range.collapse(true);
+      const sel = window.getSelection();
+      sel?.removeAllRanges();
+      sel?.addRange(range);
+      normalizeEmptyEditorOnMount(ed);
+      if (
+        ed.firstElementChild &&
+        (!ed.contains(range.startContainer) || range.startContainer === ed)
+      ) {
+        const fallbackTarget =
+          (range.startContainer === ed
+            ? ((ed.childNodes[range.startOffset] as HTMLElement | null) ??
+              (ed.childNodes[range.startOffset - 1] as HTMLElement | null))
+            : null) ?? (ed.firstElementChild as HTMLElement);
+        if (!isImageBlockElement(fallbackTarget) && fallbackTarget.tagName !== "HR") {
+          placeCaretAtStart(fallbackTarget);
+        } else if (fallbackTarget.tagName === "HR") {
+          activateHorizontalRuleAtClient(ed, fallbackTarget, 0);
+        } else {
+          const nextSib = fallbackTarget.nextElementSibling as HTMLElement | null;
+          if (nextSib && !isImageBlockElement(nextSib)) {
+            placeCaretAtStart(nextSib);
+          }
+        }
+      }
+      syncImageTailParagraphs(ed);
+      reconcileActiveMarkdownSyntax(ed);
+      syncLiveMarkdownSyntax(ed);
+      handleInput();
+      triggerWritingActivity();
+    },
+    [captureUndoSnapshot, handleInput, triggerWritingActivity],
+  );
+
   useEffect(() => {
     void preloadSpellChecker();
     const ed = editorRef.current;
@@ -1506,6 +1675,7 @@ export function RichNoteSurface({
       onBeforeMutate: () => captureUndoSnapshot(true),
       onAfterPaste: () => {
         normalizeEditorImageBlocks(ed);
+        syncImageTailParagraphs(ed);
         syncLiveMarkdownSyntax(ed);
         handleInput();
         void hydrateContainerMedia(ed);
@@ -1513,9 +1683,13 @@ export function RichNoteSurface({
       },
       onPasteImage: (file) => handleImageInsert(file),
       onTryPasteVaultHtml: (rawHtml) => tryPasteSameCourseVaultImages(rawHtml),
+      onCutRange: (range) => {
+        if (editorRef.current) cutEditorRange(editorRef.current, range);
+      },
     });
   }, [
     captureUndoSnapshot,
+    cutEditorRange,
     handleImageInsert,
     handleInput,
     triggerWritingActivity,
@@ -1638,6 +1812,9 @@ export function RichNoteSurface({
     if ((e.ctrlKey || e.metaKey) && e.key === "Enter" && onSubmit) {
       e.preventDefault();
       e.stopPropagation();
+      if (ed && clearAllLiveMarkdownSyntax(ed)) {
+        handleInput();
+      }
       onSubmit();
       return;
     }
@@ -1652,6 +1829,9 @@ export function RichNoteSurface({
       if (onCancel) {
         e.preventDefault();
         e.stopPropagation();
+        if (ed && clearAllLiveMarkdownSyntax(ed)) {
+          handleInput();
+        }
         onCancel();
       }
       return;
@@ -1673,6 +1853,10 @@ export function RichNoteSurface({
 
     if (ed && (e.ctrlKey || e.metaKey) && !e.altKey) {
       const lower = e.key.toLowerCase();
+      if (lower === "a" && !e.shiftKey) {
+        prefixRevealStateRef.current.selectAll = true;
+        return;
+      }
       if (lower === "z" && !e.shiftKey) {
         if (performUndo()) {
           e.preventDefault();
@@ -1805,6 +1989,12 @@ export function RichNoteSurface({
         e.preventDefault();
         e.stopPropagation();
         selectImageElement(boundaryImg);
+        return;
+      }
+      captureUndoSnapshot(true);
+      if (applyMarkdownOnDelete(ed)) {
+        e.preventDefault();
+        handleInput();
       }
       return;
     }
@@ -1813,10 +2003,15 @@ export function RichNoteSurface({
       (e.key === "ArrowLeft" || e.key === "ArrowRight") &&
       !e.ctrlKey &&
       !e.metaKey &&
-      !e.altKey &&
-      !e.shiftKey
+      !e.altKey
     ) {
-      if (resolveInlineBoundaryOnArrow(ed, e.key)) {
+      if (!e.shiftKey && resolveInlineBoundaryOnArrow(ed, e.key)) {
+        e.preventDefault();
+        e.stopPropagation();
+        requestAnimationFrame(updateGhostSuggestion);
+        return;
+      }
+      if (resolveBlockPrefixOnArrow(ed, e.key, e.shiftKey)) {
         e.preventDefault();
         e.stopPropagation();
         requestAnimationFrame(updateGhostSuggestion);
@@ -1834,6 +2029,12 @@ export function RichNoteSurface({
       !e.altKey &&
       !e.shiftKey
     ) {
+      if (resolveArrowIntoHorizontalRule(ed, e.key)) {
+        e.preventDefault();
+        e.stopPropagation();
+        requestAnimationFrame(updateGhostSuggestion);
+        return;
+      }
       const targetImg = resolveArrowIntoImageBlock(ed, e.key);
       if (targetImg) {
         e.preventDefault();
@@ -1947,7 +2148,9 @@ export function RichNoteSurface({
           if (typeof document.execCommand === "function") {
             document.execCommand("insertHTML", false, cleanHtml);
           }
+          stripChromiumInlineArtifacts(ed, true);
           normalizeEditorImageBlocks(ed);
+          syncImageTailParagraphs(ed);
           syncLiveMarkdownSyntax(ed);
           handleInput();
           void hydrateContainerMedia(ed);
@@ -2002,6 +2205,7 @@ export function RichNoteSurface({
   };
 
   const handleEditorClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (performance.now() < suppressClickUntilRef.current) return;
     const target = e.target as HTMLElement;
     if (target.tagName === "INPUT" && target.hasAttribute("data-task-checkbox")) {
       e.stopPropagation();
@@ -2040,6 +2244,10 @@ export function RichNoteSurface({
     if (selectedImg) {
       clearSelectedImage();
     }
+    if (target.tagName === "HR" && editorRef.current?.contains(target)) {
+      activateHorizontalRuleAtClient(editorRef.current, target, e.clientX);
+      return;
+    }
     if (target === wrapperRef.current && editorRef.current) {
       const ed = editorRef.current;
       if (findImageBlockAtClientY(ed, e.clientY)) return;
@@ -2058,17 +2266,26 @@ export function RichNoteSurface({
 
   useEffect(() => {
     if (croppingImage) return;
+    const ed = editorRef.current;
+    if (!ed) return;
     const handleSelectionChange = () => {
-      const ed = editorRef.current;
-      if (!ed) return;
+      syncRangeSelectedImages(ed);
+      if (isSyncingLiveSyntaxRef.current) return;
+
       const sel = window.getSelection();
-      if (!sel || sel.rangeCount === 0) return;
+      if (!sel || sel.rangeCount === 0) {
+        if (document.activeElement === ed || ed.contains(document.activeElement)) {
+          runGuardedLiveSyntaxSync(ed, true);
+        }
+        return;
+      }
+
       const range = sel.getRangeAt(0);
-      if (!ed.contains(range.startContainer)) return;
+      if (!ed.contains(range.startContainer) && !range.intersectsNode(ed)) return;
 
-      syncLiveMarkdownSyntax(ed);
+      runGuardedLiveSyntaxSync(ed);
 
-      if (!range.collapsed) return;
+      if (isMouseDraggingRef.current || !range.collapsed) return;
 
       const startEl =
         range.startContainer.nodeType === Node.ELEMENT_NODE
@@ -2093,12 +2310,7 @@ export function RichNoteSurface({
         }
         if (before && isImageBlockElement(before)) {
           if (after && after.nodeType === Node.ELEMENT_NODE && !isImageBlockElement(after)) {
-            const afterEl = after as HTMLElement;
-            const target =
-              afterEl.tagName === "UL" || afterEl.tagName === "OL"
-                ? ((afterEl.querySelector("li") as HTMLElement | null) ?? afterEl)
-                : afterEl;
-            placeCaretAtStart(target);
+            placeCaretAtStart(resolveFocusTarget(after as HTMLElement, "start"));
           } else {
             const img = (before as HTMLElement).querySelector("img");
             sel.removeAllRanges();
@@ -2109,8 +2321,13 @@ export function RichNoteSurface({
     };
 
     document.addEventListener("selectionchange", handleSelectionChange);
-    return () => document.removeEventListener("selectionchange", handleSelectionChange);
-  }, [croppingImage, updateSelectedImgPos]);
+    return () => {
+      document.removeEventListener("selectionchange", handleSelectionChange);
+      ed.querySelectorAll("img.is-range-selected").forEach((img) => {
+        img.classList.remove("is-range-selected");
+      });
+    };
+  }, [croppingImage, runGuardedLiveSyntaxSync, updateSelectedImgPos]);
 
   useEffect(() => {
     if (!selectedImg) return;
@@ -2250,17 +2467,35 @@ export function RichNoteSurface({
     captureUndoSnapshot(true);
     if (ed) stripSyntaxBeforeExecCommand(ed);
     document.execCommand(cmd, false);
-    if (ed) syncLiveMarkdownSyntax(ed);
+    if (ed) {
+      stripChromiumInlineArtifacts(ed, true);
+      syncLiveMarkdownSyntax(ed);
+    }
     handleInput();
     triggerWritingActivity();
   };
 
+  const isFloatingToolbar = toolbarPlacement === "floating";
+  const hasScrollConstraint = Boolean(maxHeightClassName);
+
   return (
-    <div className={cn("relative flex flex-col overflow-hidden", className)}>
+    <div
+      className={cn(
+        "flex flex-col",
+        isFloatingToolbar ? "overflow-visible" : "relative overflow-hidden",
+        className,
+      )}
+    >
       <div
+        onPointerDown={isFloatingToolbar ? (e) => e.stopPropagation() : undefined}
         className={cn(
-          "flex items-center gap-0.5 border-b border-border/50 bg-secondary/30",
-          compactToolbar ? "px-2 pb-1.5 pt-1" : "px-2.5 pb-2 pt-1.5",
+          "flex items-center gap-0.5",
+          isFloatingToolbar
+            ? "pointer-events-auto absolute bottom-full left-0 z-40 mb-1.5 w-max flex-nowrap rounded-lg border border-border/60 bg-popover/95 px-1.5 py-1 text-popover-foreground shadow-workspace backdrop-blur-sm"
+            : cn(
+                "border-b border-border/50 bg-secondary/30",
+                compactToolbar ? "px-2 pb-1.5 pt-1" : "px-2.5 pb-2 pt-1.5",
+              ),
         )}
       >
         <EditorToolBtn label="Bold (Ctrl+B)" onClick={() => execCmd("bold")}>
@@ -2330,8 +2565,13 @@ export function RichNoteSurface({
         onMouseDown={(e) => {
           if (e.button !== 0) return;
           const target = e.target as HTMLElement | null;
+          if (!target) return;
+          if (target.closest('input[data-task-checkbox="true"]')) {
+            e.preventDefault();
+            e.stopPropagation();
+            return;
+          }
           if (
-            !target ||
             target.closest(".image-action-toolbar") ||
             target.closest(".in-place-image-cropper")
           ) {
@@ -2342,54 +2582,292 @@ export function RichNoteSurface({
             setCroppingImage(null);
           }
 
-          const imgBlock = target.closest(
-            `[${NOTE_IMAGE_BLOCK_ATTR}="true"]`,
-          ) as HTMLElement | null;
-          if (imgBlock && editorRef.current?.contains(imgBlock)) {
-            e.preventDefault();
-            e.stopPropagation();
-            const img = imgBlock.querySelector("img");
-            if (img) selectImageElement(img);
-            return;
-          }
-
-          if (target.tagName === "IMG" && editorRef.current?.contains(target)) {
-            e.preventDefault();
-            e.stopPropagation();
-            selectImageElement(target as HTMLImageElement);
-            return;
-          }
+          dragCleanupRef.current?.();
+          dragCleanupRef.current = null;
 
           const ed = editorRef.current;
           if (!ed) return;
-          if (target === wrapperRef.current || target === ed) {
-            const bandImgBlock = findImageBlockAtClientY(ed, e.clientY);
-            if (bandImgBlock) {
-              e.preventDefault();
-              e.stopPropagation();
-              const img = bandImgBlock.querySelector("img");
+
+          const clickedImgBlock = target.closest(
+            `[${NOTE_IMAGE_BLOCK_ATTR}="true"]`,
+          ) as HTMLElement | null;
+          const imgBlockOnTarget =
+            clickedImgBlock && ed.contains(clickedImgBlock) ? clickedImgBlock : null;
+          const startedInEditorShell = target === wrapperRef.current || target === ed;
+          const bandImgBlock = startedInEditorShell ? findImageBlockAtClientY(ed, e.clientY) : null;
+          const startImgBlock = imgBlockOnTarget ?? bandImgBlock;
+          const clickedHr =
+            !startImgBlock && target.tagName === "HR" && ed.contains(target)
+              ? target
+              : !startImgBlock && startedInEditorShell
+                ? findHorizontalRuleAtClientY(ed, e.clientY, 6)
+                : null;
+          const startPrefixGutterBlock =
+            !startImgBlock && !clickedHr ? findPrefixBlockInGutter(ed, e.clientX, e.clientY) : null;
+          prefixRevealStateRef.current.selectAll = false;
+          prefixRevealStateRef.current.forcedBlocks.clear();
+
+          if (startImgBlock) {
+            e.preventDefault();
+            e.stopPropagation();
+          }
+
+          const startX = e.clientX;
+          const startY = e.clientY;
+          let didDrag = false;
+          let touchedNonText = Boolean(startImgBlock || startedInEditorShell);
+          let anchoredPrefixGutter = false;
+          let tookOverGutterDrag = false;
+
+          const cleanup = () => {
+            window.removeEventListener("mousemove", handleWindowMouseMove, true);
+            window.removeEventListener("mouseup", handleWindowMouseUp, true);
+            window.removeEventListener("blur", handleWindowBlur);
+            isMouseDraggingRef.current = false;
+            prefixRevealStateRef.current.forcedBlocks.clear();
+            if (dragCleanupRef.current === cleanup) {
+              dragCleanupRef.current = null;
+            }
+          };
+
+          const updateDraggedSelection = (ev: MouseEvent) => {
+            const sel = window.getSelection();
+            if (!sel) return;
+
+            const overImgBlock = findImageBlockAtPointerOrBand(ed, ev.clientX, ev.clientY);
+            const edRect = ed.getBoundingClientRect();
+            const lastChild = ed.lastElementChild as HTMLElement | null;
+            const bottomBound = lastChild
+              ? Math.max(edRect.bottom, lastChild.getBoundingClientRect().bottom)
+              : edRect.bottom;
+            const aboveEditor = ev.clientY <= edRect.top + 2;
+            const belowEditor = ev.clientY >= bottomBound + 4;
+
+            if (startImgBlock && startImgBlock.parentNode === ed) {
+              ed.focus({ preventScroll: true });
+              const startIdx = Array.prototype.indexOf.call(ed.childNodes, startImgBlock);
+              if (startIdx < 0) return;
+
+              if (overImgBlock && overImgBlock.parentNode === ed) {
+                const overIdx = Array.prototype.indexOf.call(ed.childNodes, overImgBlock);
+                if (overIdx < 0) return;
+                if (overImgBlock === startImgBlock) {
+                  sel.setBaseAndExtent(ed, startIdx, ed, startIdx + 1);
+                } else if (overIdx > startIdx) {
+                  sel.setBaseAndExtent(ed, startIdx, ed, overIdx + 1);
+                } else {
+                  sel.setBaseAndExtent(ed, startIdx + 1, ed, overIdx);
+                }
+                return;
+              }
+
+              if (aboveEditor) {
+                sel.setBaseAndExtent(ed, startIdx + 1, ed, 0);
+                return;
+              }
+              if (belowEditor) {
+                sel.setBaseAndExtent(ed, startIdx, ed, ed.childNodes.length);
+                return;
+              }
+
+              const point = getCaretPointFromClient(ed, ev.clientX, ev.clientY);
+              if (point) {
+                const blockRange = document.createRange();
+                blockRange.selectNode(startImgBlock);
+                const cmp = blockRange.comparePoint(point.node, point.offset);
+                const anchorOffset = cmp < 0 ? startIdx + 1 : startIdx;
+                sel.setBaseAndExtent(ed, anchorOffset, point.node, point.offset);
+              }
+              return;
+            }
+
+            if (
+              startedInEditorShell &&
+              (sel.rangeCount === 0 || !sel.anchorNode || !ed.contains(sel.anchorNode))
+            ) {
+              ed.focus({ preventScroll: true });
+              const startPoint = getCaretPointFromClient(ed, startX, startY);
+              if (startPoint) {
+                sel.collapse(startPoint.node, startPoint.offset);
+              } else {
+                const startAtEnd = !lastChild || startY > lastChild.getBoundingClientRect().bottom;
+                sel.collapse(ed, startAtEnd ? ed.childNodes.length : 0);
+              }
+            }
+
+            if (overImgBlock || aboveEditor || belowEditor) {
+              touchedNonText = true;
+            }
+            if (!touchedNonText) return;
+            if (sel.rangeCount === 0 || !sel.anchorNode || !ed.contains(sel.anchorNode)) return;
+
+            const anchorNode = sel.anchorNode;
+            const anchorOffset = sel.anchorOffset;
+
+            if (overImgBlock && overImgBlock.parentNode === ed) {
+              const overIdx = Array.prototype.indexOf.call(ed.childNodes, overImgBlock);
+              if (overIdx < 0) return;
+              const anchorRange = document.createRange();
+              anchorRange.setStart(anchorNode, anchorOffset);
+              anchorRange.collapse(true);
+              const cmp = anchorRange.comparePoint(overImgBlock, 0);
+              sel.setBaseAndExtent(anchorNode, anchorOffset, ed, cmp < 0 ? overIdx : overIdx + 1);
+              return;
+            }
+
+            if (aboveEditor) {
+              sel.setBaseAndExtent(anchorNode, anchorOffset, ed, 0);
+              return;
+            }
+            if (belowEditor) {
+              sel.setBaseAndExtent(anchorNode, anchorOffset, ed, ed.childNodes.length);
+              return;
+            }
+
+            const point = getCaretPointFromClient(ed, ev.clientX, ev.clientY);
+            if (point) {
+              sel.setBaseAndExtent(anchorNode, anchorOffset, point.node, point.offset);
+            }
+          };
+
+          const handleWindowMouseMove = (ev: MouseEvent) => {
+            if (!didDrag) {
+              if (Math.hypot(ev.clientX - startX, ev.clientY - startY) < 4) return;
+              didDrag = true;
+              isMouseDraggingRef.current = true;
+              clearSelectedImage();
+            }
+            updateDraggedSelection(ev);
+
+            const overPrefixGutterBlock =
+              !startImgBlock && !clickedHr
+                ? findPrefixBlockInGutter(ed, ev.clientX, ev.clientY)
+                : null;
+            const nextForced = new Set<HTMLElement>();
+            if (
+              startPrefixGutterBlock &&
+              startPrefixGutterBlock.isConnected &&
+              ed.contains(startPrefixGutterBlock)
+            ) {
+              nextForced.add(startPrefixGutterBlock);
+            }
+            if (overPrefixGutterBlock) {
+              nextForced.add(overPrefixGutterBlock);
+            }
+            prefixRevealStateRef.current.forcedBlocks = nextForced;
+
+            const selBefore = window.getSelection();
+            if (
+              tookOverGutterDrag &&
+              !touchedNonText &&
+              !overPrefixGutterBlock &&
+              selBefore &&
+              selBefore.anchorNode &&
+              ed.contains(selBefore.anchorNode)
+            ) {
+              const point = getCaretPointFromClient(ed, ev.clientX, ev.clientY);
+              if (point) {
+                selBefore.setBaseAndExtent(
+                  selBefore.anchorNode,
+                  selBefore.anchorOffset,
+                  point.node,
+                  point.offset,
+                );
+              }
+            }
+
+            syncRangeSelectedImages(ed);
+            runGuardedLiveSyntaxSync(ed);
+
+            const sel = window.getSelection();
+            if (sel && sel.rangeCount > 0 && ed.contains(sel.anchorNode)) {
+              if (startPrefixGutterBlock && !anchoredPrefixGutter) {
+                const startSpan = startPrefixGutterBlock.querySelector(
+                  `:scope > [${MD_SYNTAX_ATTR}]`,
+                );
+                const startSpanText = startSpan?.firstChild;
+                if (
+                  startSpan &&
+                  startSpanText &&
+                  sel.anchorNode &&
+                  sel.focusNode &&
+                  !startSpan.contains(sel.anchorNode)
+                ) {
+                  sel.setBaseAndExtent(startSpanText, 0, sel.focusNode, sel.focusOffset);
+                  anchoredPrefixGutter = true;
+                }
+              }
+
+              if (overPrefixGutterBlock && sel.anchorNode) {
+                const overSpan = overPrefixGutterBlock.querySelector(
+                  `:scope > [${MD_SYNTAX_ATTR}]`,
+                );
+                const overSpanText = overSpan?.firstChild;
+                if (overSpanText) {
+                  sel.setBaseAndExtent(sel.anchorNode, sel.anchorOffset, overSpanText, 0);
+                  tookOverGutterDrag = true;
+                }
+              }
+            }
+          };
+
+          const finishDrag = () => {
+            cleanup();
+            syncRangeSelectedImages(ed);
+            if (didDrag) {
+              suppressClickUntilRef.current = performance.now() + 80;
+              if (document.activeElement !== ed && !ed.contains(document.activeElement)) {
+                ed.focus({ preventScroll: true });
+              }
+              runGuardedLiveSyntaxSync(ed);
+              return;
+            }
+
+            if (startImgBlock) {
+              suppressClickUntilRef.current = performance.now() + 80;
+              const img = startImgBlock.querySelector("img");
               if (img) selectImageElement(img);
               return;
             }
-            const lastChild = ed.lastElementChild as HTMLElement | null;
-            const clickedBelowContent =
-              target === wrapperRef.current ||
-              !lastChild ||
-              e.clientY > lastChild.getBoundingClientRect().bottom;
-            if (clickedBelowContent || ed.querySelector(`[${NOTE_IMAGE_BLOCK_ATTR}="true"]`)) {
-              e.preventDefault();
+
+            if (clickedHr && clickedHr.isConnected) {
+              suppressClickUntilRef.current = performance.now() + 80;
               clearSelectedImage();
-              placeCaretInEditableBlockAtY(ed, e.clientY);
+              activateHorizontalRuleAtClient(ed, clickedHr, startX);
+              return;
             }
-          }
+
+            if (startedInEditorShell) {
+              const lastChild = ed.lastElementChild as HTMLElement | null;
+              const clickedBelowContent =
+                target === wrapperRef.current ||
+                !lastChild ||
+                startY > lastChild.getBoundingClientRect().bottom;
+              if (clickedBelowContent || ed.querySelector(`[${NOTE_IMAGE_BLOCK_ATTR}="true"]`)) {
+                suppressClickUntilRef.current = performance.now() + 80;
+                clearSelectedImage();
+                placeCaretInEditableBlockAtY(ed, startY);
+              }
+            }
+          };
+
+          const handleWindowMouseUp = () => finishDrag();
+          const handleWindowBlur = () => cleanup();
+
+          dragCleanupRef.current = cleanup;
+          window.addEventListener("mousemove", handleWindowMouseMove, true);
+          window.addEventListener("mouseup", handleWindowMouseUp, true);
+          window.addEventListener("blur", handleWindowBlur);
         }}
         onScroll={() => {
           updateGhostSuggestion();
           if (selectedImg) updateSelectedImgPos(selectedImg.element);
         }}
-        style={{ scrollbarGutter: "stable", ...wrapperStyle }}
+        style={hasScrollConstraint ? { scrollbarGutter: "stable", ...wrapperStyle } : wrapperStyle}
         className={cn(
-          "relative w-full cursor-text overflow-y-auto px-3.5 py-3 pb-8 custom-scrollbar-sm",
+          "relative w-full cursor-text",
+          hasScrollConstraint ? "overflow-y-auto custom-scrollbar-sm" : "overflow-visible",
+          wrapperPaddingClassName,
           maxHeightClassName,
           minHeightClassName,
           wrapperClassName,
@@ -2433,6 +2911,7 @@ export function RichNoteSurface({
               if (hasLooseImg) {
                 normalizeEditorImageBlocks(ed);
               }
+              stripChromiumInlineArtifacts(ed, true);
               if (insertedSpaceViaIme) {
                 const sel = window.getSelection();
                 if (sel && sel.rangeCount > 0 && sel.isCollapsed) {
@@ -2474,6 +2953,8 @@ export function RichNoteSurface({
                 }
               }
 
+              prefixRevealStateRef.current.selectAll = false;
+              prefixRevealStateRef.current.forcedBlocks.clear();
               reconcileActiveMarkdownSyntax(ed);
               if (applyInlineMarkdownAtCaret(ed) && beforeInputSnapRef.current) {
                 captureUndoSnapshot(true, beforeInputSnapRef.current);
@@ -2506,7 +2987,9 @@ export function RichNoteSurface({
                 document.activeElement !== ed &&
                 !ed.contains(document.activeElement)
               ) {
-                clearAllLiveMarkdownSyntax(ed);
+                if (clearAllLiveMarkdownSyntax(ed)) {
+                  handleInput();
+                }
               }
             }, 150);
           }}
@@ -2516,25 +2999,7 @@ export function RichNoteSurface({
           onCut={(e) => {
             const extracted = writeCleanSelectionToClipboard(e);
             if (!extracted) return;
-            const { ed, range } = extracted;
-            captureUndoSnapshot(true);
-            range.deleteContents();
-            range.collapse(true);
-            const sel = window.getSelection();
-            sel?.removeAllRanges();
-            sel?.addRange(range);
-            normalizeEmptyEditorOnMount(ed);
-            if (
-              ed.firstElementChild &&
-              (!ed.contains(range.startContainer) || range.startContainer === ed)
-            ) {
-              placeCaretAtStart(ed.firstElementChild as HTMLElement);
-            }
-            syncImageTailParagraphs(ed);
-            reconcileActiveMarkdownSyntax(ed);
-            syncLiveMarkdownSyntax(ed);
-            handleInput();
-            triggerWritingActivity();
+            cutEditorRange(extracted.ed, extracted.range);
           }}
           onFocus={() => {
             if (blurTimeoutRef.current !== null) {
@@ -2555,14 +3020,14 @@ export function RichNoteSurface({
           }}
           onDragOver={(e) => {
             e.preventDefault();
-            if (draggingBlockRef.current) {
+            if (draggingBlockRef.current && editorRef.current) {
               e.dataTransfer.dropEffect = "move";
               const target = document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null;
-              const targetBlock = target ? getDirectEditorChild(target) : null;
+              const targetBlock = target ? getTopLevelBlock(target, editorRef.current) : null;
               if (
                 targetBlock &&
                 targetBlock !== draggingBlockRef.current &&
-                editorRef.current?.contains(targetBlock)
+                editorRef.current.contains(targetBlock)
               ) {
                 const rect = targetBlock.getBoundingClientRect();
                 const isAfter = e.clientY > rect.top + rect.height / 2;
@@ -2594,7 +3059,10 @@ export function RichNoteSurface({
             }
             void handleDrop(e);
           }}
-          className="note-editor min-h-[68px] w-full text-sm leading-[1.5] outline-none"
+          className={cn(
+            "note-editor min-h-[68px] w-full text-sm leading-[1.6] outline-none",
+            editorClassName,
+          )}
           data-placeholder={placeholder}
           dir="auto"
         />

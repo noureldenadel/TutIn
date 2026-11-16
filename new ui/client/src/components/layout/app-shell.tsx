@@ -1,4 +1,12 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import {
   BarChart3,
   Check,
@@ -52,11 +60,8 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { Link, useRouterState } from "@tanstack/react-router";
-import {
-  cancelAllTranscriptJobs,
-  cancelTranscriptJob,
-  useTranscriptJobs,
-} from "@/lib/transcript-ai";
+import { cancelAllTranscriptJobs, useTranscriptJobs } from "@/lib/transcript-ai";
+import { AiJobTraceCard } from "@/components/shared/ai-job-trace";
 import { getLanguageLabel } from "@/lib/languages";
 import {
   COURSE_SORT_OPTIONS,
@@ -71,10 +76,14 @@ import {
 import { SettingsModal, type ThemeMode } from "@/components/modals/settings-modal";
 import { WelcomeGuideModal } from "@/components/modals/welcome-guide-modal";
 import {
+  DEFAULT_APP_SETTINGS,
+  THEME_PRESET_STORAGE_KEY,
   hydrateAppSettingsFromServer,
+  isThemePreset,
   isWelcomeGuideSeen,
   readAppSettings,
   writeAppSettings,
+  type ThemePreset,
 } from "@/lib/app-settings";
 import { SyncPreviewModal } from "@/components/modals/sync-preview-modal";
 import { EditCourseModal } from "@/components/modals/edit-course-modal";
@@ -173,8 +182,7 @@ function IconDock({
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const jobsMap = useTranscriptJobs();
   const activeJobs = useMemo(
-    () =>
-      Object.values(jobsMap).filter((j) => j.status === "running" || j.status === "queued"),
+    () => Object.values(jobsMap).filter((j) => j.status === "running" || j.status === "queued"),
     [jobsMap],
   );
   const [celebrating, setCelebrating] = useState(false);
@@ -268,49 +276,29 @@ function IconDock({
                 </button>
               )}
             </div>
-            <div className="max-h-56 space-y-1.5 overflow-y-auto custom-scrollbar-sm">
+            <div className="max-h-64 space-y-1.5 overflow-y-auto custom-scrollbar-sm">
               {activeJobs.map((job) => (
-                <div
+                <AiJobTraceCard
                   key={job.videoId}
-                  className="ai-shimmer-row relative overflow-hidden rounded-lg border border-border/50 bg-secondary/55 px-2.5 py-2"
-                >
-                  <div className="flex items-center justify-between gap-2 text-xs">
-                    <Link
-                      to="/learn/$courseId"
-                      params={{ courseId: job.courseId }}
-                      onClick={() => setJobsPopoverOpen(false)}
-                      className="min-w-0 flex-1 truncate font-medium text-foreground hover:text-primary"
-                    >
-                      {job.videoTitle}
-                    </Link>
-                    <div className="flex shrink-0 items-center gap-1.5">
-                      <span className="font-mono text-[11px] font-semibold text-primary tabular-nums">
-                        {job.status === "queued" ? "Queued" : `${job.progress}%`}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => cancelTranscriptJob(job.videoId)}
-                        title="Cancel"
-                        aria-label="Cancel"
-                        className="rounded p-0.5 text-muted-foreground transition-colors hover:bg-destructive/15 hover:text-destructive"
+                  job={job}
+                  compact
+                  headerTitle={
+                    <div className="min-w-0">
+                      <Link
+                        to="/learn/$courseId"
+                        params={{ courseId: job.courseId }}
+                        onClick={() => setJobsPopoverOpen(false)}
+                        className="block truncate text-xs font-medium text-foreground hover:text-primary"
                       >
-                        <X className="size-3.5" />
-                      </button>
+                        {job.videoTitle}
+                      </Link>
+                      <span className="block truncate text-[10.5px] text-muted-foreground">
+                        {job.mode === "transcribe" ? "Transcribe" : "Translate"} ·{" "}
+                        {getLanguageLabel(job.targetLanguage)} · AI
+                      </span>
                     </div>
-                  </div>
-                  <div className="mt-0.5 flex items-center justify-between text-[11px] text-muted-foreground">
-                    <span className="truncate">
-                      {job.mode === "transcribe" ? "Transcribe" : "Translate"} ·{" "}
-                      {getLanguageLabel(job.targetLanguage)} · AI
-                    </span>
-                  </div>
-                  <div className="mt-1.5 h-1 w-full overflow-hidden rounded-full bg-secondary">
-                    <div
-                      className="h-full bg-gradient-to-r from-primary via-chart-2 to-chart-1 transition-all duration-300"
-                      style={{ width: `${Math.max(5, job.progress)}%` }}
-                    />
-                  </div>
-                </div>
+                  }
+                />
               ))}
             </div>
           </PopoverContent>
@@ -851,34 +839,54 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   const [dark, setDark] = useState(false);
   const [mode, setMode] = useState<ThemeMode>("system");
+  const [themePreset, setThemePreset] = useState<ThemePreset>(DEFAULT_APP_SETTINGS.themePreset);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [welcomeOpen, setWelcomeOpen] = useState(false);
   const [rescanCourse, setRescanCourse] = useState<Course | null>(null);
   const [editingCourse, setEditingCourse] = useState<Course | null>(null);
   const themeTimerRef = useRef<number | null>(null);
 
+  const triggerThemeTransition = () => {
+    const root = document.documentElement;
+    if (themeTimerRef.current !== null) {
+      window.clearTimeout(themeTimerRef.current);
+    }
+    root.classList.add("theme-transitioning");
+    themeTimerRef.current = window.setTimeout(() => {
+      root.classList.remove("theme-transitioning");
+      themeTimerRef.current = null;
+    }, 320);
+  };
+
   useEffect(() => {
-    const syncThemeDom = (themeMode: ThemeMode) => {
+    const syncThemeDom = (themeMode: ThemeMode, preset: ThemePreset) => {
       const isDark =
         themeMode === "system"
           ? window.matchMedia("(prefers-color-scheme: dark)").matches
           : themeMode === "dark";
       setMode(themeMode);
       setDark(isDark);
+      setThemePreset(preset);
       document.documentElement.classList.toggle("dark", isDark);
+      document.documentElement.dataset["themePreset"] = preset;
     };
 
+    const currentSettings = readAppSettings();
     const stored = window.localStorage.getItem("tutin-theme");
     const initialMode: ThemeMode =
-      stored === "dark" || stored === "light" ? stored : readAppSettings().theme;
-    syncThemeDom(initialMode);
+      stored === "dark" || stored === "light" ? stored : currentSettings.theme;
+    const storedPreset = window.localStorage.getItem(THEME_PRESET_STORAGE_KEY);
+    const initialPreset: ThemePreset = isThemePreset(storedPreset)
+      ? storedPreset
+      : currentSettings.themePreset;
+    syncThemeDom(initialMode, initialPreset);
 
     if (!isWelcomeGuideSeen()) {
       setWelcomeOpen(true);
     }
 
     void hydrateAppSettingsFromServer().then((hydrated) => {
-      syncThemeDom(hydrated.theme);
+      syncThemeDom(hydrated.theme, hydrated.themePreset);
       setWelcomeOpen(!isWelcomeGuideSeen());
     });
   }, []);
@@ -889,14 +897,7 @@ export function AppShell({ children }: { children: ReactNode }) {
     const onSystemThemeChange = (e: MediaQueryListEvent) => {
       const root = document.documentElement;
       if (root.classList.contains("dark") !== e.matches) {
-        if (themeTimerRef.current !== null) {
-          window.clearTimeout(themeTimerRef.current);
-        }
-        root.classList.add("theme-transitioning");
-        themeTimerRef.current = window.setTimeout(() => {
-          root.classList.remove("theme-transitioning");
-          themeTimerRef.current = null;
-        }, 320);
+        triggerThemeTransition();
       }
       setDark(e.matches);
       root.classList.toggle("dark", e.matches);
@@ -932,17 +933,8 @@ export function AppShell({ children }: { children: ReactNode }) {
         ? window.matchMedia("(prefers-color-scheme: dark)").matches
         : next === "dark";
     const root = document.documentElement;
-    const isChanging = root.classList.contains("dark") !== isDark;
-
-    if (isChanging) {
-      if (themeTimerRef.current !== null) {
-        window.clearTimeout(themeTimerRef.current);
-      }
-      root.classList.add("theme-transitioning");
-      themeTimerRef.current = window.setTimeout(() => {
-        root.classList.remove("theme-transitioning");
-        themeTimerRef.current = null;
-      }, 320);
+    if (root.classList.contains("dark") !== isDark) {
+      triggerThemeTransition();
     }
 
     setMode(next);
@@ -952,6 +944,18 @@ export function AppShell({ children }: { children: ReactNode }) {
     else window.localStorage.setItem("tutin-theme", next);
     writeAppSettings({ ...readAppSettings(), theme: next });
   };
+
+  const applyThemePreset = (next: ThemePreset) => {
+    const root = document.documentElement;
+    if (root.dataset["themePreset"] !== next) {
+      triggerThemeTransition();
+    }
+    setThemePreset(next);
+    root.dataset["themePreset"] = next;
+    window.localStorage.setItem(THEME_PRESET_STORAGE_KEY, next);
+    writeAppSettings({ ...readAppSettings(), themePreset: next });
+  };
+
   const toggleTheme = () => applyMode(dark ? "light" : "dark");
 
   return (
@@ -967,7 +971,10 @@ export function AppShell({ children }: { children: ReactNode }) {
           open={settingsOpen}
           onOpenChange={setSettingsOpen}
           theme={mode}
+          isDark={dark}
           onThemeChange={applyMode}
+          themePreset={themePreset}
+          onThemePresetChange={applyThemePreset}
           onOpenWelcomeGuide={() => setWelcomeOpen(true)}
         />
         <WelcomeGuideModal open={welcomeOpen} onOpenChange={setWelcomeOpen} />
@@ -1038,6 +1045,17 @@ export function HomePage() {
   const [sort, setSort] = useState<CourseSortOption>("Recent");
   const [query, setQuery] = useState("");
   const searchRef = useRef<HTMLInputElement>(null);
+  const filterScrollRef = useRef<HTMLDivElement>(null);
+  const filterTrackRef = useRef<HTMLDivElement>(null);
+  const tabButtonRefs = useRef<Map<string, HTMLButtonElement>>(new Map());
+  const filterDragRef = useRef<{ startX: number; startScrollLeft: number; moved: boolean } | null>(
+    null,
+  );
+  const suppressFilterClickRef = useRef(false);
+  const didMountFilterRef = useRef(false);
+  const [isDraggingFilters, setIsDraggingFilters] = useState(false);
+  const [filterScrollEdges, setFilterScrollEdges] = useState({ left: false, right: false });
+  const [tabIndicator, setTabIndicator] = useState({ left: 0, width: 0, ready: false });
   const { courses: allCourses, isLoading, error } = useCoursesList();
 
   useEffect(() => {
@@ -1061,6 +1079,128 @@ export function HomePage() {
     }
     return Array.from(tagSet).sort((a, b) => a.localeCompare(b));
   }, [allCourses]);
+
+  const updateFilterScrollEdges = useCallback(() => {
+    const el = filterScrollRef.current;
+    if (!el) return;
+    const maxScroll = el.scrollWidth - el.clientWidth;
+    const left = el.scrollLeft > 4;
+    const right = maxScroll > 4 && el.scrollLeft < maxScroll - 4;
+    setFilterScrollEdges((prev) =>
+      prev.left === left && prev.right === right ? prev : { left, right },
+    );
+  }, []);
+
+  const measureActiveTab = useCallback(() => {
+    const btn = tabButtonRefs.current.get(filter);
+    if (!btn) {
+      setTabIndicator((prev) =>
+        prev.width === 0 ? prev : { left: 0, width: 0, ready: prev.ready },
+      );
+      return;
+    }
+    const left = btn.offsetLeft;
+    const width = btn.offsetWidth;
+    setTabIndicator((prev) => {
+      if (prev.left === left && prev.width === width && prev.ready) return prev;
+      return { left, width, ready: prev.width > 0 ? true : prev.ready };
+    });
+  }, [filter]);
+
+  useLayoutEffect(() => {
+    measureActiveTab();
+    updateFilterScrollEdges();
+
+    if (!didMountFilterRef.current) {
+      didMountFilterRef.current = true;
+      const rafId = window.requestAnimationFrame(() => {
+        setTabIndicator((prev) =>
+          prev.ready || prev.width === 0 ? prev : { ...prev, ready: true },
+        );
+      });
+      return () => window.cancelAnimationFrame(rafId);
+    }
+
+    const scrollEl = filterScrollRef.current;
+    const activeBtn = tabButtonRefs.current.get(filter);
+    if (scrollEl && activeBtn && scrollEl.scrollWidth > scrollEl.clientWidth + 2) {
+      const btnLeft = activeBtn.offsetLeft;
+      const btnRight = btnLeft + activeBtn.offsetWidth;
+      const viewLeft = scrollEl.scrollLeft;
+      const viewRight = viewLeft + scrollEl.clientWidth;
+      const edgePad = 36;
+      if (btnLeft < viewLeft + edgePad) {
+        scrollEl.scrollTo({ left: Math.max(0, btnLeft - edgePad), behavior: "smooth" });
+      } else if (btnRight > viewRight - edgePad) {
+        scrollEl.scrollTo({
+          left: btnRight - scrollEl.clientWidth + edgePad,
+          behavior: "smooth",
+        });
+      }
+    }
+    return undefined;
+  }, [filter, allTags, measureActiveTab, updateFilterScrollEdges]);
+
+  useEffect(() => {
+    const scrollEl = filterScrollRef.current;
+    const trackEl = filterTrackRef.current;
+    if (!scrollEl || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => {
+      updateFilterScrollEdges();
+      measureActiveTab();
+    });
+    ro.observe(scrollEl);
+    if (trackEl) ro.observe(trackEl);
+    return () => ro.disconnect();
+  }, [updateFilterScrollEdges, measureActiveTab]);
+
+  useEffect(() => {
+    const onPointerMove = (e: PointerEvent) => {
+      const drag = filterDragRef.current;
+      const el = filterScrollRef.current;
+      if (!drag || !el) return;
+      const dx = e.clientX - drag.startX;
+      if (!drag.moved && Math.abs(dx) > 4) {
+        drag.moved = true;
+        suppressFilterClickRef.current = true;
+        setIsDraggingFilters(true);
+      }
+      if (drag.moved) {
+        el.scrollLeft = drag.startScrollLeft - dx;
+      }
+    };
+
+    const onPointerUp = () => {
+      if (!filterDragRef.current) return;
+      const wasMoved = filterDragRef.current.moved;
+      filterDragRef.current = null;
+      setIsDraggingFilters(false);
+      if (wasMoved) {
+        window.setTimeout(() => {
+          suppressFilterClickRef.current = false;
+        }, 0);
+      }
+    };
+
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", onPointerUp);
+    window.addEventListener("pointercancel", onPointerUp);
+    return () => {
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", onPointerUp);
+      window.removeEventListener("pointercancel", onPointerUp);
+    };
+  }, []);
+
+  const canScrollFilters = filterScrollEdges.left || filterScrollEdges.right;
+  const filterMaskImage =
+    filterScrollEdges.left && filterScrollEdges.right
+      ? "linear-gradient(to right, transparent 0, #000 32px, #000 calc(100% - 32px), transparent 100%)"
+      : filterScrollEdges.left
+        ? "linear-gradient(to right, transparent 0, #000 32px, #000 100%)"
+        : filterScrollEdges.right
+          ? "linear-gradient(to right, #000 0, #000 calc(100% - 32px), transparent 100%)"
+          : undefined;
 
   const visibleCourses = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -1115,41 +1255,101 @@ export function HomePage() {
       </header>
 
       <div className="mt-5 flex flex-col gap-3 border-b border-border/50 pb-3 sm:flex-row sm:items-center sm:justify-between">
-        <div className="min-w-0 flex-1 overflow-x-auto custom-scrollbar-sm">
-          <div className="inline-flex h-11 items-center gap-1 rounded-lg bg-secondary/75 p-1">
+        <div
+          ref={filterScrollRef}
+          onScroll={updateFilterScrollEdges}
+          onPointerDown={(e) => {
+            if (e.button !== 0) return;
+            const el = filterScrollRef.current;
+            if (!el || el.scrollWidth <= el.clientWidth + 2) return;
+            filterDragRef.current = {
+              startX: e.clientX,
+              startScrollLeft: el.scrollLeft,
+              moved: false,
+            };
+          }}
+          onClickCapture={(e) => {
+            if (!suppressFilterClickRef.current) return;
+            e.preventDefault();
+            e.stopPropagation();
+            suppressFilterClickRef.current = false;
+          }}
+          className={cn(
+            "min-w-0 flex-1 overflow-x-auto scrollbar-none",
+            canScrollFilters && (isDraggingFilters ? "cursor-grabbing select-none" : "cursor-grab"),
+          )}
+          style={
+            filterMaskImage
+              ? { WebkitMaskImage: filterMaskImage, maskImage: filterMaskImage }
+              : undefined
+          }
+        >
+          <div
+            ref={filterTrackRef}
+            role="tablist"
+            aria-label="Course filters"
+            className="relative inline-flex h-11 select-none items-center gap-1 rounded-lg bg-secondary/75 p-1"
+          >
+            <span
+              aria-hidden="true"
+              className={cn(
+                "pointer-events-none absolute top-1 bottom-1 left-0 rounded-sm bg-card dark:bg-accent",
+                tabIndicator.ready &&
+                  "transition-[transform,width] duration-250 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none",
+              )}
+              style={{
+                width: `${tabIndicator.width}px`,
+                transform: `translate3d(${tabIndicator.left}px, 0, 0)`,
+                opacity: tabIndicator.width > 0 ? 1 : 0,
+              }}
+            />
             {STATUS_FILTERS.map((item) => (
-              <Button
+              <button
                 key={item}
+                ref={(el) => {
+                  if (el) tabButtonRefs.current.set(item, el);
+                  else tabButtonRefs.current.delete(item);
+                }}
                 type="button"
-                size="sm"
-                variant="ghost"
+                role="tab"
+                aria-selected={filter === item}
                 onClick={() => setFilter(item)}
                 className={cn(
-                  "h-9 shrink-0 rounded-sm px-3.5 text-xs font-normal text-muted-foreground shadow-none sm:px-4 sm:text-sm",
-                  filter === item &&
-                    "bg-card font-medium text-foreground shadow-card hover:bg-card",
+                  "relative z-10 inline-flex h-9 shrink-0 cursor-pointer items-center justify-center whitespace-nowrap rounded-sm px-3.5 text-xs font-medium transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:px-4 sm:text-sm",
+                  filter === item
+                    ? "text-foreground"
+                    : "text-muted-foreground hover:text-foreground",
                 )}
               >
                 {item}
-              </Button>
+              </button>
             ))}
             {allTags.length > 0 && (
-              <span className="mx-1 h-4 w-px shrink-0 bg-border/60" aria-hidden="true" />
+              <span
+                className="relative z-10 mx-1 h-4 w-px shrink-0 bg-border/60"
+                aria-hidden="true"
+              />
             )}
             {allTags.map((tag) => (
-              <Button
+              <button
                 key={tag}
+                ref={(el) => {
+                  if (el) tabButtonRefs.current.set(tag, el);
+                  else tabButtonRefs.current.delete(tag);
+                }}
                 type="button"
-                size="sm"
-                variant="ghost"
+                role="tab"
+                aria-selected={filter === tag}
                 onClick={() => setFilter(filter === tag ? "All" : tag)}
                 className={cn(
-                  "h-9 shrink-0 rounded-sm px-3.5 text-xs font-normal text-muted-foreground shadow-none sm:px-4 sm:text-sm",
-                  filter === tag && "bg-card font-medium text-foreground shadow-card hover:bg-card",
+                  "relative z-10 inline-flex h-9 shrink-0 cursor-pointer items-center justify-center whitespace-nowrap rounded-sm px-3.5 text-xs font-medium transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:px-4 sm:text-sm",
+                  filter === tag
+                    ? "text-foreground"
+                    : "text-muted-foreground hover:text-foreground",
                 )}
               >
                 {tag}
-              </Button>
+              </button>
             ))}
           </div>
         </div>

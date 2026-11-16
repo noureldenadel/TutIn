@@ -1,7 +1,14 @@
 import nspell, { type NSpellInstance } from "nspell";
 
-import { sanitizeClipboardHtml } from "@/components/notes/markdown/note-dom";
-import { copyImageToClipboard, copyTextToClipboard } from "@/lib/clipboard";
+import {
+  extractRangeClipboardPayload,
+  sanitizeClipboardHtml,
+} from "@/components/notes/markdown/note-dom";
+import {
+  copyImageToClipboard,
+  copyRichContentToClipboard,
+  copyTextToClipboard,
+} from "@/lib/clipboard";
 
 const CUSTOM_DICT_STORAGE_KEY = "tutin_custom_dictionary_v1";
 const AFF_URL = `${import.meta.env.BASE_URL}dictionaries/en/index.aff`;
@@ -23,6 +30,7 @@ export interface EditorContextHooks {
   onAfterPaste?: () => void;
   onPasteImage?: (file: File) => Promise<void>;
   onTryPasteVaultHtml?: (rawHtml: string) => Promise<boolean>;
+  onCutRange?: (range: Range) => void;
 }
 
 const editorHooksMap = new WeakMap<HTMLElement, EditorContextHooks>();
@@ -205,6 +213,7 @@ export interface ContextMenuTargetAnalysis {
   imageSrc: string | null;
   isEditable: boolean;
   selectedText: string;
+  hasSelection: boolean;
   wordMatch: SpellcheckTargetMatch | null;
   cut: () => Promise<void>;
   copy: () => Promise<void>;
@@ -584,6 +593,7 @@ export function inspectAppContextTarget({
       imageSrc,
       isEditable: true,
       selectedText,
+      hasSelection: Boolean(selectedText),
       wordMatch,
       cut: async () => {
         if (!selectedText) return;
@@ -605,13 +615,15 @@ export function inspectAppContextTarget({
   // Inspect contentEditable or selectable note surface
   let savedRange: Range | null = null;
   let selectedText = "";
+  let selectedPayload: ReturnType<typeof extractRangeClipboardPayload> | null = null;
   const sel = window.getSelection();
   if (sel && sel.rangeCount > 0) {
     const active = sel.getRangeAt(0);
     if (!editableRoot || editableRoot.contains(active.commonAncestorContainer)) {
       savedRange = active.cloneRange();
       if (!active.collapsed) {
-        selectedText = sel.toString();
+        selectedPayload = extractRangeClipboardPayload(active, sel.toString());
+        selectedText = selectedPayload.plain;
       }
     }
   }
@@ -630,7 +642,8 @@ export function inspectAppContextTarget({
         sel?.removeAllRanges();
         sel?.addRange(clickedWord.range);
         savedRange = clickedWord.range.cloneRange();
-        selectedText = clickedWord.word;
+        selectedPayload = extractRangeClipboardPayload(savedRange, clickedWord.word);
+        selectedText = selectedPayload.plain;
       } else if (!savedRange) {
         const point = getCaretPoint(clientX, clientY);
         if (point && editableRoot.contains(point.node)) {
@@ -661,19 +674,29 @@ export function inspectAppContextTarget({
     }
   }
 
+  const hasSelection = Boolean(selectedPayload?.hasContent);
+
   return {
     imageSrc,
     isEditable,
     selectedText,
+    hasSelection,
     wordMatch,
     cut: async () => {
-      if (!editableRoot || !savedRange || savedRange.collapsed || !selectedText) return;
-      await copyTextToClipboard(selectedText);
-      applyContentEditableReplacement(editableRoot, savedRange, "");
+      if (!editableRoot || !savedRange || savedRange.collapsed || !selectedPayload?.hasContent) {
+        return;
+      }
+      await copyRichContentToClipboard(selectedPayload.html, selectedPayload.plain);
+      const hooks = editorHooksMap.get(editableRoot);
+      if (hooks?.onCutRange) {
+        hooks.onCutRange(savedRange);
+      } else {
+        applyContentEditableReplacement(editableRoot, savedRange, "");
+      }
     },
     copy: async () => {
-      if (!selectedText) return;
-      await copyTextToClipboard(selectedText);
+      if (!selectedPayload?.hasContent) return;
+      await copyRichContentToClipboard(selectedPayload.html, selectedPayload.plain);
     },
     paste: async () => {
       if (!editableRoot) return false;

@@ -122,7 +122,7 @@ export function EditorAndImageMenuSections({
   const spellResult = analysis.wordMatch ? checkWordSpelling(analysis.wordMatch.word) : null;
   const hasSpellingSection = Boolean(analysis.wordMatch && spellResult && !spellResult.isCorrect);
   const hasImageSection = Boolean(analysis.imageSrc);
-  const hasSelection = Boolean(analysis.selectedText);
+  const hasSelection = analysis.hasSelection;
   const hasClipboardSection = analysis.isEditable || hasSelection;
 
   if (!hasSpellingSection && !hasImageSection && !hasClipboardSection) {

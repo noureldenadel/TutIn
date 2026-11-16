@@ -122,7 +122,7 @@ function Heatmap({ byDate }: { byDate: Map<string, { min: number; lessons: numbe
               onClick={() => setRange(k)}
               className={cn(
                 "rounded-sm px-3 py-1.5 text-muted-foreground transition",
-                range === k && "bg-card text-foreground shadow-card",
+                range === k && "bg-card text-foreground shadow-card dark:bg-accent",
               )}
             >
               {l}

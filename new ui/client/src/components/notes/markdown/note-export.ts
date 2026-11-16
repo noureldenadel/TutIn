@@ -1,4 +1,5 @@
 import { HEADING_TAG_SET, stripLiveSyntaxArtifacts } from "./note-dom";
+import { getLiBulletMarker, getLiDelimMarker } from "./note-specs";
 
 export function noteHtmlToMarkdown(html: string): string {
   if (!html) return "";
@@ -76,11 +77,13 @@ export function noteHtmlToMarkdown(html: string): string {
             .map(renderInline)
             .join("")
             .trim();
+          const bullet = getLiBulletMarker(li as HTMLElement);
+          const delim = getLiDelimMarker(li as HTMLElement);
           const prefix = isTask
-            ? `- [${isChecked ? "x" : " "}] `
+            ? `${bullet} [${isChecked ? "x" : " "}] `
             : tag === "ol"
-              ? `${start + idx}. `
-              : "- ";
+              ? `${start + idx}${delim} `
+              : `${bullet} `;
           const nestedMd = nested.map((n) => renderBlock(n, `${indent}  `)).filter(Boolean);
           return [`${indent}${prefix}${ownText}`, ...nestedMd].join("\n");
         })

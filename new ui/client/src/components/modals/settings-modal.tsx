@@ -55,12 +55,14 @@ import { hydrateInstructorAvatars } from "@/components/layout/instructor-avatar"
 import {
   DEFAULT_APP_SETTINGS,
   DEFAULT_OPENROUTER_MODEL,
+  THEME_PRESETS,
   hydrateAppSettingsFromServer,
   readAppSettings,
   writeAppSettings,
   type AppSettings,
   type ComputeDevice,
   type ThemeMode,
+  type ThemePreset,
   type WhisperModelPreset,
 } from "@/lib/app-settings";
 
@@ -94,16 +96,19 @@ const SHORTCUT_GROUPS: ShortcutGroup[] = [
     title: "Player",
     items: [
       { action: "Play or pause", keys: "Space / K" },
+      { action: "Temporary 2× speed", keys: "Hold Space / Video" },
       { action: "Seek back or forward 5s", keys: "Left / Right" },
       { action: "Seek back or forward 10s", keys: "J / L" },
+      { action: "Step 1 frame (when paused)", keys: ", / ." },
       { action: "Volume up or down 5%", keys: "Up / Down" },
       { action: "Mute or unmute", keys: "M" },
       { action: "Toggle subtitles", keys: "C" },
-      { action: "Picture-in-Picture", keys: "P" },
-      { action: "Toggle fullscreen", keys: "F" },
+      { action: "Toggle sidebar (Theater view)", keys: "T" },
+      { action: "Picture-in-Picture", keys: "P / I" },
+      { action: "Toggle fullscreen", keys: "F / Double-click" },
       { action: "Next or previous lesson", keys: "Shift+N / Shift+P" },
       { action: "Playback speed", keys: "< / >" },
-      { action: "Jump to 0% - 90%", keys: "0 - 9" },
+      { action: "Jump to start, end, or 0%–90%", keys: "Home / End / 0–9" },
     ],
   },
   {
@@ -169,7 +174,7 @@ function SegmentedControl<T extends string | number>({
           className={cn(
             "rounded-md px-3 py-1 text-xs font-medium transition-colors disabled:cursor-not-allowed",
             value === opt.value
-              ? "bg-card text-foreground shadow-card"
+              ? "bg-card text-foreground shadow-card dark:bg-accent"
               : "text-muted-foreground hover:text-foreground",
           )}
         >
@@ -184,13 +189,19 @@ export function SettingsModal({
   open,
   onOpenChange,
   theme,
+  isDark = false,
   onThemeChange,
+  themePreset,
+  onThemePresetChange,
   onOpenWelcomeGuide,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   theme: ThemeMode;
+  isDark?: boolean;
   onThemeChange: (theme: ThemeMode) => void;
+  themePreset: ThemePreset;
+  onThemePresetChange: (preset: ThemePreset) => void;
   onOpenWelcomeGuide?: () => void;
 }) {
   const { courses, refresh: refreshCourses } = useCoursesList();
@@ -349,6 +360,7 @@ export function SettingsModal({
       ) {
         onThemeChange(nextSettings.theme);
       }
+      onThemePresetChange(nextSettings.themePreset);
 
       window.dispatchEvent(new CustomEvent(COURSES_CHANGED_EVENT));
       window.dispatchEvent(new CustomEvent(COURSE_UPDATED_EVENT));
@@ -380,6 +392,7 @@ export function SettingsModal({
       writeAppSettings(DEFAULT_APP_SETTINGS, { skipServerSync: true });
       setSettings(DEFAULT_APP_SETTINGS);
       onThemeChange("system");
+      onThemePresetChange(DEFAULT_APP_SETTINGS.themePreset);
 
       await Promise.all([hydrateInstructorAvatars(true), fetchCourses(true)]);
       window.dispatchEvent(new CustomEvent(COURSES_CHANGED_EVENT));
@@ -400,6 +413,7 @@ export function SettingsModal({
     setSettings(DEFAULT_APP_SETTINGS);
     writeAppSettings(DEFAULT_APP_SETTINGS);
     onThemeChange("system");
+    onThemePresetChange(DEFAULT_APP_SETTINGS.themePreset);
     toast.success("Preferences reset to defaults");
   };
 
@@ -488,6 +502,47 @@ export function SettingsModal({
                         { value: "system", label: "System" },
                       ]}
                     />
+                  </div>
+
+                  <div className="space-y-3 py-5">
+                    <Label className="text-sm font-medium">Theme</Label>
+                    <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                      {THEME_PRESETS.map((preset) => {
+                        const selected = themePreset === preset.id;
+                        const swatch = isDark ? preset.darkSwatch : preset.lightSwatch;
+                        return (
+                          <button
+                            key={preset.id}
+                            type="button"
+                            onClick={() => onThemePresetChange(preset.id)}
+                            aria-pressed={selected}
+                            className={cn(
+                              "flex flex-col gap-2 rounded-lg px-3 py-2.5 text-left transition-all",
+                              selected
+                                ? "bg-card text-foreground shadow-card ring-1 ring-foreground/25 dark:bg-accent"
+                                : "bg-secondary/50 text-muted-foreground hover:bg-secondary hover:text-foreground",
+                            )}
+                          >
+                            <span
+                              className="flex h-4 w-full overflow-hidden rounded-[4px] ring-1 ring-border/70"
+                              aria-hidden="true"
+                            >
+                              <span className="flex-1" style={{ backgroundColor: swatch[0] }} />
+                              <span className="flex-1" style={{ backgroundColor: swatch[1] }} />
+                              <span className="flex-1" style={{ backgroundColor: swatch[2] }} />
+                            </span>
+                            <div className="flex items-baseline justify-between gap-2">
+                              <span className="text-xs font-semibold text-foreground">
+                                {preset.label}
+                              </span>
+                              <span className="truncate text-[10.5px] text-muted-foreground">
+                                {preset.hint.split(" · ")[1] ?? preset.hint}
+                              </span>
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
                   </div>
 
                   <div className="flex items-center justify-between gap-4 py-5">
@@ -712,7 +767,11 @@ export function SettingsModal({
                         aria-label={showGoogleApiKey ? "Hide API key" : "Show API key"}
                         className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
                       >
-                        {showGoogleApiKey ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+                        {showGoogleApiKey ? (
+                          <EyeOff className="size-4" />
+                        ) : (
+                          <Eye className="size-4" />
+                        )}
                       </button>
                     </div>
                   </div>

@@ -148,9 +148,7 @@ export function TranscriptTranslateModal({
     );
   }, [isSingleLesson, selectedSourceTrackId, singleLessonTracks]);
 
-  const effectiveTranslateSourceLang = (
-    selectedSourceTrack?.lang || spokenLang
-  ).toLowerCase();
+  const effectiveTranslateSourceLang = (selectedSourceTrack?.lang || spokenLang).toLowerCase();
 
   const availableTargetLanguages = useMemo(
     () => SUPPORTED_LANGUAGES.filter((l) => l.code !== effectiveTranslateSourceLang),
@@ -361,7 +359,9 @@ export function TranscriptTranslateModal({
 
             <div className="flex items-center justify-between rounded-lg border border-border/50 bg-secondary/40 px-3 py-2 text-xs text-muted-foreground">
               <span>Output track</span>
-              <span className="font-medium text-foreground">{getLanguageName(spokenLang)} · AI</span>
+              <span className="font-medium text-foreground">
+                {getLanguageName(spokenLang)} · AI
+              </span>
             </div>
 
             {isSingleLesson && hasExistingSpokenAiTrack && (
@@ -430,7 +430,9 @@ export function TranscriptTranslateModal({
 
             <div className="flex items-center justify-between rounded-lg border border-border/50 bg-secondary/40 px-3 py-2 text-xs text-muted-foreground">
               <span>Output track</span>
-              <span className="font-medium text-foreground">{getLanguageName(targetLang)} · AI</span>
+              <span className="font-medium text-foreground">
+                {getLanguageName(targetLang)} · AI
+              </span>
             </div>
 
             {isSingleLesson && hasExistingTargetAiTrack && (

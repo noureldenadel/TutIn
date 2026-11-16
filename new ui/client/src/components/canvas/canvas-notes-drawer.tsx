@@ -126,7 +126,7 @@ export function CanvasNotesDrawer({
               onClick={() => setFilter(id)}
               className={cn(
                 "rounded-sm py-1 text-muted-foreground transition-colors",
-                filter === id && "bg-card text-foreground shadow-card",
+                filter === id && "bg-card text-foreground shadow-card dark:bg-accent",
               )}
             >
               {label}

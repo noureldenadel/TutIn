@@ -98,8 +98,8 @@ export interface CanvasSummaryMetrics {
 
 export const CANVAS_STORAGE_PREFIX = "tutin_course_canvas_";
 export const CANVAS_GROUP_HEADER_HEIGHT = 48;
-export const CANVAS_CARD_WIDTH = 304;
-export const CANVAS_GROUP_WIDTH = 340;
+export const CANVAS_CARD_WIDTH = 320;
+export const CANVAS_GROUP_WIDTH = 356;
 export const CANVAS_PADDING_X = 18;
 export const CANVAS_PADDING_BOTTOM = 22;
 export const CANVAS_CARD_GAP = 24;
@@ -108,7 +108,36 @@ export const CANVAS_START_X = 80;
 export const CANVAS_START_Y = 96;
 export const CANVAS_MIN_ZOOM = 0.25;
 export const CANVAS_MAX_ZOOM = 3;
+export const CARD_FIT_MAX_WIDTH = 760;
 const HYSTERESIS_MARGIN = 18;
+
+export function getCardMinWidth(type: CanvasCardType): number {
+  switch (type) {
+    case "text":
+      return 100;
+    case "video-note":
+      return 180;
+    case "image":
+    case "canvas-note":
+    default:
+      return 120;
+  }
+}
+
+export function getCardMinHeight(type: CanvasCardType): number {
+  switch (type) {
+    case "text":
+      return 48;
+    case "canvas-note":
+      return 52;
+    case "video-note":
+      return 72;
+    case "image":
+      return 88;
+    default:
+      return 52;
+  }
+}
 
 export function getVideoArtboardId(lessonIdx: number, courseId?: string): string {
   return courseId ? `vgroup-${courseId}-${lessonIdx}` : `vgroup-${lessonIdx}`;
@@ -185,21 +214,30 @@ export function estimateVideoNoteCardHeight(
   html: string,
   imageCount: number,
   cardWidth = CANVAS_CARD_WIDTH,
+  cardType: CanvasCardType = "video-note",
 ): number {
   const plainText = stripHtmlToText(html);
   const blockBreaks = (html.match(/<(?:p|div|li|h[1-6]|blockquote|tr|br)\b/gi) ?? []).length;
-  const charsPerLine = Math.max(26, Math.round((cardWidth - 28) / 7.8));
+  const innerWidth = Math.max(160, cardWidth - 32);
+  const charsPerLine = Math.max(26, Math.round(innerWidth / 7.8));
   const lineEstimate = Math.max(
     plainText.length > 0 ? 1 : 0,
     Math.ceil(plainText.length / charsPerLine) + Math.floor(blockBreaks * 0.45),
   );
-  const textHeight = plainText.length > 0 ? 58 + lineEstimate * 22 : 48;
+  const baseChrome = cardType === "video-note" ? 68 : cardType === "text" ? 26 : 34;
+  const textHeight =
+    plainText.length > 0
+      ? baseChrome + lineEstimate * 22
+      : cardType === "video-note"
+        ? 56
+        : baseChrome;
   const imgTags = (html.match(/<img\b/gi) ?? []).length;
   const effectiveImages = Math.max(imageCount, imgTags);
   // Embedded screenshots scale cleanly inside the card column (capped at 380px high)
-  const estImgHeight = Math.min(380, Math.round((cardWidth - 28) * (9 / 16))) + 16;
+  const estImgHeight = Math.min(380, Math.round(innerWidth * (9 / 16))) + 16;
   const mediaHeight = effectiveImages * estImgHeight;
-  return Math.max(128, Math.min(2200, textHeight + mediaHeight));
+  const minFloor = cardType === "video-note" ? 136 : getCardMinHeight(cardType);
+  return Math.max(minFloor, Math.min(2200, textHeight + mediaHeight));
 }
 
 export function createEmptyCanvasState(courseId: string): CourseCanvasState {
@@ -1287,6 +1325,69 @@ export function applyCardHeightUpdate(
   if (target.groupId) {
     const group = nextGroups.find((g) => g.id === target.groupId);
     if (group && group.type === "video-artboard" && group.layoutMode === "auto") {
+      const prevH = group.height;
+      reflowAutoVideoGroup(group, nextCards);
+      if (group.height > prevH) {
+        shiftGroupsBelowColumn(nextGroups, nextCards, nextStrokes, group, group.height - prevH);
+      }
+    }
+  }
+
+  fitArtboardsToChildren(nextGroups, nextCards);
+
+  return {
+    ...state,
+    groups: nextGroups,
+    cards: nextCards,
+    strokes: nextStrokes,
+  };
+}
+
+/**
+ * Fits a card's width/height to a target size (growing or shrinking to remove empty space)
+ * and keeps auto video artboards packed without leaving vertical gaps.
+ */
+export function resizeCardToFit(
+  state: CourseCanvasState,
+  cardId: string,
+  nextWidth: number,
+  nextHeight: number,
+): CourseCanvasState {
+  const target = state.cards.find((c) => c.id === cardId);
+  if (!target) return state;
+
+  const clampedWidth = Math.max(
+    getCardMinWidth(target.type),
+    Math.min(2400, Math.round(nextWidth)),
+  );
+  const clampedHeight = Math.max(
+    getCardMinHeight(target.type),
+    Math.min(12000, Math.ceil(nextHeight)),
+  );
+  if (clampedWidth === target.width && clampedHeight === target.height) return state;
+
+  const nextGroups = state.groups.map((g) => ({ ...g }));
+  const now = Date.now();
+  const nextCards = state.cards.map((c) =>
+    c.id === cardId
+      ? { ...c, width: clampedWidth, height: clampedHeight, updatedAt: now }
+      : { ...c },
+  );
+  const nextStrokes = state.strokes.map((s) => ({
+    ...s,
+    points: s.points.map((pt) => [...pt] as [number, number, number]),
+  }));
+
+  if (target.groupId) {
+    const group = nextGroups.find((g) => g.id === target.groupId);
+    if (group && group.type === "video-artboard" && group.layoutMode === "auto") {
+      const inGroup = nextCards.filter((c) => c.groupId === group.id);
+      let maxChildWidth = CANVAS_CARD_WIDTH;
+      for (const c of inGroup) {
+        if (c.width > maxChildWidth) maxChildWidth = c.width;
+      }
+      group.width = Math.max(CANVAS_GROUP_WIDTH, maxChildWidth + CANVAS_PADDING_X * 2);
+
       const prevH = group.height;
       reflowAutoVideoGroup(group, nextCards);
       if (group.height > prevH) {

@@ -1,5 +1,4 @@
-@import "tailwindcss" source(none);
-@source "../src";
+@import "tailwindcss";
 @import "tw-animate-css";
 
 @custom-variant dark (&:is(.dark *));
@@ -62,7 +61,7 @@
   --color-sidebar-ring: var(--sidebar-ring);
   --color-shell: var(--shell);
   --color-primary-soft: var(--primary-soft);
-  --color-sky: oklch(0.55 0.012 255);
+  --color-sky: var(--sky);
   --color-streak: oklch(0.72 0.15 70);
   --color-sky-foreground: oklch(0.96 0.004 255);
   --color-player: oklch(0.13 0.006 275);
@@ -81,8 +80,310 @@
   --shadow-status: var(--shadow-status);
 }
 
+/* Default theme preset: Obsidian (Linear-inspired cool slate) */
 :root {
   --radius: 0.5rem;
+  --shell: oklch(0.935 0.005 258);
+  --background: oklch(0.964 0.004 258);
+  --foreground: oklch(0.18 0.014 258);
+  --card: oklch(0.993 0.002 258);
+  --card-foreground: oklch(0.18 0.014 258);
+  --popover: oklch(0.994 0.002 258);
+  --popover-foreground: oklch(0.18 0.014 258);
+  --primary: oklch(0.22 0.015 258);
+  --primary-foreground: oklch(0.985 0.002 258);
+  --primary-soft: oklch(0.912 0.008 258);
+  --secondary: oklch(0.925 0.006 258);
+  --secondary-foreground: oklch(0.24 0.014 258);
+  --muted: oklch(0.925 0.006 258);
+  --muted-foreground: oklch(0.485 0.012 258);
+  --accent: oklch(0.91 0.008 258);
+  --accent-foreground: oklch(0.22 0.014 258);
+  --destructive: oklch(0.53 0.195 25);
+  --destructive-foreground: oklch(0.985 0.004 25);
+  --sky: oklch(0.58 0.14 235);
+  --border: oklch(0.885 0.007 258);
+  --input: oklch(0.865 0.008 258);
+  --ring: oklch(0.48 0.016 258);
+  --course-ink: oklch(0.24 0.008 258);
+  --course-overlay: oklch(0.15 0.006 258 / 0.22);
+  --progress-surface: oklch(0.18 0.006 258 / 0.8);
+  --progress-track: oklch(0.92 0.004 258 / 0.28);
+  --progress-foreground: oklch(0.95 0.003 258);
+  --scrollbar-track: transparent;
+  --scrollbar-thumb: color-mix(in oklab, var(--foreground) 18%, transparent);
+  --scrollbar-thumb-hover: color-mix(in oklab, var(--foreground) 38%, transparent);
+  --shadow-card: 0 1px 3px 0 oklch(0.2 0.012 258 / 0.07), 0 0 0 1px oklch(0.2 0.012 258 / 0.045);
+  --shadow-workspace: 0 18px 48px oklch(0.2 0.012 258 / 0.11), 0 0 0 1px oklch(0.2 0.012 258 / 0.06);
+  --shadow-brand: 0 6px 18px oklch(0.2 0.01 258 / 0.16);
+  --shadow-status: 0 0 0 4px oklch(0.48 0.012 258 / 0.12);
+  --chart-1: oklch(0.56 0.16 278);
+  --chart-2: oklch(0.58 0.14 235);
+  --chart-3: oklch(0.66 0.16 75);
+  --chart-4: oklch(0.6 0.14 155);
+  --chart-5: oklch(0.62 0.15 15);
+  --sidebar: oklch(0.984 0.003 247.858);
+  --sidebar-foreground: oklch(0.129 0.042 264.695);
+  --sidebar-primary: oklch(0.208 0.042 265.755);
+  --sidebar-primary-foreground: oklch(0.984 0.003 247.858);
+  --sidebar-accent: oklch(0.968 0.007 247.896);
+  --sidebar-accent-foreground: oklch(0.208 0.042 265.755);
+  --sidebar-border: oklch(0.929 0.013 255.508);
+  --sidebar-ring: oklch(0.704 0.04 256.788);
+}
+
+.dark {
+  --shell: oklch(0.132 0.006 260);
+  --background: oklch(0.16 0.007 260);
+  --foreground: oklch(0.955 0.005 255);
+  --card: oklch(0.2 0.008 260);
+  --card-foreground: oklch(0.955 0.005 255);
+  --popover: oklch(0.22 0.008 260);
+  --popover-foreground: oklch(0.965 0.004 255);
+  --primary: oklch(0.935 0.006 255);
+  --primary-foreground: oklch(0.17 0.008 260);
+  --primary-soft: oklch(0.258 0.01 260);
+  --secondary: oklch(0.244 0.009 260);
+  --secondary-foreground: oklch(0.925 0.005 255);
+  --muted: oklch(0.244 0.009 260);
+  --muted-foreground: oklch(0.69 0.01 258);
+  --accent: oklch(0.278 0.01 260);
+  --accent-foreground: oklch(0.945 0.004 255);
+  --destructive: oklch(0.655 0.19 24);
+  --destructive-foreground: oklch(0.16 0.015 24);
+  --sky: oklch(0.72 0.13 235);
+  --border: oklch(1 0 0 / 0.1);
+  --input: oklch(1 0 0 / 0.14);
+  --ring: oklch(0.7 0.01 258);
+  --course-ink: oklch(0.22 0.006 260);
+  --course-overlay: oklch(0.08 0.005 260 / 0.34);
+  --progress-surface: oklch(0.1 0.005 260 / 0.84);
+  --progress-track: oklch(0.9 0.004 260 / 0.2);
+  --progress-foreground: oklch(0.94 0.004 258);
+  --scrollbar-track: transparent;
+  --scrollbar-thumb: color-mix(in oklab, var(--foreground) 18%, transparent);
+  --scrollbar-thumb-hover: color-mix(in oklab, var(--foreground) 38%, transparent);
+  --shadow-card: 0 2px 8px 0 oklch(0 0 0 / 0.32), 0 0 0 1px oklch(1 0 0 / 0.055);
+  --shadow-workspace: 0 22px 60px oklch(0 0 0 / 0.45), 0 0 0 1px oklch(1 0 0 / 0.08);
+  --shadow-brand: 0 8px 24px oklch(0 0 0 / 0.28);
+  --shadow-status: 0 0 0 4px oklch(0.72 0.006 258 / 0.12);
+  --chart-1: oklch(0.7 0.15 278);
+  --chart-2: oklch(0.72 0.13 235);
+  --chart-3: oklch(0.76 0.15 75);
+  --chart-4: oklch(0.72 0.13 155);
+  --chart-5: oklch(0.74 0.14 15);
+  --sidebar: oklch(0.208 0.042 265.755);
+  --sidebar-foreground: oklch(0.984 0.003 247.858);
+  --sidebar-primary: oklch(0.488 0.243 264.376);
+  --sidebar-primary-foreground: oklch(0.984 0.003 247.858);
+  --sidebar-accent: oklch(0.279 0.041 260.031);
+  --sidebar-accent-foreground: oklch(0.984 0.003 247.858);
+  --sidebar-border: oklch(1 0 0 / 10%);
+  --sidebar-ring: oklch(0.551 0.027 264.364);
+}
+
+/* Theme Preset 2: Zinc (shadcn / Tailwind cool metallic grey) */
+[data-theme-preset="zinc"] {
+  --shell: oklch(0.942 0.003 285);
+  --background: oklch(0.97 0.002 285);
+  --foreground: oklch(0.19 0.008 285);
+  --card: oklch(0.994 0.001 285);
+  --card-foreground: oklch(0.19 0.008 285);
+  --popover: oklch(0.994 0.001 285);
+  --popover-foreground: oklch(0.19 0.008 285);
+  --primary: oklch(0.23 0.008 285);
+  --primary-foreground: oklch(0.985 0.001 285);
+  --primary-soft: oklch(0.92 0.005 285);
+  --secondary: oklch(0.932 0.004 285);
+  --secondary-foreground: oklch(0.25 0.008 285);
+  --muted: oklch(0.932 0.004 285);
+  --muted-foreground: oklch(0.505 0.008 285);
+  --accent: oklch(0.916 0.005 285);
+  --accent-foreground: oklch(0.23 0.008 285);
+  --border: oklch(0.892 0.005 285);
+  --input: oklch(0.875 0.005 285);
+  --ring: oklch(0.5 0.009 285);
+  --shadow-card: 0 1px 3px 0 oklch(0.2 0.006 285 / 0.07), 0 0 0 1px oklch(0.2 0.006 285 / 0.045);
+  --shadow-workspace: 0 18px 48px oklch(0.2 0.006 285 / 0.1), 0 0 0 1px oklch(0.2 0.006 285 / 0.06);
+}
+
+.dark[data-theme-preset="zinc"] {
+  --shell: oklch(0.14 0.004 285);
+  --background: oklch(0.168 0.005 285);
+  --foreground: oklch(0.958 0.003 285);
+  --card: oklch(0.21 0.006 285);
+  --card-foreground: oklch(0.958 0.003 285);
+  --popover: oklch(0.23 0.006 285);
+  --popover-foreground: oklch(0.968 0.003 285);
+  --primary: oklch(0.938 0.004 285);
+  --primary-foreground: oklch(0.18 0.006 285);
+  --primary-soft: oklch(0.272 0.007 285);
+  --secondary: oklch(0.258 0.006 285);
+  --secondary-foreground: oklch(0.93 0.003 285);
+  --muted: oklch(0.258 0.006 285);
+  --muted-foreground: oklch(0.695 0.008 285);
+  --accent: oklch(0.292 0.007 285);
+  --accent-foreground: oklch(0.95 0.003 285);
+  --border: oklch(1 0 0 / 0.1);
+  --input: oklch(1 0 0 / 0.14);
+  --ring: oklch(0.71 0.008 285);
+}
+
+/* Theme Preset 3: Neutral (Vercel Geist zero-chroma pure greyscale) */
+[data-theme-preset="neutral"] {
+  --shell: oklch(0.94 0 0);
+  --background: oklch(0.968 0 0);
+  --foreground: oklch(0.185 0 0);
+  --card: oklch(0.994 0 0);
+  --card-foreground: oklch(0.185 0 0);
+  --popover: oklch(0.994 0 0);
+  --popover-foreground: oklch(0.185 0 0);
+  --primary: oklch(0.215 0 0);
+  --primary-foreground: oklch(0.985 0 0);
+  --primary-soft: oklch(0.918 0 0);
+  --secondary: oklch(0.93 0 0);
+  --secondary-foreground: oklch(0.24 0 0);
+  --muted: oklch(0.93 0 0);
+  --muted-foreground: oklch(0.5 0 0);
+  --accent: oklch(0.914 0 0);
+  --accent-foreground: oklch(0.215 0 0);
+  --border: oklch(0.89 0 0);
+  --input: oklch(0.872 0 0);
+  --ring: oklch(0.49 0 0);
+  --course-ink: oklch(0.24 0 0);
+  --course-overlay: oklch(0.15 0 0 / 0.22);
+  --shadow-card: 0 1px 3px 0 oklch(0.2 0 0 / 0.07), 0 0 0 1px oklch(0.2 0 0 / 0.045);
+  --shadow-workspace: 0 18px 48px oklch(0.2 0 0 / 0.1), 0 0 0 1px oklch(0.2 0 0 / 0.06);
+}
+
+.dark[data-theme-preset="neutral"] {
+  --shell: oklch(0.135 0 0);
+  --background: oklch(0.162 0 0);
+  --foreground: oklch(0.955 0 0);
+  --card: oklch(0.204 0 0);
+  --card-foreground: oklch(0.955 0 0);
+  --popover: oklch(0.224 0 0);
+  --popover-foreground: oklch(0.965 0 0);
+  --primary: oklch(0.935 0 0);
+  --primary-foreground: oklch(0.17 0 0);
+  --primary-soft: oklch(0.262 0 0);
+  --secondary: oklch(0.25 0 0);
+  --secondary-foreground: oklch(0.925 0 0);
+  --muted: oklch(0.25 0 0);
+  --muted-foreground: oklch(0.69 0 0);
+  --accent: oklch(0.286 0 0);
+  --accent-foreground: oklch(0.945 0 0);
+  --border: oklch(1 0 0 / 0.105);
+  --input: oklch(1 0 0 / 0.145);
+  --ring: oklch(0.7 0 0);
+  --course-ink: oklch(0.22 0 0);
+  --course-overlay: oklch(0.08 0 0 / 0.34);
+}
+
+/* Theme Preset 4: Stone (Notion / Claude warm paper & espresso) */
+[data-theme-preset="stone"] {
+  --shell: oklch(0.938 0.006 82);
+  --background: oklch(0.966 0.005 82);
+  --foreground: oklch(0.2 0.008 65);
+  --card: oklch(0.992 0.003 82);
+  --card-foreground: oklch(0.2 0.008 65);
+  --popover: oklch(0.993 0.003 82);
+  --popover-foreground: oklch(0.2 0.008 65);
+  --primary: oklch(0.24 0.009 65);
+  --primary-foreground: oklch(0.985 0.003 82);
+  --primary-soft: oklch(0.912 0.008 76);
+  --secondary: oklch(0.926 0.007 78);
+  --secondary-foreground: oklch(0.26 0.008 65);
+  --muted: oklch(0.926 0.007 78);
+  --muted-foreground: oklch(0.5 0.008 68);
+  --accent: oklch(0.908 0.008 76);
+  --accent-foreground: oklch(0.24 0.008 65);
+  --destructive: oklch(0.525 0.19 26);
+  --border: oklch(0.884 0.007 76);
+  --input: oklch(0.866 0.008 76);
+  --ring: oklch(0.5 0.01 68);
+  --course-ink: oklch(0.25 0.008 65);
+  --shadow-card: 0 1px 3px 0 oklch(0.22 0.01 68 / 0.07), 0 0 0 1px oklch(0.22 0.01 68 / 0.045);
+  --shadow-workspace: 0 18px 48px oklch(0.22 0.01 68 / 0.1), 0 0 0 1px oklch(0.22 0.01 68 / 0.06);
+}
+
+.dark[data-theme-preset="stone"] {
+  --shell: oklch(0.165 0.004 68);
+  --background: oklch(0.195 0.005 68);
+  --foreground: oklch(0.946 0.006 82);
+  --card: oklch(0.236 0.005 68);
+  --card-foreground: oklch(0.946 0.006 82);
+  --popover: oklch(0.256 0.005 68);
+  --popover-foreground: oklch(0.958 0.005 82);
+  --primary: oklch(0.925 0.006 82);
+  --primary-foreground: oklch(0.2 0.005 68);
+  --primary-soft: oklch(0.292 0.007 68);
+  --secondary: oklch(0.282 0.006 68);
+  --secondary-foreground: oklch(0.92 0.005 82);
+  --muted: oklch(0.282 0.006 68);
+  --muted-foreground: oklch(0.688 0.008 72);
+  --accent: oklch(0.315 0.007 68);
+  --accent-foreground: oklch(0.942 0.005 82);
+  --destructive: oklch(0.655 0.185 25);
+  --destructive-foreground: oklch(0.165 0.014 25);
+  --border: oklch(1 0 0 / 0.1);
+  --input: oklch(1 0 0 / 0.14);
+  --ring: oklch(0.7 0.008 74);
+  --course-ink: oklch(0.24 0.005 68);
+}
+
+/* Theme Preset 5: Graphite (macOS / Raycast studio grey) */
+[data-theme-preset="graphite"] {
+  --shell: oklch(0.936 0.003 255);
+  --background: oklch(0.962 0.002 255);
+  --foreground: oklch(0.195 0.006 255);
+  --card: oklch(0.992 0.001 255);
+  --card-foreground: oklch(0.195 0.006 255);
+  --popover: oklch(0.993 0.001 255);
+  --popover-foreground: oklch(0.195 0.006 255);
+  --primary: oklch(0.235 0.006 255);
+  --primary-foreground: oklch(0.985 0.001 255);
+  --primary-soft: oklch(0.91 0.005 255);
+  --secondary: oklch(0.922 0.004 255);
+  --secondary-foreground: oklch(0.25 0.006 255);
+  --muted: oklch(0.922 0.004 255);
+  --muted-foreground: oklch(0.495 0.006 255);
+  --accent: oklch(0.905 0.005 255);
+  --accent-foreground: oklch(0.235 0.006 255);
+  --border: oklch(0.88 0.005 255);
+  --input: oklch(0.862 0.005 255);
+  --ring: oklch(0.49 0.007 255);
+  --shadow-card: 0 1px 3px 0 oklch(0.2 0.006 255 / 0.07), 0 0 0 1px oklch(0.2 0.006 255 / 0.045);
+  --shadow-workspace: 0 18px 48px oklch(0.2 0.006 255 / 0.1), 0 0 0 1px oklch(0.2 0.006 255 / 0.06);
+}
+
+.dark[data-theme-preset="graphite"] {
+  --shell: oklch(0.175 0.004 262);
+  --background: oklch(0.212 0.004 262);
+  --foreground: oklch(0.956 0.004 255);
+  --card: oklch(0.255 0.005 262);
+  --card-foreground: oklch(0.956 0.004 255);
+  --popover: oklch(0.275 0.005 262);
+  --popover-foreground: oklch(0.968 0.003 255);
+  --primary: oklch(0.938 0.004 255);
+  --primary-foreground: oklch(0.215 0.004 262);
+  --primary-soft: oklch(0.312 0.006 262);
+  --secondary: oklch(0.302 0.005 262);
+  --secondary-foreground: oklch(0.932 0.004 255);
+  --muted: oklch(0.302 0.005 262);
+  --muted-foreground: oklch(0.708 0.006 260);
+  --accent: oklch(0.336 0.006 262);
+  --accent-foreground: oklch(0.95 0.004 255);
+  --destructive: oklch(0.665 0.188 24);
+  --destructive-foreground: oklch(0.16 0.015 24);
+  --border: oklch(1 0 0 / 0.1);
+  --input: oklch(1 0 0 / 0.14);
+  --ring: oklch(0.72 0.007 260);
+  --course-ink: oklch(0.24 0.004 262);
+}
+
+/* Theme Preset 6: Classic (Original TutIn baseline for A/B testing) */
+[data-theme-preset="classic"] {
   --shell: oklch(0.958 0.002 255);
   --background: oklch(0.985 0.001 255);
   --foreground: oklch(0.205 0.012 258);
@@ -101,6 +402,7 @@
   --accent-foreground: oklch(0.3 0.01 260);
   --destructive: oklch(0.42 0.012 25);
   --destructive-foreground: oklch(0.97 0.003 255);
+  --sky: oklch(0.55 0.012 255);
   --border: oklch(0.925 0.004 255);
   --input: oklch(0.925 0.004 255);
   --ring: oklch(0.45 0.01 260);
@@ -109,29 +411,13 @@
   --progress-surface: oklch(0.18 0.004 255 / 0.78);
   --progress-track: oklch(0.9 0.003 255 / 0.25);
   --progress-foreground: oklch(0.94 0.003 255);
-  --scrollbar-track: transparent;
-  --scrollbar-thumb: oklch(0.205 0.012 258 / 0.18);
-  --scrollbar-thumb-hover: oklch(0.205 0.012 258 / 0.38);
   --shadow-card: 0 1px 3px 0 oklch(0.2 0.01 260 / 0.06), 0 1px 2px -1px oklch(0.2 0.01 260 / 0.04);
   --shadow-workspace: 0 18px 48px oklch(0.2 0.01 260 / 0.08);
   --shadow-brand: 0 8px 22px oklch(0.2 0.006 260 / 0.18);
   --shadow-status: 0 0 0 4px oklch(0.45 0.006 260 / 0.12);
-  --chart-1: oklch(0.56 0.16 278);
-  --chart-2: oklch(0.58 0.14 235);
-  --chart-3: oklch(0.66 0.16 75);
-  --chart-4: oklch(0.6 0.14 155);
-  --chart-5: oklch(0.62 0.15 15);
-  --sidebar: oklch(0.984 0.003 247.858);
-  --sidebar-foreground: oklch(0.129 0.042 264.695);
-  --sidebar-primary: oklch(0.208 0.042 265.755);
-  --sidebar-primary-foreground: oklch(0.984 0.003 247.858);
-  --sidebar-accent: oklch(0.968 0.007 247.896);
-  --sidebar-accent-foreground: oklch(0.208 0.042 265.755);
-  --sidebar-border: oklch(0.929 0.013 255.508);
-  --sidebar-ring: oklch(0.704 0.04 256.788);
 }
 
-.dark {
+.dark[data-theme-preset="classic"] {
   --shell: oklch(0.155 0.004 270);
   --background: oklch(0.19 0.005 270);
   --foreground: oklch(0.94 0.005 255);
@@ -150,6 +436,7 @@
   --accent-foreground: oklch(0.9 0.004 255);
   --destructive: oklch(0.68 0.012 25);
   --destructive-foreground: oklch(0.18 0.006 275);
+  --sky: oklch(0.55 0.012 255);
   --border: oklch(1 0 0 / 0.08);
   --input: oklch(1 0 0 / 0.11);
   --ring: oklch(0.68 0.008 255);
@@ -158,26 +445,10 @@
   --progress-surface: oklch(0.1 0.004 255 / 0.82);
   --progress-track: oklch(0.88 0.004 255 / 0.18);
   --progress-foreground: oklch(0.92 0.003 255);
-  --scrollbar-track: transparent;
-  --scrollbar-thumb: oklch(0.94 0.005 255 / 0.18);
-  --scrollbar-thumb-hover: oklch(0.94 0.005 255 / 0.38);
   --shadow-card: 0 2px 6px 0 oklch(0 0 0 / 0.25), 0 1px 2px 0 oklch(0 0 0 / 0.18);
   --shadow-workspace: 0 22px 60px oklch(0 0 0 / 0.24);
   --shadow-brand: 0 8px 24px oklch(0 0 0 / 0.2);
   --shadow-status: 0 0 0 4px oklch(0.7 0.004 255 / 0.12);
-  --chart-1: oklch(0.7 0.15 278);
-  --chart-2: oklch(0.72 0.13 235);
-  --chart-3: oklch(0.76 0.15 75);
-  --chart-4: oklch(0.72 0.13 155);
-  --chart-5: oklch(0.74 0.14 15);
-  --sidebar: oklch(0.208 0.042 265.755);
-  --sidebar-foreground: oklch(0.984 0.003 247.858);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.984 0.003 247.858);
-  --sidebar-accent: oklch(0.279 0.041 260.031);
-  --sidebar-accent-foreground: oklch(0.984 0.003 247.858);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.551 0.027 264.364);
 }
 
 @layer base {
@@ -227,7 +498,6 @@
   a,
   video {
     -webkit-user-drag: none;
-    user-drag: none;
   }
 
   button,
@@ -348,20 +618,24 @@ html.theme-transitioning *::after {
 
 @utility course-grid {
   background-image:
-    linear-gradient(
-      to right,
+    linear-gradient(to right,
       color-mix(in oklab, var(--course-ink) 14%, transparent) 1px,
-      transparent 1px
-    ),
-    linear-gradient(
-      to bottom,
+      transparent 1px),
+    linear-gradient(to bottom,
       color-mix(in oklab, var(--course-ink) 14%, transparent) 1px,
-      transparent 1px
-    );
+      transparent 1px);
   background-size: 28px 28px;
 }
 
 /* ── Rich Note Editor & Rendered Note Content ── */
+.note-editor,
+.note-content {
+  --note-line-height: 1.6;
+  --note-paragraph-spacing: 0.7em;
+  line-height: var(--note-line-height);
+  overflow-wrap: break-word;
+}
+
 .note-editor:empty::before {
   content: attr(data-placeholder);
   color: var(--color-muted-foreground);
@@ -389,16 +663,10 @@ html.theme-transitioning *::after {
   max-height: 380px;
 }
 
-.canvas-card-note .note-content > ul:not([data-task-list="true"]) > li > div:has(> img),
-.canvas-card-note .note-editor > ul:not([data-task-list="true"]) > li > div:has(> img),
-.canvas-card-note .note-content > ul:not([data-task-list="true"]) > li > p:has(> img),
-.canvas-card-note .note-editor > ul:not([data-task-list="true"]) > li > p:has(> img),
-.canvas-card-note .note-content > ol > li > div:has(> img),
-.canvas-card-note .note-editor > ol > li > div:has(> img),
-.canvas-card-note .note-content > ol > li > p:has(> img),
-.canvas-card-note .note-editor > ol > li > p:has(> img) {
-  margin-inline-start: -1.35em !important;
-  width: calc(100% + 1.35em);
+.canvas-card-note .note-content > :is(ul:not([data-task-list="true"]), ol) > li > :is(div, p):has(> img),
+.canvas-card-note .note-editor > :is(ul:not([data-task-list="true"]), ol) > li:not([data-md-active="true"]) > :is(div, p):has(> img) {
+  margin-inline-start: calc(var(--note-list-indent, 1.25em) * -1) !important;
+  width: calc(100% + var(--note-list-indent, 1.25em));
 }
 
 .note-editor [data-note-image-block="true"],
@@ -407,8 +675,6 @@ html.theme-transitioning *::after {
   width: 100%;
   margin: 0;
   padding: 8px 0;
-  user-select: none;
-  -webkit-user-select: none;
 }
 
 .note-editor [data-note-image-block="true"] {
@@ -422,67 +688,70 @@ html.theme-transitioning *::after {
   margin: 0 auto;
 }
 
-.note-content > [data-note-image-block="true"]:last-child {
+.note-editor [data-note-image-block="true"] img::selection,
+.note-content [data-note-image-block="true"] img::selection {
+  background-color: color-mix(in oklch, var(--color-primary) 28%, transparent);
+}
+
+.note-content>[data-note-image-block="true"]:last-child {
   padding-bottom: 0;
 }
 
-.note-editor > p,
-.note-content > p,
-.note-editor > div:not([data-note-image-block="true"]),
-.note-content > div:not([data-note-image-block="true"]) {
-  margin: 0.6em 0;
-  min-height: 1.5em;
+.note-editor> :where(p, div:not([data-note-image-block="true"])),
+.note-content> :where(p, div:not([data-note-image-block="true"])) {
+  margin: var(--note-paragraph-spacing) 0;
+  min-height: 1.6em;
 }
 
-.note-editor > :first-child,
-.note-content > :first-child {
+.note-editor> :first-child,
+.note-content> :first-child {
   margin-top: 0;
 }
 
-.note-editor > :is(h1, h2, h3, h4, h5, h6) + :is(p, div:not([data-note-image-block="true"])),
-.note-content > :is(h1, h2, h3, h4, h5, h6) + :is(p, div:not([data-note-image-block="true"])) {
-  margin-top: 0.2rem;
-}
-
-.note-editor li > p,
-.note-content li > p,
-.note-editor li > div:not([data-note-image-block="true"]),
-.note-content li > div:not([data-note-image-block="true"]),
-.note-editor blockquote > p,
-.note-content blockquote > p,
-.note-editor blockquote > div:not([data-note-image-block="true"]),
-.note-content blockquote > div:not([data-note-image-block="true"]) {
-  margin: 0.25em 0;
-}
-
-.note-editor li > :first-child,
-.note-content li > :first-child,
-.note-editor blockquote > :first-child,
-.note-content blockquote > :first-child {
+.note-editor> :is(h1, h2, h3, h4, h5, h6)+ :is(p, div:not([data-note-image-block="true"]), ul, ol, blockquote, pre),
+.note-content> :is(h1, h2, h3, h4, h5, h6)+ :is(p, div:not([data-note-image-block="true"]), ul, ol, blockquote, pre) {
   margin-top: 0;
 }
 
-.note-editor li > :last-child,
-.note-content li > :last-child,
-.note-editor blockquote > :last-child,
-.note-content blockquote > :last-child {
+.note-editor> :is(h1, h2, h3, h4, h5, h6)+ :is(h1, h2, h3, h4, h5, h6),
+.note-content> :is(h1, h2, h3, h4, h5, h6)+ :is(h1, h2, h3, h4, h5, h6) {
+  margin-top: 0.45em;
+}
+
+.note-editor :where(li, blockquote)> :where(p, div:not([data-note-image-block="true"])),
+.note-content :where(li, blockquote)> :where(p, div:not([data-note-image-block="true"])) {
+  margin: 0.3em 0;
+}
+
+.note-editor li> :first-child,
+.note-content li> :first-child,
+.note-editor blockquote> :first-child,
+.note-content blockquote> :first-child {
+  margin-top: 0;
+}
+
+.note-editor li> :last-child,
+.note-content li> :last-child,
+.note-editor blockquote> :last-child,
+.note-content blockquote> :last-child {
   margin-bottom: 0;
 }
 
 .note-editor img {
   cursor: pointer;
-  user-select: none;
   -webkit-user-drag: none;
-  user-drag: none;
 }
 
 .note-editor img:hover {
   box-shadow: 0 0 0 2px var(--color-primary);
 }
 
-.note-editor img.is-selected {
+.note-editor img.is-selected,
+.note-editor img.is-range-selected,
+.note-content img.is-range-selected {
   outline: 2px solid var(--color-primary);
   outline-offset: 2px;
+  box-shadow: 0 0 0 4px color-mix(in oklch, var(--color-primary) 20%, transparent);
 }
 
 .note-content img {
@@ -493,56 +762,44 @@ html.theme-transitioning *::after {
   opacity: 0.96;
 }
 
-.note-content > :last-child,
-.note-editor > :last-child {
+.note-content> :last-child,
+.note-editor> :last-child {
   margin-bottom: 0;
 }
 
-.note-editor ul,
-.note-content ul,
-.note-editor ol,
-.note-content ol {
-  padding-inline-start: 1.35em;
-  margin: 0.55em 0;
+.note-editor :is(ul, ol),
+.note-content :is(ul, ol) {
+  list-style: none;
+  padding-inline-start: 0;
+  margin: 0.6em 0;
 }
 
-.note-editor li ul,
-.note-content li ul,
-.note-editor li ol,
-.note-content li ol {
+.note-editor li > :is(ul, ol),
+.note-content li > :is(ul, ol) {
   margin: 0.28em 0;
 }
 
-.note-editor ul ul,
-.note-content ul ul,
-.note-editor ol ol,
-.note-content ol ol,
-.note-editor ul ol,
-.note-content ul ol,
-.note-editor ol ul,
-.note-content ol ul {
+.note-editor :is(ul, ol) :is(ul, ol),
+.note-content :is(ul, ol) :is(ul, ol) {
   margin: 2px 0;
-}
-
-.note-editor ul,
-.note-content ul {
-  list-style-type: none;
-}
-
-.note-editor ul[data-task-list="true"],
-.note-content ul[data-task-list="true"] {
-  padding-inline-start: 0.1em;
-}
-
-.note-editor ol,
-.note-content ol {
-  list-style-type: decimal;
 }
 
 .note-editor li,
 .note-content li {
-  margin: 0.28em 0;
+  --note-list-indent: 1.25em;
+  margin: 0.3em 0;
+  padding-inline-start: var(--note-list-indent);
   position: relative;
+}
+
+.note-editor ul:not([data-task-list="true"]) > li,
+.note-content ul:not([data-task-list="true"]) > li {
+  --note-list-indent: 1.25em;
+}
+
+.note-editor ol > li,
+.note-content ol > li {
+  --note-list-indent: 1.8em;
 }
 
 .note-editor [data-md-syntax] {
@@ -552,25 +809,25 @@ html.theme-transitioning *::after {
   letter-spacing: normal;
 }
 
-.note-editor h1 > [data-md-syntax="heading"],
-.note-editor h2 > [data-md-syntax="heading"],
-.note-editor h3 > [data-md-syntax="heading"],
-.note-editor h4 > [data-md-syntax="heading"],
-.note-editor h5 > [data-md-syntax="heading"],
-.note-editor h6 > [data-md-syntax="heading"] {
+.note-editor :is([data-md-syntax="heading"], [data-md-syntax="blockquote"], [data-md-syntax="list"]) {
+  white-space: pre-wrap;
+}
+
+.note-editor :is(h1, h2, h3, h4, h5, h6)>[data-md-syntax="heading"] {
   font-size: 1em;
   font-weight: 500;
   color: color-mix(in oklab, var(--color-muted-foreground) 62%, transparent);
 }
 
-.note-editor blockquote > [data-md-syntax="blockquote"] {
+.note-editor blockquote>[data-md-syntax="blockquote"],
+.note-editor li>[data-md-syntax="list"] {
   font-family: var(--font-mono);
   font-weight: 400;
   font-style: normal;
   color: color-mix(in oklab, var(--color-muted-foreground) 66%, transparent);
 }
 
-.note-editor a > [data-md-syntax] {
+.note-editor a>[data-md-syntax] {
   text-decoration: none;
 }
 
@@ -578,30 +835,58 @@ html.theme-transitioning *::after {
   color: color-mix(in oklab, var(--color-muted-foreground) 78%, transparent);
 }
 
-.note-editor ul > li::before,
-.note-content ul > li::before {
+.note-editor ul:not([data-task-list="true"]) > li:not([data-md-active="true"])::before,
+.note-content ul:not([data-task-list="true"]) > li::before {
   content: "•";
   position: absolute;
-  inset-inline-start: -1.05em;
+  inset-inline-start: 0.25em;
   color: var(--color-muted-foreground);
   font-family: var(--font-mono);
   font-weight: 600;
 }
 
-.note-editor ul ul > li::before,
-.note-content ul ul > li::before {
+.note-editor ul:not([data-task-list="true"]) ul:not([data-task-list="true"]) > li:not([data-md-active="true"])::before,
+.note-content ul:not([data-task-list="true"]) ul:not([data-task-list="true"]) > li::before {
   content: "◦";
 }
 
-.note-editor ul ul ul > li::before,
-.note-content ul ul ul > li::before {
+.note-editor ul:not([data-task-list="true"]) ul:not([data-task-list="true"]) ul:not([data-task-list="true"]) > li:not([data-md-active="true"])::before,
+.note-content ul:not([data-task-list="true"]) ul:not([data-task-list="true"]) ul:not([data-task-list="true"]) > li::before {
   content: "▪";
+}
+
+.note-editor ol > li:not([data-md-active="true"])::before,
+.note-content ol > li::before {
+  content: counter(list-item) ".";
+  position: absolute;
+  inset-inline-start: 0;
+  color: var(--color-muted-foreground);
+  font-family: var(--font-mono);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.note-editor ol > li[data-md-delim=")"]:not([data-md-active="true"])::before,
+.note-content ol > li[data-md-delim=")"]::before {
+  content: counter(list-item) ")";
 }
 
 .note-editor li[data-task="true"],
 .note-content li[data-task="true"] {
+  --note-list-indent: 1.55em;
   list-style: none;
-  padding-inline-start: 1.55em;
+}
+
+.note-editor li[data-md-active="true"] {
+  padding-inline-start: 0;
+}
+
+.note-editor li[data-md-active="true"] > :is(ul, ol) {
+  padding-inline-start: var(--note-list-indent, 1.25em);
+}
+
+.note-editor li[data-task="true"][data-md-active="true"]>input[data-task-checkbox="true"] {
+  display: none;
 }
 
 .note-editor li[data-task="true"]::before,
@@ -610,17 +895,12 @@ html.theme-transitioning *::after {
   display: none;
 }
 
-.note-editor li[data-task="true"] > ul[data-task-list="true"],
-.note-content li[data-task="true"] > ul[data-task-list="true"] {
-  padding-inline-start: 0.1em;
-}
-
 .note-editor input[data-task-checkbox="true"],
 .note-content input[data-task-checkbox="true"] {
   appearance: none;
   position: absolute;
   inset-inline-start: 0.1em;
-  top: 0.34em;
+  top: 0.38em;
   width: 0.92rem;
   height: 0.92rem;
   margin: 0;
@@ -657,68 +937,77 @@ html.theme-transitioning *::after {
   transform: rotate(42deg);
 }
 
-.note-editor li[data-checked="true"] > span[data-task-content="true"],
-.note-content li[data-checked="true"] > span[data-task-content="true"] {
+.note-editor li[data-checked="true"]>span[data-task-content="true"],
+.note-content li[data-checked="true"]>span[data-task-content="true"] {
   text-decoration: line-through;
   color: var(--color-muted-foreground);
   opacity: 0.78;
 }
 
-.note-editor ol > li::marker,
-.note-content ol > li::marker {
-  color: var(--color-muted-foreground);
-  font-family: var(--font-mono);
-  font-weight: 500;
-}
-
 .note-editor h1,
 .note-content h1 {
-  font-size: 1.2rem;
+  font-size: 1.75em;
   font-weight: 700;
-  margin: 0.65rem 0 0.2rem 0;
-  line-height: 1.3;
+  margin: 1em 0 0.5em 0;
+  line-height: 1.25;
+  letter-spacing: -0.02em;
 }
 
 .note-editor h2,
 .note-content h2 {
-  font-size: 1.05rem;
+  font-size: 1.45em;
   font-weight: 600;
-  margin: 0.55rem 0 0.2rem 0;
-  line-height: 1.35;
+  margin: 0.95em 0 0.5em 0;
+  line-height: 1.3;
+  letter-spacing: -0.015em;
 }
 
 .note-editor h3,
 .note-content h3 {
-  font-size: 0.95rem;
+  font-size: 1.25em;
   font-weight: 600;
-  margin: 0.5rem 0 0.15rem 0;
-  line-height: 1.4;
+  margin: 0.95em 0 0.5em 0;
+  line-height: 1.35;
 }
 
 .note-editor h4,
 .note-content h4 {
-  font-size: 0.9rem;
+  font-size: 1.12em;
   font-weight: 600;
-  margin: 0.45rem 0 0.12rem 0;
+  margin: 0.95em 0 0.5em 0;
   line-height: 1.4;
 }
 
 .note-editor h5,
-.note-content h5,
-.note-editor h6,
-.note-content h6 {
-  font-size: 0.85rem;
+.note-content h5 {
+  font-size: 1.05em;
   font-weight: 600;
   color: var(--color-muted-foreground);
-  margin: 0.4rem 0 0.1rem 0;
+  margin: 0.95em 0 0.5em 0;
   line-height: 1.4;
+}
+
+.note-editor h6,
+.note-content h6 {
+  font-size: 1em;
+  font-weight: 600;
+  color: var(--color-muted-foreground);
+  margin: 0.95em 0 0.5em 0;
+  line-height: 1.4;
+}
+
+.note-editor :is(h1, h2, h3, h4, h5, h6) *:not(code):not(kbd),
+.note-content :is(h1, h2, h3, h4, h5, h6) *:not(code):not(kbd) {
+  font-size: inherit;
+  line-height: inherit;
+  letter-spacing: inherit;
 }
 
 .note-editor blockquote,
 .note-content blockquote {
   border-inline-start: 2px solid var(--color-border);
-  padding-inline-start: 0.65rem;
-  margin: 0.55em 0;
+  padding-inline-start: 0.75em;
+  margin: 0.65em 0;
   font-style: italic;
   color: var(--color-muted-foreground);
 }
@@ -727,13 +1016,13 @@ html.theme-transitioning *::after {
 .note-content hr {
   border: none;
   border-top: 1px solid var(--color-border);
-  margin: 0.6rem 0;
+  margin: 0.8em 0;
 }
 
 .note-editor code,
 .note-content code {
   font-family: var(--font-mono);
-  font-size: 0.85em;
+  font-size: 0.88em;
   background: var(--color-secondary);
   padding: 0.15em 0.35em;
   border-radius: 4px;
@@ -744,11 +1033,11 @@ html.theme-transitioning *::after {
 .note-content pre {
   background: var(--color-secondary);
   border-radius: 6px;
-  padding: 0.55rem 0.75rem;
-  margin: 0.45rem 0;
+  padding: 0.55em 0.75em;
+  margin: 0.65em 0;
   overflow-x: auto;
   font-family: var(--font-mono);
-  font-size: 0.8em;
+  font-size: 0.86em;
   line-height: 1.55;
   color: var(--color-foreground);
   white-space: pre-wrap;
@@ -778,12 +1067,16 @@ html.theme-transitioning *::after {
   user-select: none;
 }
 
-.note-editor mark,
-.note-content mark {
-  background: color-mix(in oklab, var(--color-chart-3) 26%, transparent);
-  color: var(--color-foreground);
-  border-radius: 3px;
-  padding: 0.05em 0.25em;
+.note-editor pre[data-md-active="true"]>code[data-lang]:not([data-lang=""])::before {
+  display: none;
+}
+
+.note-editor pre> :is([data-md-syntax="code-open"], [data-md-syntax="code-close"]) {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  font-weight: 400;
+  color: color-mix(in oklab, var(--color-muted-foreground) 68%, transparent);
 }
 
 .note-editor a,
@@ -812,6 +1105,7 @@ html.theme-transitioning *::after {
     opacity: 0.35;
     transform: translate3d(0, 10px, 0);
   }
+
   to {
     opacity: 1;
     transform: none;
@@ -823,6 +1117,7 @@ html.theme-transitioning *::after {
     opacity: 0.35;
     transform: translate3d(0, -10px, 0);
   }
+
   to {
     opacity: 1;
     transform: none;
@@ -833,6 +1128,7 @@ html.theme-transitioning *::after {
   from {
     opacity: 0.45;
   }
+
   to {
     opacity: 1;
   }
@@ -878,23 +1174,22 @@ html.theme-transitioning *::after {
   0% {
     background-position: 100% 50%;
   }
+
   100% {
     background-position: -100% 50%;
   }
 }
 
 .ai-shimmer-text {
-  background-image: linear-gradient(
-    105deg,
-    color-mix(in oklab, var(--foreground) 48%, transparent) 0%,
-    color-mix(in oklab, var(--foreground) 55%, transparent) 32%,
-    var(--foreground) 44%,
-    var(--primary) 50%,
-    var(--chart-2) 56%,
-    var(--chart-1) 61%,
-    color-mix(in oklab, var(--foreground) 55%, transparent) 69%,
-    color-mix(in oklab, var(--foreground) 48%, transparent) 100%
-  );
+  background-image: linear-gradient(105deg,
+      color-mix(in oklab, var(--foreground) 48%, transparent) 0%,
+      color-mix(in oklab, var(--foreground) 55%, transparent) 32%,
+      var(--foreground) 44%,
+      var(--primary) 50%,
+      var(--chart-2) 56%,
+      var(--chart-1) 61%,
+      color-mix(in oklab, var(--foreground) 55%, transparent) 69%,
+      color-mix(in oklab, var(--foreground) 48%, transparent) 100%);
   background-size: 240% 100%;
   -webkit-background-clip: text;
   background-clip: text;
@@ -906,38 +1201,60 @@ html.theme-transitioning *::after {
   0% {
     background-position: 200% 0;
   }
+
   100% {
     background-position: -200% 0;
   }
 }
 
 .ai-shimmer-row {
-  background-image: linear-gradient(
-    110deg,
-    color-mix(in oklab, var(--secondary) 85%, transparent) 0%,
-    color-mix(in oklab, var(--secondary) 85%, transparent) 30%,
-    color-mix(in oklab, var(--primary) 22%, var(--secondary)) 45%,
-    color-mix(in oklab, var(--chart-2) 24%, var(--secondary)) 52%,
-    color-mix(in oklab, var(--chart-1) 20%, var(--secondary)) 59%,
-    color-mix(in oklab, var(--secondary) 85%, transparent) 74%,
-    color-mix(in oklab, var(--secondary) 85%, transparent) 100%
-  );
+  background-image: linear-gradient(110deg,
+      color-mix(in oklab, var(--secondary) 85%, transparent) 0%,
+      color-mix(in oklab, var(--secondary) 85%, transparent) 30%,
+      color-mix(in oklab, var(--primary) 22%, var(--secondary)) 45%,
+      color-mix(in oklab, var(--chart-2) 24%, var(--secondary)) 52%,
+      color-mix(in oklab, var(--chart-1) 20%, var(--secondary)) 59%,
+      color-mix(in oklab, var(--secondary) 85%, transparent) 74%,
+      color-mix(in oklab, var(--secondary) 85%, transparent) 100%);
   background-size: 240% 100%;
   animation: tutin-ai-row-sheen 2.2s linear infinite;
+}
+
+@keyframes tutin-trace-step-in {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-trace-step {
+  animation: tutin-trace-step-in 260ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
 @media (prefers-reduced-motion: reduce) {
   .t-resize {
     transition: none !important;
   }
+
   .ai-shimmer-text {
     animation: none !important;
     background: none !important;
     color: var(--foreground) !important;
   }
+
   .ai-shimmer-row {
     animation: none !important;
   }
+
+  .animate-trace-step {
+    animation: none !important;
+  }
+
   *,
   *::before,
   *::after {

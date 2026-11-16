@@ -247,7 +247,7 @@ export function HistoryPage() {
               className={cn(
                 "rounded-sm px-4 text-muted-foreground shadow-none",
                 dateFilter === item &&
-                  "bg-card font-medium text-foreground shadow-card hover:bg-card",
+                  "bg-card font-medium text-foreground shadow-card hover:bg-card dark:bg-accent dark:hover:bg-accent",
               )}
             >
               {item}

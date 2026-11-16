@@ -33,24 +33,24 @@
 ## 3. Study Player (`/learn/$courseId`)
 
 - **Formats:** Plays standard HTML5 formats (`.mp4`, `.mkv`, `.webm`, `.mov`, `.m4v`) and streams MPEG-TS (`.ts`) lectures via `mpegts.js`.
-- **Player Controls:** Play/pause, previous/next lesson, hover volume slider, playback speed/settings, `.srt`/`.vtt` subtitles + `Import subtitles…` (`SmartCaptionsModal` auto-matches sibling files in bulk), native Browser Picture-in-Picture (`P`), fullscreen (`F`), and collapsible study sidebar (`Playlist`, `Notes`, `Transcript`, `Summary`).
+- **Player Controls:** Play/pause (tap video, press `Space`/`K`, or hold primary mouse/touch on video `500ms` for temporary `2×` speed), double-click viewport for fullscreen, previous/next lesson, hover volume slider, playback speed/settings, `.srt`/`.vtt` subtitles (adjust `Size` `S`/`M`/`L` and `Box`/`Outline` style in the player's Audio & Subtitles menu, drag captions anywhere on the video stage to reposition, double-click captions or click `Reset` to recenter) + `Import subtitles…` (`SmartCaptionsModal` auto-matches sibling files in bulk), native Browser Picture-in-Picture (`P` / `I`), fullscreen (`F`), and collapsible study sidebar (`T` or toolbar toggle: `Playlist`, `Notes`, `Transcript`, `Summary`).
 - **Keyboard Shortcuts** *(toggleable in Settings -> Shortcuts)*:
-  - **Playback:** `Space` / `K` play/pause, `Left` / `Right` or `J` / `L` seek, `Up` / `Down` adjust volume, `M` mute, `C` toggle captions, `P` toggle Picture-in-Picture, `F` toggle fullscreen, `Shift+N` / `Shift+P` next/previous lesson, `<` / `>` adjust playback speed, `0–9` jump across percentage intervals.
-
+  - **Playback:** `Space` / `K` play/pause, hold `Space` (`220ms`) for temporary `2×` speed, `Left` / `Right` or `J` / `L` seek, `,` / `.` step 1 frame when paused, `Up` / `Down` adjust volume, `M` mute, `C` toggle subtitles, `T` toggle sidebar (Theater view), `P` / `I` toggle Picture-in-Picture, `F` / double-click toggle fullscreen, `Shift+N` / `Shift+P` next/previous lesson, `<` / `>` adjust playback speed, `Home` / `End` / `0–9` jump across intervals.
 ---
 
 ## 4. Timestamped Notes & Course Notes Canvas (`/canvas/$courseId`)
 
 ### Rich Notes Tab (`Playlist | Notes | Transcript`)
 - **Timestamped Cards:** Click `Add note · {time}` to capture a note anchored to the current playback time; click any note's timestamp chip to seek immediately.
-- **Formatting & Media:** Supports Bold, Italic, Strikethrough, bullet lists, Markdown triggers (`#`, `-`, `>`), video frame capture, file upload, clipboard paste, drag-and-drop images, inline cropping, and block reordering (`Alt + ArrowUp`/`ArrowDown` or toolbar arrows). Screenshots save into `<courseFolder>/.tutin/notes/screenshots/`.
-- **Writing Options (`...` popover):** Export markdown notes, open Canvas, configure **While writing** (auto-pause video, `Resume after {delay}s`, rewind on resume), and toggle transcript autocomplete (`Tab` / `ArrowRight`).
+- **Formatting & Media:** Supports Bold, Italic, Strikethrough, bullet lists, Markdown triggers (`#`, `-`, `>`, `---` with Obsidian-style Live Preview), video frame capture, file upload, clipboard paste, drag-and-drop images, inline cropping, and block reordering (`Alt + ArrowUp`/`ArrowDown` or toolbar arrows). Screenshots save into `<courseFolder>/.tutin/notes/screenshots/`.
+- **Writing Options (`...` popover):** Export markdown notes, open Canvas, configure **While writing** (auto-pause video, `Resume after {delay}s`, rewind on resume), and toggle transcript autocomplete (`Tab` / `ArrowRight`). Settings persist globally across all lessons and courses.
 
 ### Whiteboard Canvas (`/canvas/$courseId`)
 - **Video Artboards & Chronological Links:** Player notes organize into per-lesson columns (`M{m}L{l} · Title`) linked chronologically by dashed `auto-chrono` arrows. Dragging a note outside detaches it (`Detached` badge + 1-click `Return`) while bridging remaining sibling links.
 - **Whiteboard Tools:**
   - `V` Select, `H` / `Space+Drag` Pan, `N` Canvas Note, `T` Text card, `A` Connect solid Bezier edges, `P` Pen / `M` Highlighter / `E` Eraser vector ink (`perfect-freehand`), `I` Image upload, `G` Custom Frame artboard.
   - `Ctrl+Z` / `Ctrl+Shift+Z` Undo/Redo, `Del` / `Backspace` dismiss or remove selection, `Esc` cancel edit or reset tool.
+  - Drag a card's right edge, bottom edge, or bottom-right corner to resize freely, or **double-click** the right edge, bottom edge, or corner to shrink empty space and fit width, height, or both to its content cleanly.
   - Use the right `Notes` drawer (`All`, `Detached`, `Off canvas`) to locate cards or restore dismissed Video Notes, `Tidy` to align artboards, the Reset button (`Reset arrangement`) to return all course video cards to their lesson artboards in chronological order, and click the zoom `%` readout to reset view.
 
 ---
@@ -66,7 +66,7 @@
 
 ## 6. Settings & Workspace Backups
 
-- **General:** Theme (`Light` / `Dark` / `System`), `Resume playback`, `Mark complete when watched` (`90%` / `95%` / `100%`), `Progress calculation` (`By Videos` / `By Duration` with server recalculation), and `Auto-detect covers`.
+- **General:** `Appearance` (`Light` / `Dark` / `System`), `Theme` palette presets (`Obsidian`, `Zinc`, `Neutral`, `Stone`, `Graphite`, `Classic`), `Resume playback`, `Mark complete when watched` (`90%` / `95%` / `100%`), `Progress calculation` (`By Videos` / `By Duration` with server recalculation), and `Auto-detect covers`.
 - **Shortcuts:** Toggle playback shortcuts and inspect Player, Canvas, Notes Editor, and Global (`Ctrl+K` command search) keybindings.
 - **Data:** View SQLite note/course counts, **Export** full workspace JSON (`courses`, `modules`, `videos`, `notes`, `analytics`, `roadmaps`, `settings`, Canvas v2 boards), **Import** backups, or **Reset** local workspace data safely.
 - **About:** View current build (`TutIn v6.0`) and replay the 4-step **Welcome guide** anytime.

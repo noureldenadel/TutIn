@@ -60,8 +60,6 @@ const SOURCES: { id: AddCourseSource; label: string }[] = [
   { id: "link", label: "Direct Link" },
 ];
 
-
-
 export interface AddCourseModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -475,7 +473,7 @@ export function AddCourseModal({
                 className={cn(
                   "rounded-sm px-3.5 py-1.5 font-medium transition-colors",
                   source === s.id
-                    ? "bg-card text-foreground shadow-card"
+                    ? "bg-card text-foreground shadow-card dark:bg-accent"
                     : "text-muted-foreground hover:text-foreground",
                 )}
               >
@@ -756,8 +754,6 @@ export function AddCourseModal({
                   </Button>
                 </div>
               </div>
-
-
 
               {/* Metadata Inputs */}
               <div className="space-y-1.5">

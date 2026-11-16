@@ -32,6 +32,8 @@ function safeJsonParse(raw, fallback) {
 }
 
 const SQL_CHUNK_SIZE = 400
+const DEFAULT_CANVAS_CARD_WIDTH = 320
+const DEFAULT_CANVAS_GROUP_WIDTH = 356
 
 function deleteCourseRowsNotIn(table, courseId, keepIds) {
     if (!keepIds || keepIds.size === 0) {
@@ -132,7 +134,7 @@ export function readCanvasStateFromDb(courseId) {
         subtitle: g.subtitle || undefined,
         x: Number(g.x) || 0,
         y: Number(g.y) || 0,
-        width: Number(g.width) || 340,
+        width: Number(g.width) || DEFAULT_CANVAS_GROUP_WIDTH,
         height: Number(g.height) || 240,
         tintIndex: g.tint_index !== null && g.tint_index !== undefined && g.tint_index !== ''
             ? Number(g.tint_index)
@@ -152,7 +154,7 @@ export function readCanvasStateFromDb(courseId) {
                     title: node.title || 'Group',
                     x: Number(node.x) || 0,
                     y: Number(node.y) || 0,
-                    width: Number(node.width) || 340,
+                    width: Number(node.width) || DEFAULT_CANVAS_GROUP_WIDTH,
                     height: Number(node.height) || 240,
                     tintIndex: groups.length % 6,
                     layoutMode: 'custom',
@@ -202,7 +204,7 @@ export function readCanvasStateFromDb(courseId) {
                     : true),
             x: Number(node.x) || 0,
             y: Number(node.y) || 0,
-            width: Number(node.width) || 304,
+            width: Number(node.width) || DEFAULT_CANVAS_CARD_WIDTH,
             height: Number(node.height) || 140,
             htmlContent,
             imageSrc: node.image_src || undefined,
@@ -295,7 +297,7 @@ export function writeCanvasPayloadToDb(courseId, payload, { insideTransaction = 
                 isCanvasOnly: n.isCanvasOnly !== undefined ? n.isCanvasOnly : !n.noteId,
                 x: n.x || 0,
                 y: n.y || 0,
-                width: n.width || 304,
+                width: n.width || DEFAULT_CANVAS_CARD_WIDTH,
                 height: n.height || 140,
                 htmlContent: n.htmlContent ?? n.content ?? '',
                 imageSrc: n.imageSrc,
@@ -317,7 +319,7 @@ export function writeCanvasPayloadToDb(courseId, payload, { insideTransaction = 
                 title: g.title || 'Group',
                 x: g.x || 0,
                 y: g.y || 0,
-                width: g.width || 340,
+                width: g.width || DEFAULT_CANVAS_GROUP_WIDTH,
                 height: g.height || 240,
                 tintIndex: idx % 6,
                 layoutMode: 'custom',
@@ -369,7 +371,7 @@ export function writeCanvasPayloadToDb(courseId, payload, { insideTransaction = 
                     g.subtitle ?? null,
                     g.x || 0,
                     g.y || 0,
-                    g.width || 340,
+                    g.width || DEFAULT_CANVAS_GROUP_WIDTH,
                     g.height || 240,
                     g.tintIndex ?? 0,
                     g.layoutMode || 'custom',
@@ -432,7 +434,7 @@ export function writeCanvasPayloadToDb(courseId, payload, { insideTransaction = 
                     card.caption || '',
                     card.x || 0,
                     card.y || 0,
-                    card.width || 304,
+                    card.width || DEFAULT_CANVAS_CARD_WIDTH,
                     card.height || 140,
                     '',
                     card.groupId ?? null,
