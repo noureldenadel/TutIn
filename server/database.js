@@ -47,14 +47,9 @@ function ensureDirectories() {
         dataDir,
         path.join(dataDir, 'transcripts'),
         path.join(dataDir, 'summaries'),
-        path.join(dataDir, 'dubs'),
+        path.join(dataDir, 'screenshots'),
         path.join(dataDir, 'backups', 'auto'),
         path.join(dataDir, 'backups', 'manual'),
-        path.join(dataDir, 'models'),
-        path.join(dataDir, 'models', 'ai'),
-        path.join(dataDir, 'models', 'tts'),
-        path.join(dataDir, 'models', 'punctuation'),
-        path.join(dataDir, 'models', 'huggingface'),
     ]
 
     for (const dir of dirs) {
@@ -259,6 +254,8 @@ function runMigrations() {
         { name: '004_dubbed_tracks_schema', fn: migration004 },
         { name: '005_course_language', fn: migration005 },
         { name: '006_primary_transcript', fn: migration006 },
+        { name: '007_canvas_v2_schema', fn: migration007 },
+        { name: '008_cleanup_orphaned_video_nodes', fn: migration008 },
     ]
 
     for (const migration of migrations) {
@@ -502,7 +499,7 @@ function migration003() {
             created_at TEXT,
             updated_at TEXT,
             FOREIGN KEY (course_id) REFERENCES courses(id) ON DELETE CASCADE,
-            FOREIGN KEY (note_id) REFERENCES notes(id) ON DELETE SET NULL
+            FOREIGN KEY (note_id) REFERENCES notes(id) ON DELETE CASCADE
         )`,
         `CREATE INDEX IF NOT EXISTS idx_canvas_nodes_course ON canvas_nodes(course_id)`,
         `CREATE TABLE IF NOT EXISTS canvas_edges (
@@ -562,4 +559,96 @@ function migration006() {
     if (!hasPrimaryTranscript) {
         db.run("ALTER TABLE videos ADD COLUMN primary_transcript TEXT")
     }
+}
+
+/**
+ * Migration 007: Canvas v2 Whiteboard Schema (Artboards, Rich Cards, Extended Edges, Ink Strokes)
+ */
+function migration007() {
+    const ensureColumn = (table, colName, colDef) => {
+        const cols = getAll(`PRAGMA table_info(${table})`)
+        if (!cols.some(c => c.name === colName)) {
+            db.run(`ALTER TABLE ${table} ADD COLUMN ${colName} ${colDef}`)
+        }
+    }
+
+    ensureColumn('canvas_nodes', 'origin_lesson_idx', 'INTEGER')
+    ensureColumn('canvas_nodes', 'origin_video_id', 'TEXT')
+    ensureColumn('canvas_nodes', 'timestamp', 'REAL')
+    ensureColumn('canvas_nodes', 'membership_state', "TEXT DEFAULT 'canvas-only'")
+    ensureColumn('canvas_nodes', 'is_canvas_only', 'INTEGER DEFAULT 1')
+    ensureColumn('canvas_nodes', 'image_src', 'TEXT')
+    ensureColumn('canvas_nodes', 'caption', 'TEXT')
+    ensureColumn('canvas_nodes', 'accent_index', 'INTEGER')
+
+    ensureColumn('canvas_edges', 'edge_kind', "TEXT DEFAULT 'manual'")
+    ensureColumn('canvas_edges', 'from_side', 'TEXT')
+    ensureColumn('canvas_edges', 'to_side', 'TEXT')
+    ensureColumn('canvas_edges', 'style', "TEXT DEFAULT 'solid'")
+    ensureColumn('canvas_edges', 'label', 'TEXT')
+
+    const statements = [
+        `CREATE TABLE IF NOT EXISTS canvas_groups (
+            id TEXT PRIMARY KEY,
+            course_id TEXT NOT NULL,
+            type TEXT DEFAULT 'custom-artboard',
+            lesson_idx INTEGER,
+            video_id TEXT,
+            title TEXT DEFAULT '',
+            subtitle TEXT,
+            x REAL DEFAULT 0,
+            y REAL DEFAULT 0,
+            width REAL DEFAULT 340,
+            height REAL DEFAULT 240,
+            tint_index INTEGER DEFAULT 0,
+            layout_mode TEXT DEFAULT 'custom',
+            collapsed INTEGER DEFAULT 0,
+            sort_order INTEGER DEFAULT 0,
+            created_at TEXT,
+            updated_at TEXT,
+            FOREIGN KEY (course_id) REFERENCES courses(id) ON DELETE CASCADE
+        )`,
+        `CREATE INDEX IF NOT EXISTS idx_canvas_groups_course ON canvas_groups(course_id)`,
+        `CREATE TABLE IF NOT EXISTS canvas_strokes (
+            id TEXT PRIMARY KEY,
+            course_id TEXT NOT NULL,
+            tool TEXT DEFAULT 'pen',
+            points TEXT DEFAULT '[]',
+            color_token TEXT DEFAULT 'ink',
+            size REAL DEFAULT 3,
+            parent_group_id TEXT,
+            sort_order INTEGER DEFAULT 0,
+            created_at TEXT,
+            FOREIGN KEY (course_id) REFERENCES courses(id) ON DELETE CASCADE
+        )`,
+        `CREATE INDEX IF NOT EXISTS idx_canvas_strokes_course ON canvas_strokes(course_id)`,
+        `CREATE TABLE IF NOT EXISTS canvas_course_meta (
+            course_id TEXT PRIMARY KEY,
+            dismissed_note_ids TEXT DEFAULT '[]',
+            last_sync_revision INTEGER DEFAULT 0,
+            updated_at TEXT,
+            FOREIGN KEY (course_id) REFERENCES courses(id) ON DELETE CASCADE
+        )`
+    ]
+
+    for (const stmt of statements) {
+        db.run(stmt)
+    }
+}
+
+/**
+ * Migration 008: Clean up orphaned video-note cards left by prior ON DELETE SET NULL FK
+ */
+function migration008() {
+    db.run(`
+        DELETE FROM canvas_nodes
+        WHERE type = 'video-note'
+          AND COALESCE(is_canvas_only, 0) = 0
+          AND (note_id IS NULL OR note_id NOT IN (SELECT id FROM notes))
+    `)
+    db.run(`
+        DELETE FROM canvas_edges
+        WHERE from_node_id NOT IN (SELECT id FROM canvas_nodes)
+           OR to_node_id NOT IN (SELECT id FROM canvas_nodes)
+    `)
 }

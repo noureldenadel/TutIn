@@ -2,9 +2,36 @@ import express from 'express'
 import fs from 'fs'
 import path from 'path'
 import { getAll, getOne, run, transaction } from '../database.js'
-import { loadFullVaultData, saveVaultMetadata } from '../utils/courseAssets.js'
+import { loadFullVaultData, loadVaultCanvas, saveVaultMetadata } from '../utils/courseAssets.js'
+import { writeCanvasPayloadToDb } from './canvas.js'
 
 const router = express.Router()
+
+function rewriteMediaUrlCourseId(value, targetCourseId) {
+    if (typeof value !== 'string' || !value.includes('/api/notes/media/')) return value
+    const safeCourseId = encodeURIComponent(targetCourseId)
+    return value.replace(
+        /\/api\/notes\/media\/[^/"'\s)]+\/([^/"'\s)]+)/g,
+        `/api/notes/media/${safeCourseId}/$1`
+    )
+}
+
+/**
+ * Pick the most recent valid ISO timestamp from the candidate values.
+ */
+function pickLatestIsoTimestamp(...values) {
+    let bestStr = null
+    let bestMs = -Infinity
+    for (const val of values) {
+        if (typeof val !== 'string' || !val) continue
+        const ms = Date.parse(val)
+        if (!Number.isNaN(ms) && ms > bestMs) {
+            bestMs = ms
+            bestStr = val
+        }
+    }
+    return bestStr
+}
 
 /**
  * Map a raw SQLite course row (snake_case) to a camelCase API response object.
@@ -14,18 +41,24 @@ function mapCourseRow(course) {
     if (course.has_thumbnail !== undefined) {
         // Optimized bulk query
         if (course.is_base64_thumbnail) {
-            thumbUrl = `http://127.0.0.1:9474/api/courses/${course.id}/thumbnail`
+            thumbUrl = `/api/courses/${course.id}/thumbnail`
         } else if (course.external_thumbnail) {
             thumbUrl = course.external_thumbnail
         }
     } else if (course.thumbnail_data) {
         // Single course query with full data
         if (course.thumbnail_data.startsWith('data:')) {
-            thumbUrl = `http://127.0.0.1:9474/api/courses/${course.id}/thumbnail`
+            thumbUrl = `/api/courses/${course.id}/thumbnail`
         } else {
             thumbUrl = course.thumbnail_data
         }
     }
+
+    const effectiveLastAccessed = pickLatestIsoTimestamp(
+        course.last_accessed,
+        course.last_accessed_click_time,
+        course.latest_video_watched_at
+    )
 
     return {
         id: course.id,
@@ -41,7 +74,8 @@ function mapCourseRow(course) {
         language: course.language || 'en',
         dateAdded: course.date_added,
         dateModified: course.date_modified,
-        lastAccessed: course.last_accessed,
+        lastAccessed: effectiveLastAccessed,
+        lastAccessedAt: effectiveLastAccessed,
         lastAccessedClickTime: course.last_accessed_click_time,
         totalDuration: course.total_duration,
         totalVideos: course.total_videos,
@@ -59,6 +93,7 @@ router.get('/', (req, res) => {
             SELECT id, title, original_title, description, instructor, tags, 
                    folder_path, source_type, course_url, language, 
                    date_added, date_modified, last_accessed, last_accessed_click_time, 
+                   (SELECT MAX(v.last_watched_at) FROM videos v WHERE v.course_id = courses.id) AS latest_video_watched_at,
                    total_duration, total_videos, completed_videos, completion_percentage, 
                    custom_metadata, "order",
                    CASE WHEN thumbnail_data IS NOT NULL THEN 1 ELSE 0 END as has_thumbnail,
@@ -86,7 +121,13 @@ router.get('/', (req, res) => {
 // GET /api/courses/:id
 router.get('/:id', (req, res) => {
     try {
-        const course = getOne('SELECT * FROM courses WHERE id = ?', [req.params.id])
+        const course = getOne(
+            `SELECT c.*,
+                    (SELECT MAX(v.last_watched_at) FROM videos v WHERE v.course_id = c.id) AS latest_video_watched_at
+             FROM courses c
+             WHERE c.id = ?`,
+            [req.params.id]
+        )
         if (!course) return res.status(404).json({ error: 'Course not found' })
 
         res.json(mapCourseRow(course))
@@ -137,7 +178,7 @@ router.post('/', (req, res) => {
             data.id, data.title, data.originalTitle || null, data.description || '', data.instructor || '',
             JSON.stringify(data.tags || []), data.thumbnailData || null, data.folderPath || null,
             data.sourceType || 'local', data.courseUrl || null, data.language || 'en', data.dateAdded || now, data.dateModified || now,
-            data.lastAccessed || now, data.lastAccessedClickTime || now, data.totalDuration || 0,
+            data.lastAccessed || now, data.lastAccessedClickTime || null, data.totalDuration || 0,
             data.totalVideos || 0, data.completedVideos || 0, data.completionPercentage || 0,
             JSON.stringify(data.customMetadata || {}), data.order || 0
         ])
@@ -263,14 +304,24 @@ export function recalculateCourseProgress(courseId, dbMode = null) {
 
 // POST /api/courses/recalculate-progress — MUST be before PUT /:id
 router.post('/recalculate-progress', (req, res) => {
-    const { mode } = req.body // 'videos' | 'duration'
+    const { mode } = req.body || {} // 'videos' | 'duration'
 
     try {
         const courses = getAll('SELECT id FROM courses')
 
         transaction(() => {
+            if (mode === 'videos' || mode === 'duration') {
+                const now = new Date().toISOString()
+                run(`
+                    INSERT INTO settings (key, value, updated_at)
+                    VALUES ('progressCalculationMode', ?, ?)
+                    ON CONFLICT(key) DO UPDATE SET
+                        value = excluded.value,
+                        updated_at = excluded.updated_at
+                `, [JSON.stringify(mode), now])
+            }
             for (const course of courses) {
-                recalculateCourseProgress(course.id, mode)
+                recalculateCourseProgress(course.id, mode || null)
             }
         })
 
@@ -348,7 +399,8 @@ router.post('/:id/hydrate-vault', (req, res) => {
         }
 
         const vaultData = loadFullVaultData(courseFolder)
-        if (!vaultData) {
+        const rawVaultCanvas = loadVaultCanvas(courseFolder)
+        if (!vaultData && !rawVaultCanvas) {
             return res.json({ success: true, message: 'No .tutin vault found' })
         }
 
@@ -359,14 +411,14 @@ router.post('/:id/hydrate-vault', (req, res) => {
 
         transaction(() => {
             const needsVideos =
-                (Array.isArray(vaultData.notes) && vaultData.notes.length > 0) ||
-                (vaultData.summaries?.files?.length > 0)
+                (Array.isArray(vaultData?.notes) && vaultData.notes.length > 0) ||
+                (vaultData?.summaries?.files?.length > 0)
             const videos = needsVideos
                 ? getAll('SELECT id, title, file_name, file_path FROM videos WHERE course_id = ?', [id])
                 : []
 
             // 1. Hydrate Metadata if available
-            if (vaultData.metadata) {
+            if (vaultData?.metadata) {
                 const meta = vaultData.metadata
                 const updates = []
                 const params = []
@@ -396,8 +448,9 @@ router.post('/:id/hydrate-vault', (req, res) => {
                 }
             }
 
-            // 2. Hydrate Notes
-            if (Array.isArray(vaultData.notes) && vaultData.notes.length > 0) {
+            // 2. Hydrate Notes (guard against ID collision if a .tutin vault was copied from another course)
+            const rekeyedNoteIds = new Map()
+            if (Array.isArray(vaultData?.notes) && vaultData.notes.length > 0) {
                 const now = new Date().toISOString()
 
                 for (const note of vaultData.notes) {
@@ -421,19 +474,31 @@ router.post('/:id/hydrate-vault', (req, res) => {
                     }
 
                     if (matchedVideo) {
-                        const existingNote = getOne('SELECT id FROM notes WHERE id = ?', [note.id])
-                        const imagesJson = JSON.stringify(note.images || [])
+                        const existingOwner = getOne('SELECT id, course_id FROM notes WHERE id = ?', [note.id])
+                        const targetNoteId = existingOwner && existingOwner.course_id !== id
+                            ? `${id}_${note.id}`
+                            : note.id
+                        if (targetNoteId !== note.id) {
+                            rekeyedNoteIds.set(note.id, targetNoteId)
+                        }
+                        const existingTarget = existingOwner?.course_id === id
+                            ? existingOwner
+                            : getOne('SELECT id, course_id FROM notes WHERE id = ?', [targetNoteId])
+
+                        const rewrittenContent = rewriteMediaUrlCourseId(note.content || '', id)
+                        const rewrittenImages = (note.images || []).map(img => rewriteMediaUrlCourseId(img, id))
+                        const imagesJson = JSON.stringify(rewrittenImages)
                         const tagsJson = JSON.stringify(note.tags || [])
 
-                        if (existingNote) {
+                        if (existingTarget && existingTarget.course_id === id) {
                             run(`
                                 UPDATE notes SET 
                                     video_id = ?, timestamp = ?, content = ?, 
                                     images = ?, tags = ?, updated_at = ?
-                                WHERE id = ?
+                                WHERE id = ? AND course_id = ?
                             `, [
-                                matchedVideo.id, note.timestamp || 0, note.content || '',
-                                imagesJson, tagsJson, note.updatedAt || now, note.id
+                                matchedVideo.id, note.timestamp || 0, rewrittenContent,
+                                imagesJson, tagsJson, note.updatedAt || now, targetNoteId, id
                             ])
                         } else {
                             run(`
@@ -441,8 +506,8 @@ router.post('/:id/hydrate-vault', (req, res) => {
                                     id, video_id, course_id, timestamp, content, images, tags, created_at, updated_at
                                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                             `, [
-                                note.id, matchedVideo.id, id, note.timestamp || 0,
-                                note.content || '', imagesJson, tagsJson,
+                                targetNoteId, matchedVideo.id, id, note.timestamp || 0,
+                                rewrittenContent, imagesJson, tagsJson,
                                 note.createdAt || now, note.updatedAt || now
                             ])
                         }
@@ -451,90 +516,91 @@ router.post('/:id/hydrate-vault', (req, res) => {
                 }
             }
 
-            // 3. Hydrate Canvas
-            if (vaultData.canvas) {
-                const { nodes, edges, viewport } = vaultData.canvas
-                const now = new Date().toISOString()
-
-                if (viewport) {
-                    const panX = viewport.pan?.x ?? 0
-                    const panY = viewport.pan?.y ?? 0
-                    const zoom = viewport.zoom ?? 1
-                    run(`
-                        INSERT INTO canvas_viewports (course_id, pan_x, pan_y, zoom, updated_at)
-                        VALUES (?, ?, ?, ?, ?)
-                        ON CONFLICT(course_id) DO UPDATE SET
-                            pan_x = excluded.pan_x,
-                            pan_y = excluded.pan_y,
-                            zoom = excluded.zoom,
-                            updated_at = excluded.updated_at
-                    `, [id, panX, panY, zoom, now])
-                }
-
-                if (Array.isArray(nodes) && nodes.length > 0) {
-                    for (const node of nodes) {
-                        run(`
-                            INSERT INTO canvas_nodes (
-                                id, course_id, note_id, type, content, title,
-                                x, y, width, height, color, parent_group_id, collapsed,
-                                created_at, updated_at
-                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                            ON CONFLICT(id) DO UPDATE SET
-                                note_id = excluded.note_id,
-                                type = excluded.type,
-                                content = excluded.content,
-                                title = excluded.title,
-                                x = excluded.x,
-                                y = excluded.y,
-                                width = excluded.width,
-                                height = excluded.height,
-                                color = excluded.color,
-                                parent_group_id = excluded.parent_group_id,
-                                collapsed = excluded.collapsed,
-                                updated_at = excluded.updated_at
-                        `, [
-                            node.id,
-                            id,
-                            node.noteId || null,
-                            node.type || 'note',
-                            node.content || '',
-                            node.title || '',
-                            node.x || 0,
-                            node.y || 0,
-                            node.width || 280,
-                            node.height || 180,
-                            node.color || '',
-                            node.parentGroupId || null,
-                            node.collapsed ? 1 : 0,
-                            node.createdAt || now,
-                            node.updatedAt || now
-                        ])
-                        hydratedNodes++
+            // 3. Hydrate Canvas (supports both Canvas v2 and legacy Canvas v1 vaults)
+            if (rawVaultCanvas) {
+                const scopeCanvasId = (table, rawId, map) => {
+                    if (!rawId) return rawId
+                    const owner = getOne(`SELECT course_id FROM ${table} WHERE id = ?`, [rawId])
+                    if (owner && owner.course_id !== id) {
+                        const scoped = `${id}_${rawId}`
+                        map.set(rawId, scoped)
+                        return scoped
                     }
+                    return rawId
                 }
+                const rekeyedGroupIds = new Map()
+                const rekeyedCardIds = new Map()
 
-                if (Array.isArray(edges) && edges.length > 0) {
-                    for (const edge of edges) {
-                        run(`
-                            INSERT INTO canvas_edges (id, course_id, from_node_id, to_node_id, created_at)
-                            VALUES (?, ?, ?, ?, ?)
-                            ON CONFLICT(id) DO UPDATE SET
-                                from_node_id = excluded.from_node_id,
-                                to_node_id = excluded.to_node_id
-                        `, [
-                            edge.id,
-                            id,
-                            edge.fromNodeId,
-                            edge.toNodeId,
-                            edge.createdAt || now
-                        ])
-                        hydratedEdges++
-                    }
+                const hydratedGroups = Array.isArray(rawVaultCanvas.groups)
+                    ? rawVaultCanvas.groups.map(g => ({
+                        ...g,
+                        id: scopeCanvasId('canvas_groups', g.id, rekeyedGroupIds),
+                    }))
+                    : undefined
+
+                const hydratedCards = Array.isArray(rawVaultCanvas.cards)
+                    ? rawVaultCanvas.cards.map(c => ({
+                        ...c,
+                        id: scopeCanvasId('canvas_nodes', c.id, rekeyedCardIds),
+                        noteId: c.noteId ? (rekeyedNoteIds.get(c.noteId) ?? c.noteId) : c.noteId,
+                        groupId: c.groupId ? (rekeyedGroupIds.get(c.groupId) ?? c.groupId) : c.groupId,
+                        htmlContent: rewriteMediaUrlCourseId(c.htmlContent || '', id),
+                        imageSrc: rewriteMediaUrlCourseId(c.imageSrc, id),
+                    }))
+                    : undefined
+
+                const hydratedLegacyNodes = Array.isArray(rawVaultCanvas.nodes)
+                    ? rawVaultCanvas.nodes.map(n => ({
+                        ...n,
+                        id: scopeCanvasId('canvas_nodes', n.id, rekeyedCardIds),
+                        noteId: n.noteId ? (rekeyedNoteIds.get(n.noteId) ?? n.noteId) : n.noteId,
+                        content: rewriteMediaUrlCourseId(n.content || '', id),
+                    }))
+                    : undefined
+
+                const hydratedEdges = Array.isArray(rawVaultCanvas.edges)
+                    ? rawVaultCanvas.edges.map(e => {
+                        const existingEdge = getOne('SELECT course_id FROM canvas_edges WHERE id = ?', [e.id])
+                        const edgeId = existingEdge && existingEdge.course_id !== id ? `${id}_${e.id}` : e.id
+                        const rawFrom = e.fromId || e.fromNodeId
+                        const rawTo = e.toId || e.toNodeId
+                        return {
+                            ...e,
+                            id: edgeId,
+                            fromId: rekeyedCardIds.get(rawFrom) ?? rawFrom,
+                            toId: rekeyedCardIds.get(rawTo) ?? rawTo,
+                        }
+                    })
+                    : undefined
+
+                const hydratedStrokes = Array.isArray(rawVaultCanvas.strokes)
+                    ? rawVaultCanvas.strokes.map(s => {
+                        const existingStroke = getOne('SELECT course_id FROM canvas_strokes WHERE id = ?', [s.id])
+                        return {
+                            ...s,
+                            id: existingStroke && existingStroke.course_id !== id ? `${id}_${s.id}` : s.id,
+                            parentGroupId: s.parentGroupId
+                                ? (rekeyedGroupIds.get(s.parentGroupId) ?? s.parentGroupId)
+                                : s.parentGroupId,
+                        }
+                    })
+                    : undefined
+
+                const canvasPayload = {
+                    ...rawVaultCanvas,
+                    groups: hydratedGroups,
+                    cards: hydratedCards,
+                    edges: hydratedEdges,
+                    strokes: hydratedStrokes,
+                    nodes: hydratedLegacyNodes,
                 }
+                writeCanvasPayloadToDb(id, canvasPayload, { insideTransaction: true })
+                hydratedNodes = canvasPayload.cards?.length ?? canvasPayload.nodes?.length ?? 0
+                hydratedEdges = canvasPayload.edges?.length ?? 0
             }
 
             // 4. Hydrate Summaries
-            if (vaultData.summaries?.files?.length > 0) {
+            if (vaultData?.summaries?.files?.length > 0) {
                 const now = new Date().toISOString()
                 for (const s of vaultData.summaries.files) {
                     const baseNameLower = (s.baseName || '').toLowerCase()
@@ -661,6 +727,39 @@ router.put('/:id', (req, res) => {
         }
 
         res.json({ success: true })
+    } catch (err) {
+        res.status(500).json({ error: err.message })
+    }
+})
+
+// POST /api/courses/:id/access
+// Record qualified course engagement (player playback threshold or sustained external link visit)
+router.post('/:id/access', (req, res) => {
+    const { type = 'player', timestamp } = req.body ?? {}
+    try {
+        const existing = getOne('SELECT id FROM courses WHERE id = ?', [req.params.id])
+        if (!existing) {
+            return res.status(404).json({ error: 'Course not found' })
+        }
+
+        const parsedTime =
+            typeof timestamp === 'string' && !Number.isNaN(Date.parse(timestamp))
+                ? new Date(timestamp).toISOString()
+                : new Date().toISOString()
+
+        if (type === 'external') {
+            run(
+                'UPDATE courses SET last_accessed = ?, last_accessed_click_time = ? WHERE id = ?',
+                [parsedTime, parsedTime, req.params.id]
+            )
+        } else {
+            run(
+                'UPDATE courses SET last_accessed = ? WHERE id = ?',
+                [parsedTime, req.params.id]
+            )
+        }
+
+        res.json({ success: true, lastAccessed: parsedTime })
     } catch (err) {
         res.status(500).json({ error: err.message })
     }

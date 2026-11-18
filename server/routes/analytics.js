@@ -100,7 +100,13 @@ router.get('/history', (req, res) => {
                 instructor as course_instructor, source_type as course_source_type, course_url,
                 last_accessed_click_time
             FROM courses
-            WHERE (source_type = 'external-link' OR course_url IS NOT NULL) 
+            WHERE (
+                source_type IN ('external-link', 'link')
+                OR (
+                    course_url IS NOT NULL
+                    AND COALESCE(source_type, '') NOT IN ('youtube', 'google-drive', 'drive')
+                )
+            )
             AND last_accessed_click_time IS NOT NULL
         `)
 
@@ -161,6 +167,37 @@ router.get('/history', (req, res) => {
         const mappedHistory = combined.slice(0, limit).map(({ _sortTime, ...rest }) => rest)
         
         res.json(mappedHistory)
+    } catch (err) {
+        res.status(500).json({ error: err.message })
+    }
+})
+
+// DELETE /api/analytics/history
+// Clears watch history timestamps (preserves completion and analytics totals)
+router.delete('/history', (req, res) => {
+    try {
+        transaction(() => {
+            run('UPDATE videos SET last_watched_at = NULL WHERE last_watched_at IS NOT NULL')
+            run('UPDATE courses SET last_accessed_click_time = NULL WHERE last_accessed_click_time IS NOT NULL')
+        })
+        res.json({ success: true })
+    } catch (err) {
+        res.status(500).json({ error: err.message })
+    }
+})
+
+// DELETE /api/analytics/history/:itemId
+// Removes a single item from watch history (preserves completion and analytics totals)
+router.delete('/history/:itemId', (req, res) => {
+    const { itemId } = req.params
+    try {
+        if (itemId.endsWith('_ext_mock')) {
+            const courseId = itemId.slice(0, -'_ext_mock'.length)
+            run('UPDATE courses SET last_accessed_click_time = NULL WHERE id = ?', [courseId])
+        } else {
+            run('UPDATE videos SET last_watched_at = NULL WHERE id = ?', [itemId])
+        }
+        res.json({ success: true })
     } catch (err) {
         res.status(500).json({ error: err.message })
     }

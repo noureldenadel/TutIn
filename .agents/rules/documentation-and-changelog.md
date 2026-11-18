@@ -4,8 +4,6 @@ trigger: always_on
 
 ## Living Documentation & Changelog Rule
 
-dont update the live version documentation or changlog only update the new ui documentation and changelog
-
 ### Core principle
 Every feature addition, modification, refactor, or removal must keep the project's documentation and changelog 100% synchronized with the actual code so the owner can return at any time and immediately understand what exists, how it works, and what changed.
 

@@ -1,9 +1,10 @@
 @echo off
 setlocal
-title TutIn Launcher
+cd /d "%~dp0"
+title TutIn v7 Launcher
 
 echo ===================================================
-echo             Starting TutIn v5.1
+echo             Starting TutIn v7.0
 echo ===================================================
 echo.
 
@@ -15,7 +16,7 @@ if %ERRORLEVEL% NEQ 0 (
     echo.
     echo Press any key to open the Node.js download page...
     pause >nul
-    start https://nodejs.org/
+    start "" "https://nodejs.org/"
     echo.
     echo Please install the LTS version of Node.js, restart this window, and try again.
     echo.
@@ -31,26 +32,47 @@ if %ERRORLEVEL% NEQ 0 (
     exit /b 1
 )
 
-:: 3. Check for dependencies and install if missing
+:: 3. Install dependencies across workspace root, server, and client if missing
 if not exist "node_modules\" (
-    echo [INFO] First-time setup detected. Installing dependencies...
-    echo This might take a few minutes depending on your internet speed. Please wait...
-    echo.
+    echo [INFO] Installing root launcher dependencies...
     call npm install
-    if %ERRORLEVEL% NEQ 0 (
+    if errorlevel 1 (
         echo.
-        echo [ERROR] Failed to install dependencies. Please check your internet connection and try again.
+        echo [ERROR] Failed to install root dependencies. Check your connection and try again.
         pause
         exit /b 1
     )
     echo.
-    echo [INFO] Dependencies installed successfully!
+)
+
+if not exist "server\node_modules\" (
+    echo [INFO] Installing backend server dependencies...
+    call npm --prefix server install
+    if errorlevel 1 (
+        echo.
+        echo [ERROR] Failed to install server dependencies. Check your connection and try again.
+        pause
+        exit /b 1
+    )
     echo.
 )
 
-:: 4. Start the app
-echo [INFO] Starting TutIn server and opening browser...
+if not exist "client\node_modules\" (
+    echo [INFO] Installing frontend client dependencies...
+    call npm --prefix client install
+    if errorlevel 1 (
+        echo.
+        echo [ERROR] Failed to install client dependencies. Check your connection and try again.
+        pause
+        exit /b 1
+    )
+    echo.
+)
+
+:: 4. Start backend API + Vite client and open browser
+echo [INFO] Starting TutIn v7.0 server (:9474) and client (:5173)...
 echo.
-npm start
+start "" /b cmd /c "timeout /t 3 /nobreak >nul & start http://127.0.0.1:5173"
+call npm start
 
 pause

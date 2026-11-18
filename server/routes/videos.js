@@ -4,7 +4,10 @@ import path from 'path'
 import { spawn } from 'child_process'
 import { getAll, getOne, run, transaction } from '../database.js'
 import { recalculateCourseProgress } from './courses.js'
+import { syncCourseNotesToVault } from './notes.js'
+import { deleteLinkedCanvasNodesForNotes, syncCourseCanvasToVault } from './canvas.js'
 import { getFfmpegPath } from '../utils/ffmpeg.js'
+import { normalizeSubtitleSources } from '../utils/courseAssets.js'
 
 const router = express.Router()
 
@@ -12,6 +15,8 @@ const router = express.Router()
  * Map a raw SQLite video row (snake_case) to a camelCase API response object.
  */
 function mapVideoRow(video) {
+    const rawSubs = JSON.parse(video.subtitle_sources || '[]').filter(s => !s.filePath || fs.existsSync(s.filePath))
+    const normalizedSubs = normalizeSubtitleSources(rawSubs, 'en')
     return {
         id: video.id,
         courseId: video.course_id,
@@ -37,10 +42,10 @@ function mapVideoRow(video) {
         bookmarks: JSON.parse(video.bookmarks || '[]'),
         youtubeId: video.youtube_id,
         url: video.url,
-        hasTranscript: video.has_transcript === 1,
+        hasTranscript: video.has_transcript === 1 || normalizedSubs.length > 0,
         hasSummary: video.has_summary === 1,
         primaryTranscript: video.primary_transcript,
-        subtitleSources: JSON.parse(video.subtitle_sources || '[]').filter(s => !s.filePath || fs.existsSync(s.filePath)),
+        subtitleSources: normalizedSubs,
         dubbedTracks: JSON.parse(video.dubbed_tracks || '[]').filter(t => t.filePath && fs.existsSync(t.filePath))
     }
 }
@@ -76,10 +81,6 @@ router.get('/:id/audio-16k', (req, res) => {
         }
 
         const ffmpegPath = getFfmpegPath()
-        res.setHeader('Content-Type', 'audio/wav')
-        res.setHeader('Cache-Control', 'no-cache')
-        res.setHeader('Access-Control-Allow-Origin', '*')
-
         const ffmpegArgs = [
             '-loglevel', 'error',
             '-i', filePath,
@@ -92,16 +93,45 @@ router.get('/:id/audio-16k', (req, res) => {
         ]
 
         const proc = spawn(ffmpegPath, ffmpegArgs, { stdio: ['ignore', 'pipe', 'pipe'] })
+        let startedStream = false
+        let stderrText = ''
 
-        proc.stdout.pipe(res)
+        proc.stdout.on('data', (chunk) => {
+            if (!startedStream) {
+                startedStream = true
+                res.setHeader('Content-Type', 'audio/wav')
+                res.setHeader('Cache-Control', 'no-cache')
+                res.setHeader('Access-Control-Allow-Origin', '*')
+            }
+            res.write(chunk)
+        })
+
+        proc.stdout.on('end', () => {
+            if (startedStream && !res.writableEnded) {
+                res.end()
+            }
+        })
 
         proc.stderr.on('data', (data) => {
-            console.error(`[AudioStream 16k] FFmpeg error: ${data.toString()}`)
+            const msg = data.toString()
+            stderrText += msg
+            console.error(`[AudioStream 16k] FFmpeg error: ${msg}`)
         })
 
         proc.on('error', (err) => {
-            console.error(`[AudioStream 16k] Failed to spawn FFmpeg: ${err.message}`)
-            if (!res.headersSent) res.status(500).json({ error: 'Audio extraction failed' })
+            console.error(`[AudioStream 16k] Failed to spawn FFmpeg (${ffmpegPath}): ${err.message}`)
+            if (!res.headersSent) res.status(500).json({ error: `Audio extraction failed: ${err.message}` })
+            else if (!res.writableEnded) res.end()
+        })
+
+        proc.on('close', (code) => {
+            if (!startedStream && !res.headersSent) {
+                res.status(500).json({
+                    error: stderrText.trim() || `FFmpeg exited with code ${code} before producing audio`
+                })
+            } else if (!res.writableEnded) {
+                res.end()
+            }
         })
 
         res.on('close', () => {
@@ -270,19 +300,57 @@ router.put('/:id', (req, res) => {
 })
 
 // PUT /api/videos/:id/progress
-// Optimized: Update video progress without triggering full course recalculation/DB flush on every 5s tick
+// Update playback resume position and conditionally commit watch history + course last_accessed
 router.put('/:id/progress', (req, res) => {
-    const { watchProgress, lastWatchedPosition } = req.body
+    const { watchProgress, lastWatchedPosition, recordHistory, recordPosition } = req.body ?? {}
     const safeProgress = Math.min(1, Math.max(0, Number(watchProgress) || 0))
     const safePosition = Math.max(0, Number(lastWatchedPosition) || 0)
     try {
-        run(`
-            UPDATE videos 
-            SET watch_progress = ?, last_watched_position = ?, last_watched_at = ?
-            WHERE id = ?
-        `, [safeProgress, safePosition, new Date().toISOString(), req.params.id])
-        
-        res.json({ success: true })
+        const existing = getOne(
+            'SELECT course_id, last_watched_at FROM videos WHERE id = ?',
+            [req.params.id]
+        )
+        if (!existing) {
+            return res.status(404).json({ error: 'Video not found' })
+        }
+
+        const shouldUpdatePosition = recordPosition !== false
+        const shouldRecordHistory =
+            recordHistory === true || (recordHistory === undefined && Boolean(existing.last_watched_at))
+        const now = new Date().toISOString()
+
+        if (shouldUpdatePosition && shouldRecordHistory) {
+            run(`
+                UPDATE videos 
+                SET watch_progress = ?, last_watched_position = ?, last_watched_at = ?
+                WHERE id = ?
+            `, [safeProgress, safePosition, now, req.params.id])
+        } else if (shouldUpdatePosition) {
+            run(`
+                UPDATE videos 
+                SET watch_progress = ?, last_watched_position = ?
+                WHERE id = ?
+            `, [safeProgress, safePosition, req.params.id])
+        } else if (shouldRecordHistory) {
+            run(`
+                UPDATE videos 
+                SET last_watched_at = ?
+                WHERE id = ?
+            `, [now, req.params.id])
+        }
+
+        if (shouldRecordHistory && existing.course_id) {
+            run(
+                'UPDATE courses SET last_accessed = ? WHERE id = ?',
+                [now, existing.course_id]
+            )
+        }
+
+        res.json({
+            success: true,
+            recordedHistory: shouldRecordHistory,
+            lastWatchedAt: shouldRecordHistory ? now : existing.last_watched_at,
+        })
     } catch (err) {
         res.status(500).json({ error: err.message })
     }
@@ -326,9 +394,20 @@ router.post('/:id/favorite', (req, res) => {
 router.delete('/:id', (req, res) => {
     try {
         const video = getOne('SELECT course_id FROM videos WHERE id = ?', [req.params.id])
-        run('DELETE FROM videos WHERE id = ?', [req.params.id])
+        const noteIds = getAll('SELECT id FROM notes WHERE video_id = ?', [req.params.id]).map(n => n.id)
+        let removedCanvasNodes = 0
+
+        transaction(() => {
+            if (video?.course_id && noteIds.length > 0) {
+                removedCanvasNodes = deleteLinkedCanvasNodesForNotes(video.course_id, noteIds)
+            }
+            run('DELETE FROM videos WHERE id = ?', [req.params.id])
+        })
+
         if (video?.course_id) {
             recalculateCourseProgress(video.course_id)
+            if (noteIds.length > 0) syncCourseNotesToVault(video.course_id)
+            if (removedCanvasNodes > 0) syncCourseCanvasToVault(video.course_id)
         }
         res.json({ success: true })
     } catch (err) {

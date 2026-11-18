@@ -5,51 +5,582 @@ import { saveVaultCanvas } from '../utils/courseAssets.js'
 
 const router = express.Router()
 
+function toEpochMs(value, fallback = Date.now()) {
+    if (typeof value === 'number' && Number.isFinite(value)) return value
+    if (typeof value === 'string' && value.trim()) {
+        const num = Number(value)
+        if (Number.isFinite(num) && /^\d+$/.test(value.trim())) return num
+        const parsed = Date.parse(value)
+        if (Number.isFinite(parsed)) return parsed
+    }
+    return fallback
+}
+
+function toIsoString(value, fallbackIso = new Date().toISOString()) {
+    if (typeof value === 'string' && value.trim()) return value
+    if (typeof value === 'number' && Number.isFinite(value)) return new Date(value).toISOString()
+    return fallbackIso
+}
+
+function safeJsonParse(raw, fallback) {
+    if (!raw || typeof raw !== 'string') return fallback
+    try {
+        return JSON.parse(raw)
+    } catch {
+        return fallback
+    }
+}
+
+const SQL_CHUNK_SIZE = 400
+const DEFAULT_CANVAS_CARD_WIDTH = 320
+const DEFAULT_CANVAS_GROUP_WIDTH = 356
+
+function deleteCourseRowsNotIn(table, courseId, keepIds) {
+    if (!keepIds || keepIds.size === 0) {
+        run(`DELETE FROM ${table} WHERE course_id = ?`, [courseId])
+        return
+    }
+    const existing = getAll(`SELECT id FROM ${table} WHERE course_id = ?`, [courseId])
+    const toDelete = existing.map(r => r.id).filter(id => !keepIds.has(id))
+    for (let i = 0; i < toDelete.length; i += SQL_CHUNK_SIZE) {
+        const chunk = toDelete.slice(i, i + SQL_CHUNK_SIZE)
+        const ph = chunk.map(() => '?').join(',')
+        run(`DELETE FROM ${table} WHERE course_id = ? AND id IN (${ph})`, [courseId, ...chunk])
+    }
+}
+
+function saveViewportRow(courseId, viewport, updatedAtIso = new Date().toISOString()) {
+    const rawX = viewport?.x ?? viewport?.pan?.x ?? 0
+    const rawY = viewport?.y ?? viewport?.pan?.y ?? 0
+    const rawZoom = viewport?.zoom ?? 1
+    const vpX = Number.isFinite(Number(rawX)) ? Number(rawX) : 0
+    const vpY = Number.isFinite(Number(rawY)) ? Number(rawY) : 0
+    const vpZoom = Number.isFinite(Number(rawZoom)) && Number(rawZoom) > 0 ? Number(rawZoom) : 1
+    run(`
+        INSERT INTO canvas_viewports (course_id, pan_x, pan_y, zoom, updated_at)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(course_id) DO UPDATE SET
+            pan_x = excluded.pan_x,
+            pan_y = excluded.pan_y,
+            zoom = excluded.zoom,
+            updated_at = excluded.updated_at
+    `, [courseId, vpX, vpY, vpZoom, updatedAtIso])
+}
+
 /**
- * Synchronize canvas whiteboard data to <courseFolder>/.tutin/canvas.json
+ * Delete canvas_nodes linked to deleted note IDs (and any edges attached to them).
+ * Returns the number of canvas_nodes deleted so callers know whether to sync canvas.json.
  */
-function syncCourseCanvasToVault(courseId) {
+export function deleteLinkedCanvasNodesForNotes(courseId, noteIds) {
+    if (!courseId || !Array.isArray(noteIds) || noteIds.length === 0) return 0
+    const nodeIds = []
+    for (let i = 0; i < noteIds.length; i += SQL_CHUNK_SIZE) {
+        const chunk = noteIds.slice(i, i + SQL_CHUNK_SIZE)
+        const ph = chunk.map(() => '?').join(',')
+        const rows = getAll(
+            `SELECT id FROM canvas_nodes WHERE course_id = ? AND note_id IN (${ph})`,
+            [courseId, ...chunk]
+        )
+        for (const row of rows) nodeIds.push(row.id)
+    }
+    if (nodeIds.length === 0) return 0
+
+    for (let i = 0; i < nodeIds.length; i += SQL_CHUNK_SIZE) {
+        const chunk = nodeIds.slice(i, i + SQL_CHUNK_SIZE)
+        const ph = chunk.map(() => '?').join(',')
+        run(
+            `DELETE FROM canvas_edges WHERE course_id = ? AND (from_node_id IN (${ph}) OR to_node_id IN (${ph}))`,
+            [courseId, ...chunk, ...chunk]
+        )
+        run(
+            `DELETE FROM canvas_nodes WHERE course_id = ? AND id IN (${ph})`,
+            [courseId, ...chunk]
+        )
+    }
+    return nodeIds.length
+}
+
+/**
+ * Read Canvas v2 state for a course from SQLite (with automatic v1 fallback).
+ */
+export function readCanvasStateFromDb(courseId) {
+    const rawGroups = getAll(
+        `SELECT * FROM canvas_groups WHERE course_id = ? ORDER BY sort_order ASC, created_at ASC`,
+        [courseId]
+    )
+
+    const rawNodes = getAll(`
+        SELECT 
+            n.id, n.course_id, n.note_id, n.type, n.content, n.title,
+            n.x, n.y, n.width, n.height, n.color, n.parent_group_id, n.collapsed,
+            n.origin_lesson_idx, n.origin_video_id, n.timestamp,
+            n.membership_state, n.is_canvas_only, n.image_src, n.caption, n.accent_index,
+            n.created_at, n.updated_at,
+            orig_note.content as original_note_content,
+            orig_note.timestamp as note_timestamp,
+            orig_note.video_id as note_video_id
+        FROM canvas_nodes n
+        LEFT JOIN notes orig_note ON n.note_id = orig_note.id
+        WHERE n.course_id = ?
+        ORDER BY n.created_at ASC
+    `, [courseId])
+
+    const groups = rawGroups.map((g, idx) => ({
+        id: g.id,
+        type: g.type === 'video-artboard' ? 'video-artboard' : 'custom-artboard',
+        lessonIdx: g.lesson_idx !== null && g.lesson_idx !== undefined ? Number(g.lesson_idx) : undefined,
+        videoId: g.video_id || undefined,
+        title: g.title || '',
+        subtitle: g.subtitle || undefined,
+        x: Number(g.x) || 0,
+        y: Number(g.y) || 0,
+        width: Number(g.width) || DEFAULT_CANVAS_GROUP_WIDTH,
+        height: Number(g.height) || 240,
+        tintIndex: g.tint_index !== null && g.tint_index !== undefined && g.tint_index !== ''
+            ? Number(g.tint_index)
+            : (idx % 6),
+        layoutMode: g.layout_mode === 'auto' ? 'auto' : 'custom',
+        collapsed: Boolean(g.collapsed),
+    }))
+
+    const cards = []
+    for (const node of rawNodes) {
+        // Legacy v1 rows could store group frames inside canvas_nodes with type = 'group'
+        if (node.type === 'group') {
+            if (!groups.some(g => g.id === node.id)) {
+                groups.push({
+                    id: node.id,
+                    type: 'custom-artboard',
+                    title: node.title || 'Group',
+                    x: Number(node.x) || 0,
+                    y: Number(node.y) || 0,
+                    width: Number(node.width) || DEFAULT_CANVAS_GROUP_WIDTH,
+                    height: Number(node.height) || 240,
+                    tintIndex: groups.length % 6,
+                    layoutMode: 'custom',
+                    collapsed: Boolean(node.collapsed),
+                })
+            }
+            continue
+        }
+
+        const hasNoteLink = Boolean(node.note_id)
+        const isVideoNote = node.type === 'video-note' || hasNoteLink
+        const cardType = ['video-note', 'canvas-note', 'image', 'text'].includes(node.type)
+            ? node.type
+            : (isVideoNote ? 'video-note' : 'canvas-note')
+
+        const htmlContent = node.note_id && node.original_note_content !== null && node.original_note_content !== undefined
+            ? node.original_note_content
+            : (node.content || '')
+
+        const timestampVal = node.note_timestamp !== null && node.note_timestamp !== undefined
+            ? Number(node.note_timestamp)
+            : (node.timestamp !== null && node.timestamp !== undefined ? Number(node.timestamp) : undefined)
+
+        const rawMembership = node.membership_state
+        const membershipState =
+            hasNoteLink && (!rawMembership || rawMembership === 'canvas-only')
+                ? (node.parent_group_id
+                    ? (String(node.parent_group_id).startsWith('vgroup-') ? 'auto' : 'reassigned')
+                    : 'detached')
+                : (rawMembership || (node.parent_group_id ? 'reassigned' : 'canvas-only'))
+
+        cards.push({
+            id: node.id,
+            type: cardType,
+            noteId: node.note_id || undefined,
+            originLessonIdx: node.origin_lesson_idx !== null && node.origin_lesson_idx !== undefined
+                ? Number(node.origin_lesson_idx)
+                : undefined,
+            originVideoId: node.origin_video_id || node.note_video_id || undefined,
+            timestamp: timestampVal,
+            groupId: node.parent_group_id || null,
+            membershipState,
+            isCanvasOnly: hasNoteLink
+                ? false
+                : (node.is_canvas_only !== null && node.is_canvas_only !== undefined
+                    ? Boolean(node.is_canvas_only)
+                    : true),
+            x: Number(node.x) || 0,
+            y: Number(node.y) || 0,
+            width: Number(node.width) || DEFAULT_CANVAS_CARD_WIDTH,
+            height: Number(node.height) || 140,
+            htmlContent,
+            imageSrc: node.image_src || undefined,
+            caption: node.caption || undefined,
+            accentIndex: node.accent_index !== null && node.accent_index !== undefined ? Number(node.accent_index) : undefined,
+            createdAt: toEpochMs(node.created_at),
+            updatedAt: toEpochMs(node.updated_at),
+        })
+    }
+
+    const rawEdges = getAll(`SELECT * FROM canvas_edges WHERE course_id = ? ORDER BY created_at ASC`, [courseId])
+    const edges = rawEdges.map(edge => ({
+        id: edge.id,
+        edgeKind: edge.edge_kind === 'auto-chrono' ? 'auto-chrono' : 'manual',
+        fromId: edge.from_node_id,
+        toId: edge.to_node_id,
+        fromSide: edge.from_side || undefined,
+        toSide: edge.to_side || undefined,
+        style: edge.style === 'dashed' ? 'dashed' : 'solid',
+        label: edge.label || undefined,
+        createdAt: toEpochMs(edge.created_at),
+    }))
+
+    const rawStrokes = getAll(
+        `SELECT * FROM canvas_strokes WHERE course_id = ? ORDER BY sort_order ASC, created_at ASC`,
+        [courseId]
+    )
+    const strokes = rawStrokes.map(s => ({
+        id: s.id,
+        tool: s.tool === 'highlighter' ? 'highlighter' : 'pen',
+        points: safeJsonParse(s.points, []),
+        colorToken: s.color_token || 'ink',
+        size: Number(s.size) || 3,
+        parentGroupId: s.parent_group_id || null,
+    }))
+
+    const vp = getOne(`SELECT pan_x, pan_y, zoom, updated_at FROM canvas_viewports WHERE course_id = ?`, [courseId])
+    const viewport = vp ? {
+        x: Number.isFinite(Number(vp.pan_x)) ? Number(vp.pan_x) : 0,
+        y: Number.isFinite(Number(vp.pan_y)) ? Number(vp.pan_y) : 0,
+        zoom: Number.isFinite(Number(vp.zoom)) && Number(vp.zoom) > 0 ? Number(vp.zoom) : 1,
+    } : { x: 0, y: 0, zoom: 1 }
+
+    const meta = getOne(`SELECT dismissed_note_ids, last_sync_revision, updated_at FROM canvas_course_meta WHERE course_id = ?`, [courseId])
+
+    return {
+        version: 2,
+        courseId,
+        groups,
+        cards,
+        edges,
+        strokes,
+        dismissedNoteIds: safeJsonParse(meta?.dismissed_note_ids, []),
+        viewport,
+        lastSyncRevision: Number(meta?.last_sync_revision) || 0,
+        updatedAt: toEpochMs(meta?.updated_at || vp?.updated_at, Date.now()),
+    }
+}
+
+/**
+ * Normalize v1 or v2 canvas payload and persist into SQLite inside an active or new transaction.
+ */
+export function writeCanvasPayloadToDb(courseId, payload, { insideTransaction = false } = {}) {
+    const nowIso = new Date().toISOString()
+
+    // Support both v2 (groups/cards/strokes/viewport.{x,y,zoom}) and legacy v1 (nodes/viewport.pan)
+    const isV2Payload = payload?.version === 2 || Array.isArray(payload?.cards) || Array.isArray(payload?.groups)
+    const rawInputGroups = Array.isArray(payload?.groups) ? payload.groups : []
+    const remappedGroupIds = new Map()
+    const groups = rawInputGroups.map(g => {
+        if (g && typeof g.id === 'string' && /^vgroup-\d+$/.test(g.id)) {
+            const scopedId = `vgroup-${courseId}-${g.id.slice('vgroup-'.length)}`
+            remappedGroupIds.set(g.id, scopedId)
+            return { ...g, id: scopedId }
+        }
+        return g
+    })
+    const rawCards = (Array.isArray(payload?.cards)
+        ? payload.cards
+        : (Array.isArray(payload?.nodes)
+            ? payload.nodes.filter(n => n.type !== 'group').map(n => ({
+                id: n.id,
+                type: n.noteId ? 'video-note' : (n.type || 'canvas-note'),
+                noteId: n.noteId || undefined,
+                originLessonIdx: n.originLessonIdx,
+                originVideoId: n.originVideoId || n.videoId,
+                timestamp: n.timestamp,
+                groupId: n.parentGroupId ?? null,
+                membershipState: n.membershipState || (n.parentGroupId ? 'reassigned' : 'canvas-only'),
+                isCanvasOnly: n.isCanvasOnly !== undefined ? n.isCanvasOnly : !n.noteId,
+                x: n.x || 0,
+                y: n.y || 0,
+                width: n.width || DEFAULT_CANVAS_CARD_WIDTH,
+                height: n.height || 140,
+                htmlContent: n.htmlContent ?? n.content ?? '',
+                imageSrc: n.imageSrc,
+                caption: n.caption,
+                accentIndex: n.accentIndex,
+                createdAt: n.createdAt,
+                updatedAt: n.updatedAt,
+            }))
+            : [])).map(c => (c && c.groupId && remappedGroupIds.has(c.groupId)
+        ? { ...c, groupId: remappedGroupIds.get(c.groupId) }
+        : c))
+
+    // Also promote any legacy type==='group' entries from v1 nodes arrays
+    if (!isV2Payload && Array.isArray(payload?.nodes)) {
+        payload.nodes.filter(n => n.type === 'group').forEach((g, idx) => {
+            groups.push({
+                id: g.id,
+                type: 'custom-artboard',
+                title: g.title || 'Group',
+                x: g.x || 0,
+                y: g.y || 0,
+                width: g.width || DEFAULT_CANVAS_GROUP_WIDTH,
+                height: g.height || 240,
+                tintIndex: idx % 6,
+                layoutMode: 'custom',
+                collapsed: Boolean(g.collapsed),
+            })
+        })
+    }
+
+    const execute = () => {
+        // 1. Viewport
+        if (payload?.viewport) {
+            saveViewportRow(courseId, payload.viewport, nowIso)
+        }
+
+        // 2. Groups (Artboards)
+        if (Array.isArray(payload?.groups) || !isV2Payload) {
+            deleteCourseRowsNotIn('canvas_groups', courseId, new Set(groups.map(g => g.id)))
+
+            groups.forEach((g, idx) => {
+                run(`
+                    INSERT INTO canvas_groups (
+                        id, course_id, type, lesson_idx, video_id, title, subtitle,
+                        x, y, width, height, tint_index, layout_mode, collapsed, sort_order,
+                        created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(id) DO UPDATE SET
+                        type = excluded.type,
+                        lesson_idx = excluded.lesson_idx,
+                        video_id = excluded.video_id,
+                        title = excluded.title,
+                        subtitle = excluded.subtitle,
+                        x = excluded.x,
+                        y = excluded.y,
+                        width = excluded.width,
+                        height = excluded.height,
+                        tint_index = excluded.tint_index,
+                        layout_mode = excluded.layout_mode,
+                        collapsed = excluded.collapsed,
+                        sort_order = excluded.sort_order,
+                        updated_at = excluded.updated_at
+                    WHERE canvas_groups.course_id = excluded.course_id
+                `, [
+                    g.id,
+                    courseId,
+                    g.type || 'custom-artboard',
+                    g.lessonIdx ?? null,
+                    g.videoId ?? null,
+                    g.title || '',
+                    g.subtitle ?? null,
+                    g.x || 0,
+                    g.y || 0,
+                    g.width || DEFAULT_CANVAS_GROUP_WIDTH,
+                    g.height || 240,
+                    g.tintIndex ?? 0,
+                    g.layoutMode || 'custom',
+                    g.collapsed ? 1 : 0,
+                    idx,
+                    nowIso,
+                    nowIso,
+                ])
+            })
+        }
+
+        // 3. Cards -> canvas_nodes
+        const savedCardIdSet = new Set()
+        if (Array.isArray(payload?.cards) || Array.isArray(payload?.nodes)) {
+            deleteCourseRowsNotIn('canvas_nodes', courseId, new Set(rawCards.map(c => c.id)))
+            const validCourseNoteIds = new Set(
+                getAll('SELECT id FROM notes WHERE course_id = ?', [courseId]).map(r => r.id)
+            )
+
+            for (const card of rawCards) {
+                savedCardIdSet.add(card.id)
+                const verifiedNoteId = card.noteId && validCourseNoteIds.has(card.noteId) ? card.noteId : null
+
+                run(`
+                    INSERT INTO canvas_nodes (
+                        id, course_id, note_id, type, content, title,
+                        x, y, width, height, color, parent_group_id, collapsed,
+                        origin_lesson_idx, origin_video_id, timestamp,
+                        membership_state, is_canvas_only, image_src, caption, accent_index,
+                        created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(id) DO UPDATE SET
+                        note_id = excluded.note_id,
+                        type = excluded.type,
+                        content = excluded.content,
+                        title = excluded.title,
+                        x = excluded.x,
+                        y = excluded.y,
+                        width = excluded.width,
+                        height = excluded.height,
+                        color = excluded.color,
+                        parent_group_id = excluded.parent_group_id,
+                        collapsed = excluded.collapsed,
+                        origin_lesson_idx = excluded.origin_lesson_idx,
+                        origin_video_id = excluded.origin_video_id,
+                        timestamp = excluded.timestamp,
+                        membership_state = excluded.membership_state,
+                        is_canvas_only = excluded.is_canvas_only,
+                        image_src = excluded.image_src,
+                        caption = excluded.caption,
+                        accent_index = excluded.accent_index,
+                        updated_at = excluded.updated_at
+                    WHERE canvas_nodes.course_id = excluded.course_id
+                `, [
+                    card.id,
+                    courseId,
+                    verifiedNoteId,
+                    card.type || 'canvas-note',
+                    card.htmlContent ?? card.content ?? '',
+                    card.caption || '',
+                    card.x || 0,
+                    card.y || 0,
+                    card.width || DEFAULT_CANVAS_CARD_WIDTH,
+                    card.height || 140,
+                    '',
+                    card.groupId ?? null,
+                    0,
+                    card.originLessonIdx ?? null,
+                    card.originVideoId ?? null,
+                    card.timestamp ?? null,
+                    card.membershipState || 'canvas-only',
+                    card.isCanvasOnly ? 1 : 0,
+                    card.imageSrc ?? null,
+                    card.caption ?? null,
+                    card.accentIndex ?? null,
+                    toIsoString(card.createdAt, nowIso),
+                    toIsoString(card.updatedAt, nowIso),
+                ])
+            }
+        } else {
+            getAll('SELECT id FROM canvas_nodes WHERE course_id = ?', [courseId]).forEach(r => savedCardIdSet.add(r.id))
+        }
+
+        // 4. Edges
+        if (Array.isArray(payload?.edges)) {
+            const validEdges = payload.edges.filter(e => {
+                const fromId = e.fromId || e.fromNodeId
+                const toId = e.toId || e.toNodeId
+                return fromId && toId && savedCardIdSet.has(fromId) && savedCardIdSet.has(toId)
+            })
+            deleteCourseRowsNotIn('canvas_edges', courseId, new Set(validEdges.map(e => e.id)))
+
+            for (const edge of validEdges) {
+                const fromId = edge.fromId || edge.fromNodeId
+                const toId = edge.toId || edge.toNodeId
+                run(`
+                    INSERT INTO canvas_edges (
+                        id, course_id, from_node_id, to_node_id,
+                        edge_kind, from_side, to_side, style, label, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(id) DO UPDATE SET
+                        from_node_id = excluded.from_node_id,
+                        to_node_id = excluded.to_node_id,
+                        edge_kind = excluded.edge_kind,
+                        from_side = excluded.from_side,
+                        to_side = excluded.to_side,
+                        style = excluded.style,
+                        label = excluded.label
+                    WHERE canvas_edges.course_id = excluded.course_id
+                `, [
+                    edge.id,
+                    courseId,
+                    fromId,
+                    toId,
+                    edge.edgeKind || 'manual',
+                    edge.fromSide ?? null,
+                    edge.toSide ?? null,
+                    edge.style || 'solid',
+                    edge.label ?? null,
+                    toIsoString(edge.createdAt, nowIso),
+                ])
+            }
+        }
+
+        // 5. Strokes — avoid destructive delete + re-insert when stroke rows are unchanged
+        if (Array.isArray(payload?.strokes)) {
+            const nextStrokes = payload.strokes.map(stroke => ({
+                id: stroke.id,
+                tool: stroke.tool === 'highlighter' ? 'highlighter' : 'pen',
+                pointsJson: JSON.stringify(stroke.points || []),
+                colorToken: stroke.colorToken || 'ink',
+                size: Number(stroke.size ?? 3),
+                parentGroupId: stroke.parentGroupId && remappedGroupIds.has(stroke.parentGroupId)
+                    ? remappedGroupIds.get(stroke.parentGroupId)
+                    : (stroke.parentGroupId ?? null),
+            }))
+
+            const existingStrokes = getAll(
+                `SELECT id, tool, points, color_token, size, parent_group_id FROM canvas_strokes WHERE course_id = ? ORDER BY sort_order ASC, created_at ASC`,
+                [courseId]
+            )
+            const strokesUnchanged =
+                existingStrokes.length === nextStrokes.length &&
+                nextStrokes.every((s, idx) => {
+                    const prev = existingStrokes[idx]
+                    return (
+                        prev.id === s.id &&
+                        prev.tool === s.tool &&
+                        prev.points === s.pointsJson &&
+                        prev.color_token === s.colorToken &&
+                        Number(prev.size) === s.size &&
+                        (prev.parent_group_id ?? null) === s.parentGroupId
+                    )
+                })
+
+            if (!strokesUnchanged) {
+                run(`DELETE FROM canvas_strokes WHERE course_id = ?`, [courseId])
+                nextStrokes.forEach((stroke, idx) => {
+                    run(`
+                        INSERT INTO canvas_strokes (
+                            id, course_id, tool, points, color_token, size, parent_group_id, sort_order, created_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    `, [
+                        stroke.id,
+                        courseId,
+                        stroke.tool,
+                        stroke.pointsJson,
+                        stroke.colorToken,
+                        stroke.size,
+                        stroke.parentGroupId,
+                        idx,
+                        nowIso,
+                    ])
+                })
+            }
+        }
+
+        // 6. Meta (dismissedNoteIds, revision, updatedAt)
+        const dismissedJson = JSON.stringify(Array.isArray(payload?.dismissedNoteIds) ? payload.dismissedNoteIds : [])
+        const syncRev = Number(payload?.lastSyncRevision) || 0
+        const updatedIso = toIsoString(payload?.updatedAt, nowIso)
+        run(`
+            INSERT INTO canvas_course_meta (course_id, dismissed_note_ids, last_sync_revision, updated_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(course_id) DO UPDATE SET
+                dismissed_note_ids = excluded.dismissed_note_ids,
+                last_sync_revision = excluded.last_sync_revision,
+                updated_at = excluded.updated_at
+        `, [courseId, dismissedJson, syncRev, updatedIso])
+    }
+
+    if (insideTransaction) {
+        execute()
+    } else {
+        transaction(execute)
+    }
+}
+
+/**
+ * Synchronize Canvas v2 state to <courseFolder>/.tutin/canvas.json
+ */
+export function syncCourseCanvasToVault(courseId) {
     if (!courseId) return
     try {
         const course = getOne('SELECT folder_path FROM courses WHERE id = ?', [courseId])
         if (!course || !course.folder_path || !fs.existsSync(course.folder_path)) return
 
-        const rawNodes = getAll('SELECT * FROM canvas_nodes WHERE course_id = ?', [courseId])
-        const rawEdges = getAll('SELECT * FROM canvas_edges WHERE course_id = ?', [courseId])
-        const vp = getAll('SELECT * FROM canvas_viewports WHERE course_id = ?', [courseId])
-
-        const viewport = vp[0] ? {
-            pan: { x: Number(vp[0].pan_x) || 0, y: Number(vp[0].pan_y) || 0 },
-            zoom: Number(vp[0].zoom) || 1
-        } : { pan: { x: 0, y: 0 }, zoom: 1 }
-
-        const canvasData = {
-            nodes: rawNodes.map(n => ({
-                id: n.id,
-                noteId: n.note_id,
-                type: n.type || 'note',
-                content: n.content,
-                title: n.title,
-                x: Number(n.x) || 0,
-                y: Number(n.y) || 0,
-                width: Number(n.width) || 280,
-                height: Number(n.height) || 180,
-                color: n.color || '',
-                parentGroupId: n.parent_group_id || null,
-                collapsed: Boolean(n.collapsed),
-                createdAt: n.created_at,
-                updatedAt: n.updated_at
-            })),
-            edges: rawEdges.map(e => ({
-                id: e.id,
-                fromNodeId: e.from_node_id,
-                toNodeId: e.to_node_id,
-                createdAt: e.created_at
-            })),
-            viewport
-        }
-
-        saveVaultCanvas(course.folder_path, canvasData)
+        const state = readCanvasStateFromDb(courseId)
+        saveVaultCanvas(course.folder_path, state)
     } catch (err) {
         console.error('[VaultCanvas] Failed to sync canvas to vault:', err)
     }
@@ -59,198 +590,18 @@ function syncCourseCanvasToVault(courseId) {
 router.get('/:courseId', (req, res) => {
     const { courseId } = req.params
     try {
-        // Fetch nodes with joined note and video metadata
-        const rawNodes = getAll(`
-            SELECT 
-                n.id, n.course_id, n.note_id, n.type, n.content, n.title,
-                n.x, n.y, n.width, n.height, n.color, n.parent_group_id, n.collapsed,
-                n.created_at, n.updated_at,
-                orig_note.content as original_note_content,
-                orig_note.timestamp as note_timestamp,
-                orig_note.images as note_images,
-                v.id as video_id,
-                v.title as video_title,
-                v.module_id as module_id
-            FROM canvas_nodes n
-            LEFT JOIN notes orig_note ON n.note_id = orig_note.id
-            LEFT JOIN videos v ON orig_note.video_id = v.id
-            WHERE n.course_id = ?
-            ORDER BY n.created_at ASC
-        `, [courseId])
-
-        const nodes = rawNodes.map(node => {
-            let noteImages = []
-            try {
-                if (node.note_images) noteImages = JSON.parse(node.note_images)
-            } catch { /* ignore */ }
-
-            return {
-                id: node.id,
-                courseId: node.course_id,
-                noteId: node.note_id,
-                type: node.type || 'note',
-                // If linked to video note, live note content takes precedence if present
-                content: node.note_id && node.original_note_content !== null ? node.original_note_content : (node.content || ''),
-                title: node.title || '',
-                x: Number(node.x) || 0,
-                y: Number(node.y) || 0,
-                width: Number(node.width) || 280,
-                height: Number(node.height) || 180,
-                color: node.color || '',
-                parentGroupId: node.parent_group_id || null,
-                collapsed: Boolean(node.collapsed),
-                createdAt: node.created_at,
-                updatedAt: node.updated_at,
-                // Joined metadata for video notes
-                videoTitle: node.video_title || null,
-                videoId: node.video_id || null,
-                moduleId: node.module_id || null,
-                timestamp: node.note_timestamp !== null && node.note_timestamp !== undefined ? Number(node.note_timestamp) : null,
-                images: noteImages
-            }
-        })
-
-        // Fetch edges
-        const rawEdges = getAll(`
-            SELECT id, course_id, from_node_id, to_node_id, created_at
-            FROM canvas_edges
-            WHERE course_id = ?
-        `, [courseId])
-
-        const edges = rawEdges.map(edge => ({
-            id: edge.id,
-            courseId: edge.course_id,
-            fromNodeId: edge.from_node_id,
-            toNodeId: edge.to_node_id,
-            createdAt: edge.created_at
-        }))
-
-        // Fetch viewport
-        const vp = getOne(`
-            SELECT pan_x, pan_y, zoom, updated_at
-            FROM canvas_viewports
-            WHERE course_id = ?
-        `, [courseId])
-
-        const viewport = vp ? {
-            pan: { x: Number(vp.pan_x) || 0, y: Number(vp.pan_y) || 0 },
-            zoom: Number(vp.zoom) || 1
-        } : {
-            pan: { x: 0, y: 0 },
-            zoom: 1
-        }
-
-        res.json({ nodes, edges, viewport })
+        res.json(readCanvasStateFromDb(courseId))
     } catch (err) {
         console.error('Failed to get canvas data:', err)
         res.status(500).json({ error: err.message })
     }
 })
 
-// PUT /api/canvas/:courseId — bulk save nodes, edges, viewport
+// PUT /api/canvas/:courseId — bulk save Canvas v2 state (groups, cards, edges, strokes, meta, viewport)
 router.put('/:courseId', (req, res) => {
     const { courseId } = req.params
-    const { nodes, edges, viewport } = req.body
-
     try {
-        const now = new Date().toISOString()
-        transaction(() => {
-            // 1. Save viewport
-            if (viewport) {
-                const panX = viewport.pan?.x ?? 0
-                const panY = viewport.pan?.y ?? 0
-                const zoom = viewport.zoom ?? 1
-                run(`
-                    INSERT INTO canvas_viewports (course_id, pan_x, pan_y, zoom, updated_at)
-                    VALUES (?, ?, ?, ?, ?)
-                    ON CONFLICT(course_id) DO UPDATE SET
-                        pan_x = excluded.pan_x,
-                        pan_y = excluded.pan_y,
-                        zoom = excluded.zoom,
-                        updated_at = excluded.updated_at
-                `, [courseId, panX, panY, zoom, now])
-            }
-
-            // 2. Sync nodes if provided
-            if (Array.isArray(nodes)) {
-                // Delete existing nodes not present in the new set
-                const currentIds = nodes.map(n => n.id)
-                if (currentIds.length > 0) {
-                    const placeholders = currentIds.map(() => '?').join(',')
-                    run(`DELETE FROM canvas_nodes WHERE course_id = ? AND id NOT IN (${placeholders})`, [courseId, ...currentIds])
-                } else {
-                    run(`DELETE FROM canvas_nodes WHERE course_id = ?`, [courseId])
-                }
-
-                // Upsert each node
-                for (const node of nodes) {
-                    run(`
-                        INSERT INTO canvas_nodes (
-                            id, course_id, note_id, type, content, title,
-                            x, y, width, height, color, parent_group_id, collapsed,
-                            created_at, updated_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        ON CONFLICT(id) DO UPDATE SET
-                            note_id = excluded.note_id,
-                            type = excluded.type,
-                            content = excluded.content,
-                            title = excluded.title,
-                            x = excluded.x,
-                            y = excluded.y,
-                            width = excluded.width,
-                            height = excluded.height,
-                            color = excluded.color,
-                            parent_group_id = excluded.parent_group_id,
-                            collapsed = excluded.collapsed,
-                            updated_at = excluded.updated_at
-                    `, [
-                        node.id,
-                        courseId,
-                        node.noteId || null,
-                        node.type || 'note',
-                        node.content || '',
-                        node.title || '',
-                        node.x || 0,
-                        node.y || 0,
-                        node.width || 280,
-                        node.height || 180,
-                        node.color || '',
-                        node.parentGroupId || null,
-                        node.collapsed ? 1 : 0,
-                        node.createdAt || now,
-                        now
-                    ])
-                }
-            }
-
-            // 3. Sync edges if provided
-            if (Array.isArray(edges)) {
-                const edgeIds = edges.map(e => e.id)
-                if (edgeIds.length > 0) {
-                    const placeholders = edgeIds.map(() => '?').join(',')
-                    run(`DELETE FROM canvas_edges WHERE course_id = ? AND id NOT IN (${placeholders})`, [courseId, ...edgeIds])
-                } else {
-                    run(`DELETE FROM canvas_edges WHERE course_id = ?`, [courseId])
-                }
-
-                for (const edge of edges) {
-                    run(`
-                        INSERT INTO canvas_edges (id, course_id, from_node_id, to_node_id, created_at)
-                        VALUES (?, ?, ?, ?, ?)
-                        ON CONFLICT(id) DO UPDATE SET
-                            from_node_id = excluded.from_node_id,
-                            to_node_id = excluded.to_node_id
-                    `, [
-                        edge.id,
-                        courseId,
-                        edge.fromNodeId,
-                        edge.toNodeId,
-                        edge.createdAt || now
-                    ])
-                }
-            }
-        })
-
+        writeCanvasPayloadToDb(courseId, req.body)
         syncCourseCanvasToVault(courseId)
         res.json({ success: true })
     } catch (err) {
@@ -259,151 +610,14 @@ router.put('/:courseId', (req, res) => {
     }
 })
 
-// POST /api/canvas/:courseId/nodes
-router.post('/:courseId/nodes', (req, res) => {
+// PATCH /api/canvas/:courseId/viewport — lightweight pan/zoom persistence without rewriting nodes/strokes/vault
+router.patch('/:courseId/viewport', (req, res) => {
     const { courseId } = req.params
-    const data = req.body
-    if (!data.id) {
-        return res.status(400).json({ error: 'Missing node ID' })
-    }
-
     try {
-        const now = new Date().toISOString()
-        run(`
-            INSERT INTO canvas_nodes (
-                id, course_id, note_id, type, content, title,
-                x, y, width, height, color, parent_group_id, collapsed,
-                created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `, [
-            data.id,
-            courseId,
-            data.noteId || null,
-            data.type || 'note',
-            data.content || '',
-            data.title || '',
-            data.x || 0,
-            data.y || 0,
-            data.width || 280,
-            data.height || 180,
-            data.color || '',
-            data.parentGroupId || null,
-            data.collapsed ? 1 : 0,
-            data.createdAt || now,
-            now
-        ])
-
-        syncCourseCanvasToVault(courseId)
-        res.status(201).json({ success: true, id: data.id })
-    } catch (err) {
-        res.status(500).json({ error: err.message })
-    }
-})
-
-// PUT /api/canvas/:courseId/nodes/:nodeId
-router.put('/:courseId/nodes/:nodeId', (req, res) => {
-    const { courseId, nodeId } = req.params
-    const updates = req.body
-
-    try {
-        const node = getOne('SELECT * FROM canvas_nodes WHERE id = ? AND course_id = ?', [nodeId, courseId])
-        if (!node) return res.status(404).json({ error: 'Node not found' })
-
-        const now = new Date().toISOString()
-        const fields = []
-        const params = []
-
-        const columnMap = {
-            noteId: 'note_id',
-            type: 'type',
-            content: 'content',
-            title: 'title',
-            x: 'x',
-            y: 'y',
-            width: 'width',
-            height: 'height',
-            color: 'color',
-            parentGroupId: 'parent_group_id',
-            collapsed: 'collapsed'
-        }
-
-        for (const [key, col] of Object.entries(columnMap)) {
-            if (updates[key] !== undefined) {
-                fields.push(`${col} = ?`)
-                if (key === 'collapsed') {
-                    params.push(updates[key] ? 1 : 0)
-                } else {
-                    params.push(updates[key])
-                }
-            }
-        }
-
-        fields.push('updated_at = ?')
-        params.push(now)
-        params.push(nodeId)
-        params.push(courseId)
-
-        run(`UPDATE canvas_nodes SET ${fields.join(', ')} WHERE id = ? AND course_id = ?`, params)
-
-        // If this node is linked to a video note and content was modified, update original note as well
-        if (node.note_id && updates.content !== undefined) {
-            run('UPDATE notes SET content = ?, updated_at = ? WHERE id = ?', [updates.content, now, node.note_id])
-        }
-
-        syncCourseCanvasToVault(courseId)
+        saveViewportRow(courseId, req.body)
         res.json({ success: true })
     } catch (err) {
-        res.status(500).json({ error: err.message })
-    }
-})
-
-// DELETE /api/canvas/:courseId/nodes/:nodeId
-router.delete('/:courseId/nodes/:nodeId', (req, res) => {
-    const { courseId, nodeId } = req.params
-    try {
-        transaction(() => {
-            run('DELETE FROM canvas_edges WHERE (from_node_id = ? OR to_node_id = ?) AND course_id = ?', [nodeId, nodeId, courseId])
-            run('DELETE FROM canvas_nodes WHERE id = ? AND course_id = ?', [nodeId, courseId])
-        })
-
-        syncCourseCanvasToVault(courseId)
-        res.json({ success: true })
-    } catch (err) {
-        res.status(500).json({ error: err.message })
-    }
-})
-
-// POST /api/canvas/:courseId/edges
-router.post('/:courseId/edges', (req, res) => {
-    const { courseId } = req.params
-    const data = req.body
-    if (!data.id || !data.fromNodeId || !data.toNodeId) {
-        return res.status(400).json({ error: 'Missing required edge fields' })
-    }
-
-    try {
-        const now = new Date().toISOString()
-        run(`
-            INSERT INTO canvas_edges (id, course_id, from_node_id, to_node_id, created_at)
-            VALUES (?, ?, ?, ?, ?)
-        `, [data.id, courseId, data.fromNodeId, data.toNodeId, data.createdAt || now])
-
-        syncCourseCanvasToVault(courseId)
-        res.status(201).json({ success: true, id: data.id })
-    } catch (err) {
-        res.status(500).json({ error: err.message })
-    }
-})
-
-// DELETE /api/canvas/:courseId/edges/:edgeId
-router.delete('/:courseId/edges/:edgeId', (req, res) => {
-    const { courseId, edgeId } = req.params
-    try {
-        run('DELETE FROM canvas_edges WHERE id = ? AND course_id = ?', [edgeId, courseId])
-
-        syncCourseCanvasToVault(courseId)
-        res.json({ success: true })
-    } catch (err) {
+        console.error('Failed to save canvas viewport:', err)
         res.status(500).json({ error: err.message })
     }
 })

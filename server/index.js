@@ -18,6 +18,7 @@ import { initDatabase, closeDatabase, getDb, getDataDir, getAll, getOne, run, tr
 import { streamVideo, setAllowedRoots, addAllowedRoot } from './services/videoStreamer.js'
 import { repairPaths } from './services/pathRepair.js'
 import { parseMp4Duration } from './utils/mp4Parser.js'
+import { relocateAndCleanModelsDir } from './utils/modelManager.js'
 import coursesRouter, { recalculateCourseProgress } from './routes/courses.js'
 import modulesRouter from './routes/modules.js'
 import videosRouter from './routes/videos.js'
@@ -27,11 +28,11 @@ import instructorsRouter from './routes/instructors.js'
 import roadmapsRouter from './routes/roadmaps.js'
 import settingsRouter from './routes/settings.js'
 import transcriptsRouter from './routes/transcripts.js'
+import dubbingRouter from './routes/dubbing.js'
 import summariesRouter from './routes/summaries.js'
 import searchRouter from './routes/search.js'
 import dataRouter from './routes/data.js'
 import fsRouter from './routes/filesystem.js'
-import dubbingRouter from './routes/dubbing.js'
 import youtubeRouter from './routes/youtube.js'
 import canvasRouter from './routes/canvas.js'
 
@@ -69,7 +70,7 @@ app.use(express.json({ limit: '50mb' }))
 app.get('/api/health', (req, res) => {
     res.json({
         status: 'ok',
-        version: '5.1.0',
+        version: '7.0.0',
         port: server?.address()?.port || DEFAULT_PORT,
         dataDir: getDataDir(),
         uptime: Math.floor(process.uptime()),
@@ -95,11 +96,11 @@ app.use('/api/instructors', instructorsRouter)
 app.use('/api/roadmaps', roadmapsRouter)
 app.use('/api/settings', settingsRouter)
 app.use('/api/transcripts', transcriptsRouter)
+app.use('/api/dub', dubbingRouter)
 app.use('/api/summaries', summariesRouter)
 app.use('/api/search', searchRouter)
 app.use('/api/data', dataRouter)
 app.use('/api/fs', fsRouter)
-app.use('/api/dub', dubbingRouter)
 app.use('/api/youtube', youtubeRouter)
 app.use('/api/canvas', canvasRouter)
 
@@ -108,18 +109,18 @@ app.use('/api/canvas', canvasRouter)
 // ============================================
 
 if (process.env.NODE_ENV === 'production') {
-    const distPath = path.join(__dirname, '../dist')
+    const distPath = path.join(__dirname, '../client/dist')
     if (fs.existsSync(distPath)) {
         app.use(express.static(distPath))
         app.use((req, res, next) => {
-            if (req.method === 'GET' && !req.path.startsWith('/api/')) {
+            if (req.method === 'GET' && !req.path.startsWith('/api/') && !req.path.startsWith('/video/')) {
                 res.sendFile(path.join(distPath, 'index.html'))
             } else {
                 next()
             }
         })
     } else {
-        console.warn('\n[Warning] Production mode enabled but dist/ folder not found. Please run "npm run build".\n')
+        console.warn('\n[Warning] Production mode enabled but client/dist/ folder not found. Please run "npm run build".\n')
     }
 }
 // ============================================
@@ -131,6 +132,9 @@ let server
 async function start() {
     // Initialize database (async because sql.js loads WASM)
     await initDatabase()
+
+    // Relocate any previously downloaded AI models into the canonical directory layout
+    relocateAndCleanModelsDir()
 
     // Load allowed roots from settings
     loadAllowedRoots()
@@ -149,7 +153,7 @@ async function start() {
         console.log('')
         console.log('  ╔══════════════════════════════════════════╗')
         console.log('  ║                                          ║')
-        console.log(`  ║   🎓 TutIn Server v5.1                   ║`)
+        console.log(`  ║   🎓 TutIn Server v7.0                   ║`)
         console.log(`  ║   http://127.0.0.1:${port}                 ║`)
         console.log('  ║                                          ║')
         console.log(`  ║   Data: ${getDataDir()}`)

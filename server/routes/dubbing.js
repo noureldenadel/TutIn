@@ -1,763 +1,780 @@
 import express from 'express'
-import { getDb, getOne, run, getAll, getDataDir } from '../database.js'
-import { submitDubJob, pollJobStatus, cancelJob, isServiceRunning, ensureServiceRunning } from '../services/dubbingService.js'
-import { getDubsDir, getDubFilePath, loadCaptionChunks, listDubLanguages, getDubFilePathForPlayback } from '../utils/courseAssets.js'
-import { stitchCuesIntoSentences, isDubbingLanguageSupported } from '../utils/aiTranslation.js'
 import fs from 'fs'
 import path from 'path'
+import { getAll, getOne, run } from '../database.js'
+import {
+    listDubLanguages,
+    getDubFilePath,
+    getDubFilePathForPlayback,
+    getDubCachePath,
+    getDubCacheWritePath,
+    getCourseVoiceProfileDir,
+    saveDubTrackMeta,
+    loadDubTrackMeta,
+    deleteDubTrackMeta,
+    loadCaptionChunks,
+    saveCaptionFile,
+    normalizeSubtitleSources,
+    resolveSubtitleSourceEntry,
+    buildTrackId
+} from '../utils/courseAssets.js'
+import {
+    translateChunks,
+    normalizeCuesIntoClauses,
+    sanitizeCuesForSpeechAndTranslation,
+    LANG_DISPLAY_MAP,
+    isDubbingLanguageSupported
+} from '../utils/aiTranslation.js'
+import {
+    submitDubJob,
+    pollJobStatus,
+    cancelJob,
+    getServiceHealth,
+    setServiceDevice,
+    unloadServiceModels,
+    transcribeWithPythonService
+} from '../services/dubbingService.js'
+import { getModelsDiskStats } from '../utils/modelManager.js'
 
 const router = express.Router()
 
-// Helper to fetch video + path info
-function getVideoInfo(videoId) {
-    const video = getOne(`
-        SELECT v.*, c.folder_path as course_path, c.language as course_language, m.folder_path as module_path
-        FROM videos v
-        JOIN courses c ON v.course_id = c.id
-        LEFT JOIN modules m ON v.module_id = m.id
-        WHERE v.id = ?
-    `, [videoId])
-    if (!video) throw new Error("Video not found")
-    
-    // Resolve full video path: check direct video.file_path first
-    let videoPath = video.file_path
-    const relModPath = (video.course_path && video.file_path)
-        ? path.dirname(path.relative(video.course_path, video.file_path)).replace(/\\/g, '/')
-        : (video.module_path && video.course_path ? path.relative(video.course_path, video.module_path).replace(/\\/g, '/') : '')
-    
-    const cleanRelMod = relModPath === '.' ? '' : relModPath
-    const videoBaseName = video.file_name ? path.basename(video.file_name, path.extname(video.file_name)) : video.id
-
-    if (!videoPath || !fs.existsSync(videoPath)) {
-        if (video.course_path && video.file_name) {
-            videoPath = path.join(video.course_path, cleanRelMod, video.file_name)
-        }
+function normalizeLangParam(rawLang) {
+    const lang = String(rawLang || 'en').trim().toLowerCase()
+    if (!lang || lang.includes('..') || lang.includes('/') || lang.includes('\\')) {
+        return null
     }
-    
-    return { video, coursePath: video.course_path, courseLanguage: video.course_language || 'en', relModPath: cleanRelMod, videoPath, videoBaseName }
+    return lang
 }
 
-// GET /api/dub/service/status
-router.get('/service/status', async (req, res) => {
-    try {
-        const isUp = await isServiceRunning()
-        res.json({ running: isUp })
-    } catch (err) {
-        res.status(500).json({ error: err.message })
+/**
+ * Resolve course, module, and filename metadata needed to locate dubbed MP3 assets for a video.
+ */
+function getVideoDubMeta(videoId) {
+    const video = getOne('SELECT * FROM videos WHERE id = ?', [videoId])
+    if (!video) return null
+
+    const moduleRecord = video.module_id
+        ? getOne('SELECT folder_path FROM modules WHERE id = ?', [video.module_id])
+        : null
+    const courseRecord = video.course_id
+        ? getOne('SELECT id, title, folder_path, language FROM courses WHERE id = ?', [video.course_id])
+        : null
+
+    let relModulePath = ''
+    if (moduleRecord?.folder_path && courseRecord?.folder_path) {
+        relModulePath = path.relative(courseRecord.folder_path, moduleRecord.folder_path)
+        if (relModulePath === '.' || relModulePath.startsWith('..')) relModulePath = ''
+    } else if (video.file_path && courseRecord?.folder_path) {
+        const relDir = path.dirname(path.relative(courseRecord.folder_path, video.file_path))
+        if (relDir && relDir !== '.' && !relDir.startsWith('..')) relModulePath = relDir
     }
-})
 
-// POST /api/dub/service/start
-router.post('/service/start', async (req, res) => {
-    try {
-        const { ensureServiceRunning } = await import('../services/dubbingService.js')
-        const started = await ensureServiceRunning()
-        res.json({ started, running: started })
-    } catch (err) {
-        res.json({ started: false, running: false, error: err.message })
+    const videoBaseName = video.file_name
+        ? path.basename(video.file_name, path.extname(video.file_name))
+        : video.id
+
+    let videoFilePath = video.file_path
+    if ((!videoFilePath || !fs.existsSync(videoFilePath)) && courseRecord?.folder_path && video.file_name) {
+        const candidate = path.join(courseRecord.folder_path, relModulePath, video.file_name)
+        if (fs.existsSync(candidate)) videoFilePath = candidate
     }
-})
 
-// POST /api/dub/video/:videoId
-router.post('/video/:videoId', async (req, res) => {
+    let dubbedTracks = []
     try {
-        const { targetLanguage, voiceReferencePath, device, preserveBackgroundAudio, sourceLanguage } = req.body
-        if (!targetLanguage) return res.status(400).json({ error: 'targetLanguage required' })
-        if (!isDubbingLanguageSupported(targetLanguage)) {
-            return res.status(400).json({
-                error: `Language '${targetLanguage}' is not supported by the XTTS v2 neural voice cloning model.`
-            })
-        }
-        
-        const { video, videoPath, coursePath, courseLanguage, relModPath, videoBaseName } = getVideoInfo(req.params.videoId)
-        
-        if (!videoPath || !fs.existsSync(videoPath)) {
-            return res.status(400).json({ 
-                error: 'Dubbing requires a local video file on disk. YouTube and cloud streaming videos are not supported.' 
-            })
-        }
-        
-        // 1. Get captions for target language (respecting primary_transcript if specified)
-        const subtitleSources = JSON.parse(video.subtitle_sources || '[]')
-        let langToLoad = targetLanguage
-        if (video.primary_transcript) {
-            const [pLang] = video.primary_transcript.split(':')
-            if (pLang === targetLanguage || (targetLanguage === 'source' && pLang === 'source')) {
-                langToLoad = video.primary_transcript
-            }
-        }
-        let chunks = loadCaptionChunks(video.id, langToLoad, subtitleSources, coursePath, relModPath, videoBaseName)
-        const { needsPunctuationRestoration, restorePunctuation } = await import('../utils/punctuationService.js')
-        
-        // If no target-language captions exist, auto-translate from source before dubbing
-        if (!chunks || chunks.length === 0) {
-            console.log(`[Dub] No '${targetLanguage}' captions found — auto-translating from source first...`)
-            
-            // Load source captions (respecting explicit sourceLanguage, primary_transcript, ai_source, or 'source')
-            const aiSource = subtitleSources.find(s => s.is_ai_source)
-            let actualSourceLang = sourceLanguage || (video.primary_transcript ? video.primary_transcript : (aiSource?.lang || 'source'))
-            
-            let sourceChunks = loadCaptionChunks(video.id, actualSourceLang, subtitleSources, coursePath, relModPath, videoBaseName)
-            if ((!sourceChunks || sourceChunks.length === 0) && actualSourceLang !== 'source') {
-                sourceChunks = loadCaptionChunks(video.id, 'source', subtitleSources, coursePath, relModPath, videoBaseName)
-                if (sourceChunks && sourceChunks.length > 0) actualSourceLang = 'source'
-            }
-            
-            if (!sourceChunks || sourceChunks.length === 0) {
-                return res.status(400).json({ 
-                    error: `No source captions found for this video. Please transcribe the video first before dubbing.` 
-                })
-            }
+        dubbedTracks = JSON.parse(video.dubbed_tracks || '[]')
+    } catch {
+        dubbedTracks = []
+    }
 
-            // Check if source language is the same as target — no translation needed
-            const fallbackLang = courseLanguage || 'en'
-            const effectiveSource = (actualSourceLang === 'source' ? (aiSource?.lang || fallbackLang) : actualSourceLang).split(':')[0]
-            const normalizedSource = effectiveSource.toLowerCase()
-            const normalizedTarget = targetLanguage.toLowerCase()
+    let subtitleSources = []
+    try {
+        subtitleSources = JSON.parse(video.subtitle_sources || '[]')
+    } catch {
+        subtitleSources = []
+    }
 
-            if (normalizedSource === normalizedTarget) {
-                // Same language — use source chunks directly for dubbing
-                chunks = sourceChunks
-                console.log(`[Dub] Source and target language are the same (${normalizedTarget}), using source captions directly.`)
-            } else {
-                // Restore punctuation on unpunctuated source captions BEFORE sentence stitching & translation
-                if (needsPunctuationRestoration(sourceChunks)) {
-                    console.log(`[Dub] Source captions lack punctuation prior to translation. Restoring for '${normalizedSource}'...`)
-                    try {
-                        sourceChunks = await restorePunctuation(sourceChunks, normalizedSource)
-                    } catch (pErr) {
-                        console.warn(`[Dub] Source punctuation restoration warning: ${pErr.message}`)
-                    }
-                }
+    return {
+        id: video.id,
+        courseId: video.course_id,
+        courseTitle: courseRecord?.title || '',
+        courseFolder: courseRecord?.folder_path || null,
+        courseLanguage: (courseRecord?.language || 'en').toLowerCase().trim(),
+        relModulePath,
+        videoFilePath: videoFilePath || null,
+        videoBaseName,
+        dubbedTracks: Array.isArray(dubbedTracks) ? dubbedTracks : [],
+        subtitleSources: Array.isArray(subtitleSources) ? subtitleSources : []
+    }
+}
 
-                // Different language — run translation now
-                const { translateChunks } = await import('../utils/aiTranslation.js')
-                const { saveCaptionFile } = await import('../utils/courseAssets.js')
-                
-                const courseRecord = getOne('SELECT folder_path FROM courses WHERE id = ?', [video.course_id])
-                const courseFolder = courseRecord?.folder_path || null
-                
-                const translated = await translateChunks(sourceChunks, targetLanguage, null, null, null, null, normalizedSource)
-                if (!translated || translated.length === 0) {
-                    return res.status(400).json({ error: `Auto-translation to '${targetLanguage}' failed. Please translate the video captions manually first.` })
-                }
-                
-                // Save translated captions so they're available for future dubs too
-                try {
-                    const videoMeta = {
-                        id: video.id,
-                        courseFolder,
-                        relModulePath: relModPath,
-                        videoBaseName
-                    }
-                    const filePath = saveCaptionFile(videoMeta, targetLanguage, translated, 'generated')
-                    
-                    // If auto-translation generated companion phonetic TTS segments, save them too
-                    if (translated.ttsSegments && translated.ttsSegments.length > 0) {
-                        const { saveTtsCompanionFile } = await import('../utils/courseAssets.js')
-                        saveTtsCompanionFile(videoMeta, targetLanguage, translated.ttsSegments)
-                        console.log(`[Dub] Saved auto-translated companion TTS phonetic text for '${targetLanguage}'.`)
-                    }
+function resolveDubAudioPath(meta, lang) {
+    const resolvedFromVault = getDubFilePathForPlayback(
+        meta.id,
+        lang,
+        meta.courseFolder,
+        meta.relModulePath,
+        meta.videoBaseName
+    )
+    if (resolvedFromVault && fs.existsSync(resolvedFromVault)) {
+        return resolvedFromVault
+    }
 
-                    const currentSources = subtitleSources.filter(s => !(s.lang === targetLanguage && s.origin === 'generated'))
-                    currentSources.push({ lang: targetLanguage, filePath, origin: 'generated', format: 'vtt' })
-                    run(`UPDATE videos SET subtitle_sources = ? WHERE id = ?`, [JSON.stringify(currentSources), video.id])
-                    console.log(`[Dub] Auto-translated captions saved to ${filePath}`)
-                } catch (saveErr) {
-                    console.warn('[Dub] Could not save translated captions:', saveErr.message)
-                }
-                
-                chunks = translated
-            }
+    const doneJob = getOne(
+        `SELECT audio_path FROM dub_jobs
+         WHERE video_id = ? AND LOWER(language) = ? AND status = 'done'
+         ORDER BY completed_at DESC, created_at DESC LIMIT 1`,
+        [meta.id, lang]
+    )
+    if (doneJob?.audio_path && fs.existsSync(doneJob.audio_path)) {
+        return doneJob.audio_path
+    }
+
+    const trackEntry = meta.dubbedTracks.find(
+        (t) =>
+            t?.language &&
+            String(t.language).trim().toLowerCase() === lang &&
+            t.status !== 'failed' &&
+            t.filePath &&
+            fs.existsSync(t.filePath)
+    )
+    if (trackEntry?.filePath) {
+        return trackEntry.filePath
+    }
+
+    const cachePath = getDubCachePath(meta.id, lang)
+    if (cachePath && fs.existsSync(cachePath)) {
+        return cachePath
+    }
+
+    return null
+}
+
+/**
+ * Reconciles `videos.dubbed_tracks` in SQLite with actual `.mp3` and `.meta.json` files
+ * inside `<courseFolder>/.tutin/dubs/` (or `%APPDATA%/TutIn/dubs/` for cloud courses).
+ */
+function reconcileVideoDubbedTracks(meta) {
+    const diskLangs = new Set(
+        listDubLanguages(meta.id, meta.courseFolder, meta.relModulePath, meta.videoBaseName)
+            .map(l => String(l || '').trim().toLowerCase())
+            .filter(Boolean)
+    )
+
+    const dbJobs = getAll(
+        "SELECT DISTINCT language, audio_path FROM dub_jobs WHERE video_id = ? AND status = 'done'",
+        [meta.id]
+    )
+    for (const j of dbJobs) {
+        if (j.language && j.audio_path && fs.existsSync(j.audio_path)) {
+            diskLangs.add(String(j.language).trim().toLowerCase())
         }
-        
-        // 2. Resolve device preference from request or settings
-        let devicePref = device || null
-        if (!devicePref) {
-            try {
-                const settingsRow = getOne('SELECT value FROM settings WHERE key = ?', ['dubbingDevice'])
-                if (settingsRow?.value) devicePref = settingsRow.value
-            } catch {}
-        }
+    }
 
-        // 3. Check for phonetically-nudged TTS companion segments first
-        let dubSegments = null
-        try {
-            const { loadTtsCompanionSegments } = await import('../utils/courseAssets.js')
-            const courseRecord = getOne('SELECT folder_path FROM courses WHERE id = ?', [video.course_id])
-            const videoMeta = {
-                id: video.id,
-                courseFolder: courseRecord?.folder_path || null,
-                relModulePath: relModPath,
-                videoBaseName
-            }
-            const companionTts = loadTtsCompanionSegments(video.id, targetLanguage, videoMeta)
-            if (companionTts && Array.isArray(companionTts) && companionTts.length > 0) {
-                console.log(`[Dub] Using phonetically-nudged companion TTS text (${companionTts.length} segments) for '${targetLanguage}'.`)
-                dubSegments = companionTts.map(s => ({
-                    start: s.start,
-                    end: s.end,
-                    timestamp: [s.start, s.end],
-                    text: s.text || s.caption
-                }))
-            }
-        } catch (compErr) {
-            console.warn('[Dub] Could not load companion TTS segments:', compErr.message)
+    for (const t of meta.dubbedTracks) {
+        if (t?.language && t.status !== 'failed' && t.filePath && fs.existsSync(t.filePath)) {
+            diskLangs.add(String(t.language).trim().toLowerCase())
         }
+    }
 
-        // 4. If no companion TTS segments exist, restore punctuation if needed and stitch standard caption chunks
-        if (!dubSegments || dubSegments.length === 0) {
-            if (needsPunctuationRestoration(chunks)) {
-                console.log(`[Dub] Dubbing captions lack punctuation. Restoring for '${targetLanguage}'...`)
-                try {
-                    chunks = await restorePunctuation(chunks, targetLanguage)
-                } catch (pErr) {
-                    console.warn(`[Dub] Punctuation restoration warning: ${pErr.message}`)
-                }
-            }
-            const stitchedSegments = stitchCuesIntoSentences(chunks).map(s => ({
-                start: s.start,
-                end: s.end,
-                timestamp: [s.start, s.end],
-                text: s.text
-            }))
-            dubSegments = stitchedSegments.length > 0 ? stitchedSegments : chunks
-        }
+    const reconciledTracks = []
+    for (const lang of diskLangs) {
+        const audioPath = resolveDubAudioPath(meta, lang)
+        if (!audioPath || !fs.existsSync(audioPath)) continue
 
-        // 4. Submit to python backend
-        const jobId = await submitDubJob(
-            video.id,
-            videoPath,
-            dubSegments,
-            targetLanguage,
-            voiceReferencePath,
-            devicePref,
-            Boolean(preserveBackgroundAudio)
+        const existingEntry = meta.dubbedTracks.find(
+            t => String(t?.language || '').trim().toLowerCase() === lang
         )
-        
-        // 4. Save job to DB
-        const now = new Date().toISOString()
-        run(`
-            INSERT INTO dub_jobs (id, video_id, language, status, created_at)
-            VALUES (?, ?, ?, ?, ?)
-        `, [jobId, video.id, targetLanguage, 'queued', now])
+        const sidecarMeta = loadDubTrackMeta(meta, lang)
 
-        // 5. Update video dubbed_tracks to record generating status
-        try {
-            const existingTracks = JSON.parse(video.dubbed_tracks || '[]')
-            const updatedTracks = existingTracks.filter(t => t.language !== targetLanguage)
-            updatedTracks.push({
-                language: targetLanguage,
-                filePath: '',
-                generatedAt: now,
-                voiceReferenceUsed: voiceReferencePath || 'extracted_voice',
-                status: 'generating'
-            })
-            run(`UPDATE videos SET dubbed_tracks = ? WHERE id = ?`, [JSON.stringify(updatedTracks), video.id])
-        } catch (e) {
-            console.error('Failed to update video.dubbed_tracks status to generating:', e)
-        }
-        
-        res.json({ jobId })
-    } catch (err) {
-        res.status(500).json({ error: err.message })
-    }
-})
-
-
-// GET /api/dub/video/:videoId/status
-router.get('/video/:videoId/status', async (req, res) => {
-    try {
-        // Get the most recent job for this video
-        const job = getOne(`
-            SELECT * FROM dub_jobs 
-            WHERE video_id = ? 
-            ORDER BY created_at DESC LIMIT 1
-        `, [req.params.videoId])
-        
-        if (!job) return res.json({ status: 'none' })
-        
-        // If it's running/queued, poll python backend for live progress
-        if (job.status === 'queued' || job.status === 'running') {
-            try {
-                const liveStatus = await pollJobStatus(job.id)
-                // Update DB with live status
-                run(`
-                    UPDATE dub_jobs 
-                    SET status = ?, step = ?, progress = ?, audio_path = ?, error_message = ?
-                    WHERE id = ?
-                `, [liveStatus.status, liveStatus.step, liveStatus.progress, liveStatus.audio_path, liveStatus.error, job.id])
-                
-                // If just finished, move file to permanent location
-                if (liveStatus.status === 'done' && liveStatus.audio_path) {
-                    const { coursePath, relModPath, video, videoBaseName } = getVideoInfo(req.params.videoId)
-                    
-                    let finalPath = null
-                    // Save to course folder if local
-                    if (coursePath && fs.existsSync(coursePath)) {
-                        getDubsDir(coursePath, relModPath)
-                        finalPath = getDubFilePath(coursePath, relModPath, videoBaseName, job.language)
-                        fs.copyFileSync(liveStatus.audio_path, finalPath)
-                        // Clean up stale AppData duplicate
-                        try {
-                            const staleAppData = path.join(getDataDir(), 'dubs', `${video.id}.${job.language}.mp3`)
-                            if (fs.existsSync(staleAppData)) fs.unlinkSync(staleAppData)
-                        } catch { }
-                    } else {
-                        // Cloud course fallback: save to AppData dubs directory
-                        const appDataDubsDir = path.join(getDataDir(), 'dubs')
-                        if (!fs.existsSync(appDataDubsDir)) fs.mkdirSync(appDataDubsDir, { recursive: true })
-                        finalPath = path.join(appDataDubsDir, `${video.id}.${job.language}.mp3`)
-                        fs.copyFileSync(liveStatus.audio_path, finalPath)
-                    }
-
-                    const completedAt = new Date().toISOString()
-                    run(`UPDATE dub_jobs SET completed_at = ?, audio_path = ? WHERE id = ?`, 
-                        [completedAt, finalPath, job.id])
-
-                    // Clean up Python job temp directory now that final MP3 has been copied
-                    cancelJob(job.id).catch(() => {})
-
-                    // Update video dubbed_tracks column
-                    try {
-                        const existingTracks = JSON.parse(video.dubbed_tracks || '[]')
-                        const prevTrack = existingTracks.find(t => t.language === job.language)
-                        const updatedTracks = existingTracks.filter(t => t.language !== job.language)
-                        updatedTracks.push({
-                            language: job.language,
-                            filePath: finalPath,
-                            generatedAt: completedAt,
-                            voiceReferenceUsed: prevTrack?.voiceReferenceUsed || 'extracted_voice',
-                            status: 'ready'
-                        })
-                        run(`UPDATE videos SET dubbed_tracks = ? WHERE id = ?`, [JSON.stringify(updatedTracks), video.id])
-                    } catch (e) {
-                        console.error('Failed to update video.dubbed_tracks on complete:', e)
-                    }
-                    
-                    return res.json({ ...job, status: 'done', progress: 100, step: 'Complete', audio_path: finalPath, timings: liveStatus.timings })
-                }
-                
-                if (liveStatus.status === 'failed') {
-                    // Update dubbed_tracks entry to failed
-                    try {
-                        const { video } = getVideoInfo(req.params.videoId)
-                        const existingTracks = JSON.parse(video.dubbed_tracks || '[]')
-                        const updatedTracks = existingTracks.map(t => 
-                            t.language === job.language ? { ...t, status: 'failed' } : t
-                        )
-                        run(`UPDATE videos SET dubbed_tracks = ? WHERE id = ?`, [JSON.stringify(updatedTracks), video.id])
-                    } catch {}
-                }
-
-                return res.json({ ...job, ...liveStatus })
-            } catch (err) {
-                // Backend might have restarted, mark as failed if not found
-                if (err.message === "Job not found") {
-                    run(`UPDATE dub_jobs SET status = 'failed', error_message = 'Service disconnected' WHERE id = ?`, [job.id])
-                    job.status = 'failed'
-                    job.error_message = 'Service disconnected'
-                }
-            }
-        }
-        
-        res.json(job)
-    } catch (err) {
-        res.status(500).json({ error: err.message })
-    }
-})
-
-// POST /api/dub/video/:videoId/cancel
-router.post('/video/:videoId/cancel', async (req, res) => {
-    try {
-        const job = getOne(`
-            SELECT * FROM dub_jobs 
-            WHERE video_id = ? AND status IN ('queued', 'running')
-            ORDER BY created_at DESC LIMIT 1
-        `, [req.params.videoId])
-        
-        if (!job) {
-            return res.json({ success: true, message: 'No active job to cancel' })
-        }
-
-        console.log(`[Dub] User requested cancellation of job ${job.id} for video ${req.params.videoId}`)
-        try {
-            await cancelJob(job.id)
-        } catch (backendErr) {
-            console.warn('[Dub] Backend cancel notification warning:', backendErr.message)
-        }
-
-        run(`UPDATE dub_jobs SET status = 'cancelled', step = 'Cancelled by user', error_message = 'Cancelled by user' WHERE id = ?`, [job.id])
-
-        try {
-            const { video } = getVideoInfo(req.params.videoId)
-            const existingTracks = JSON.parse(video.dubbed_tracks || '[]')
-            const updatedTracks = existingTracks.filter(t => t.language !== job.language || t.status === 'ready')
-            run(`UPDATE videos SET dubbed_tracks = ? WHERE id = ?`, [JSON.stringify(updatedTracks), video.id])
-        } catch {}
-
-        res.json({ success: true, status: 'cancelled' })
-    } catch (err) {
-        res.status(500).json({ error: err.message })
-    }
-})
-
-// GET /api/dub/video/:videoId/tracks
-router.get('/video/:videoId/tracks', (req, res) => {
-    try {
-        const video = getOne('SELECT id, dubbed_tracks FROM videos WHERE id = ?', [req.params.videoId])
-        if (!video) return res.status(404).json({ error: 'Video not found' })
-
-        let tracks = JSON.parse(video.dubbed_tracks || '[]')
-        let dbNeedsUpdate = false
-
-        tracks = tracks.filter(t => {
-            if (t.status === 'ready' && t.filePath && !fs.existsSync(t.filePath)) {
-                dbNeedsUpdate = true
-                return false
-            }
-            return true
+        reconciledTracks.push({
+            language: lang,
+            filePath: audioPath,
+            status: 'ready',
+            engine: sidecarMeta?.engine || existingEntry?.engine || 'neural',
+            bgMode: sidecarMeta?.bgMode || existingEntry?.bgMode || 'ducking',
+            voiceGender: sidecarMeta?.voiceGender || existingEntry?.voiceGender || 'male',
+            speechIntervals: Array.isArray(sidecarMeta?.speechIntervals)
+                ? sidecarMeta.speechIntervals
+                : (Array.isArray(existingEntry?.speechIntervals) ? existingEntry.speechIntervals : []),
+            generatedAt: sidecarMeta?.generatedAt || existingEntry?.generatedAt || null
         })
-
-        if (dbNeedsUpdate) {
-            run(`UPDATE videos SET dubbed_tracks = ? WHERE id = ?`, [JSON.stringify(tracks), video.id])
-        }
-
-        res.json(tracks)
-    } catch (err) {
-        res.status(500).json({ error: err.message })
     }
-})
 
-// GET /api/dub/video/:videoId/languages
+    const serializedNew = JSON.stringify(reconciledTracks)
+    const serializedOld = JSON.stringify(meta.dubbedTracks)
+    if (serializedNew !== serializedOld) {
+        try {
+            run('UPDATE videos SET dubbed_tracks = ? WHERE id = ?', [serializedNew, meta.id])
+            meta.dubbedTracks = reconciledTracks
+        } catch { }
+    }
+
+    return reconciledTracks
+}
+
+/**
+ * Atomic file copy via `.tmp` rename so interrupted jobs never leave corrupt `.mp3` files in the vault.
+ */
+function atomicCopyAudioFile(srcPath, destPath) {
+    const dir = path.dirname(destPath)
+    if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true })
+    }
+    const tmpPath = `${destPath}.tmp.${Date.now()}`
+    fs.copyFileSync(srcPath, tmpPath)
+    fs.renameSync(tmpPath, destPath)
+}
+
+// GET /api/dub/video/:videoId/languages - List available dubbed audio languages and their track metadata
 router.get('/video/:videoId/languages', (req, res) => {
     try {
-        const { coursePath, relModPath, videoBaseName, video } = getVideoInfo(req.params.videoId)
-        const langs = listDubLanguages(req.params.videoId, coursePath, relModPath, videoBaseName)
-        
-        // Merge with dub_jobs ready entries
-        try {
-            const jobs = getAll(`
-                SELECT DISTINCT language, audio_path FROM dub_jobs 
-                WHERE video_id = ? AND status = 'done'
-            `, [req.params.videoId])
-            jobs.forEach(j => {
-                if (j.language && !langs.includes(j.language) && j.audio_path && fs.existsSync(j.audio_path)) {
-                    langs.push(j.language)
-                }
-            })
-        } catch {}
+        const meta = getVideoDubMeta(req.params.videoId)
+        if (!meta) {
+            return res.status(404).json({ error: 'Video not found' })
+        }
 
-        // Merge with dubbed_tracks from video record
-        try {
-            const tracks = JSON.parse(video.dubbed_tracks || '[]')
-            tracks.filter(t => t.status === 'ready' && t.language).forEach(t => {
-                if (!langs.includes(t.language) && t.filePath && fs.existsSync(t.filePath)) {
-                    langs.push(t.language)
-                }
-            })
-        } catch {}
-
-        res.json(langs)
+        const tracks = reconcileVideoDubbedTracks(meta)
+        res.json({
+            videoId: meta.id,
+            languages: tracks.map(t => t.language),
+            tracks
+        })
     } catch (err) {
+        console.error('Failed to list dub languages:', err)
         res.status(500).json({ error: err.message })
     }
 })
 
-// GET /api/dub/audio/:videoId
+// POST /api/dub/video/:videoId/generate - SSE Streaming AI Voice Dubbing Pipeline
+router.post('/video/:videoId/generate', async (req, res) => {
+    const {
+        targetLanguage,
+        sourceLanguage,
+        sourceTrackId,
+        engine: rawEngine = 'neural',
+        voiceGender: rawGender = 'male',
+        bgMode: rawBgMode = 'ducking',
+        device: rawDevice = null,
+        unloadIdleModel = true,
+        openRouterApiKey: bodyApiKey = null,
+        openRouterModel: bodyModel = null
+    } = req.body || {}
+
+    const targetLang = normalizeLangParam(targetLanguage)
+    if (!targetLang) {
+        return res.status(400).json({ error: 'targetLanguage is required' })
+    }
+
+    const engine = String(rawEngine || 'neural').toLowerCase().trim() === 'clone' ? 'clone' : 'neural'
+    const voiceGender = String(rawGender || 'male').toLowerCase().trim() === 'female' ? 'female' : 'male'
+    const bgMode = String(rawBgMode || 'ducking').toLowerCase().trim() === 'demucs' ? 'demucs' : 'ducking'
+
+    if (engine === 'clone' && !isDubbingLanguageSupported(targetLang)) {
+        return res.status(400).json({
+            error: `Language '${targetLang}' is not supported by voice cloning. Switch voice engine to Neural.`
+        })
+    }
+
+    res.setHeader('Content-Type', 'text/event-stream')
+    res.setHeader('Cache-Control', 'no-cache')
+    res.setHeader('Connection', 'keep-alive')
+    res.flushHeaders?.()
+
+    const sendEvent = (payload) => {
+        try {
+            res.write(`data: ${JSON.stringify(payload)}\n\n`)
+        } catch { }
+    }
+
+    const abortController = new AbortController()
+    let activePythonJobId = null
+
+    res.on('close', () => {
+        if (!res.writableEnded) {
+            abortController.abort()
+            if (activePythonJobId) {
+                cancelJob(activePythonJobId).catch(() => {})
+            }
+        }
+    })
+
+    try {
+        const meta = getVideoDubMeta(req.params.videoId)
+        if (!meta) {
+            sendEvent({ error: 'Video not found' })
+            return res.end()
+        }
+
+        if ((engine === 'clone' || bgMode === 'demucs') && (!meta.videoFilePath || !fs.existsSync(meta.videoFilePath))) {
+            sendEvent({
+                error: 'Voice cloning and music stem separation require a local video file on disk.'
+            })
+            return res.end()
+        }
+
+        const normalizedSources = normalizeSubtitleSources(meta.subtitleSources, meta.courseLanguage)
+
+        // 1. Check if target language subtitle track already exists
+        let targetChunks = loadCaptionChunks(
+            meta.id,
+            targetLang,
+            normalizedSources,
+            meta.courseFolder,
+            meta.relModulePath,
+            meta.videoBaseName,
+            meta.courseLanguage
+        )
+
+        // 2. If no target language subtitles exist, auto-prepare from source (transcribe if needed -> translate)
+        if (!targetChunks || targetChunks.length === 0) {
+            const aiSourceTrack = normalizedSources.find(s => s.is_ai_source)
+            const lookupKey = sourceTrackId || (aiSourceTrack ? aiSourceTrack.id : (sourceLanguage || meta.courseLanguage || 'source'))
+            const resolvedSourceEntry = resolveSubtitleSourceEntry(lookupKey, normalizedSources, meta.courseLanguage)
+            const effectiveSourceLang = (
+                resolvedSourceEntry?.lang ||
+                (sourceLanguage && sourceLanguage !== 'source' ? sourceLanguage : meta.courseLanguage) ||
+                'en'
+            ).toLowerCase().split(':')[0].trim()
+
+            let sourceChunks = loadCaptionChunks(
+                meta.id,
+                resolvedSourceEntry ? resolvedSourceEntry.id : lookupKey,
+                normalizedSources,
+                meta.courseFolder,
+                meta.relModulePath,
+                meta.videoBaseName,
+                meta.courseLanguage
+            )
+
+            // 2a. If no source subtitles exist at all, transcribe local video first
+            if ((!sourceChunks || sourceChunks.length === 0) && meta.videoFilePath && fs.existsSync(meta.videoFilePath)) {
+                sendEvent({
+                    step: 'transcribing',
+                    percent: 8,
+                    message: `Transcribing ${LANG_DISPLAY_MAP[effectiveSourceLang] || effectiveSourceLang} audio…`
+                })
+                const pyTranscript = await transcribeWithPythonService({
+                    videoPath: meta.videoFilePath,
+                    language: effectiveSourceLang,
+                    modelName: 'large-v3-turbo'
+                })
+                if (abortController.signal.aborted) return res.end()
+
+                if (pyTranscript && Array.isArray(pyTranscript.chunks) && pyTranscript.chunks.length > 0) {
+                    sourceChunks = normalizeCuesIntoClauses(pyTranscript.chunks, effectiveSourceLang)
+                    if (sourceChunks.length > 0) {
+                        const savedSourcePath = saveCaptionFile(meta, effectiveSourceLang, sourceChunks, 'generated', 1)
+                        const srcTrackId = buildTrackId(effectiveSourceLang, 'generated', 1)
+                        const otherSrcs = normalizedSources.filter(s => s.id !== srcTrackId)
+                        otherSrcs.push({
+                            id: srcTrackId,
+                            lang: effectiveSourceLang,
+                            origin: 'generated',
+                            version: 1,
+                            label: 'AI',
+                            fileName: path.basename(savedSourcePath || `${meta.videoBaseName}-generated.${effectiveSourceLang}.vtt`),
+                            filePath: savedSourcePath,
+                            format: 'vtt',
+                            is_master: !otherSrcs.some(s => s.lang === effectiveSourceLang && s.is_master),
+                            is_ai_source: !otherSrcs.some(s => s.is_ai_source)
+                        })
+                        const nextNormalized = normalizeSubtitleSources(otherSrcs, meta.courseLanguage)
+                        run('UPDATE videos SET has_transcript = 1, subtitle_sources = ? WHERE id = ?', [
+                            JSON.stringify(nextNormalized),
+                            meta.id
+                        ])
+                        meta.subtitleSources = nextNormalized
+                    }
+                }
+            }
+
+            if (!sourceChunks || sourceChunks.length === 0) {
+                sendEvent({
+                    error: 'No subtitles found for this lesson. Generate or import subtitles first.'
+                })
+                return res.end()
+            }
+
+            if (effectiveSourceLang === targetLang) {
+                targetChunks = sourceChunks
+            } else {
+                // 2b. Translate source subtitles to targetLanguage with durationSec isochrony
+                let apiKey = bodyApiKey || null
+                let modelName = bodyModel || null
+                if (!apiKey) {
+                    try {
+                        const row = getOne('SELECT value FROM settings WHERE key = ?', ['openRouterApiKey'])
+                        if (row?.value) apiKey = row.value
+                    } catch { }
+                }
+                if (!modelName) {
+                    try {
+                        const row = getOne('SELECT value FROM settings WHERE key = ?', ['openRouterModel'])
+                        if (row?.value) modelName = row.value
+                    } catch { }
+                }
+
+                sendEvent({
+                    step: 'translating',
+                    percent: 12,
+                    message: `Translating subtitles to ${LANG_DISPLAY_MAP[targetLang] || targetLang}…`
+                })
+
+                const translated = await translateChunks(
+                    sourceChunks,
+                    targetLang,
+                    (prog) => {
+                        const scaledPct = Math.round(12 + ((prog.percent || 10) / 100) * 23)
+                        sendEvent({
+                            step: 'translating',
+                            percent: scaledPct,
+                            message: prog.message || `Translating to ${LANG_DISPLAY_MAP[targetLang] || targetLang}…`
+                        })
+                    },
+                    abortController.signal,
+                    apiKey,
+                    modelName,
+                    effectiveSourceLang,
+                    meta.courseTitle
+                )
+
+                if (abortController.signal.aborted) return res.end()
+                if (!translated || translated.length === 0) {
+                    throw new Error(`Could not translate subtitles to ${LANG_DISPLAY_MAP[targetLang] || targetLang}.`)
+                }
+
+                // Save translated subtitles to vault so both Subtitles & Dub stay in sync
+                const currentSources = normalizeSubtitleSources(meta.subtitleSources, meta.courseLanguage)
+                const savedTgtPath = saveCaptionFile(meta, targetLang, translated, 'generated', 1)
+                const tgtTrackId = buildTrackId(targetLang, 'generated', 1)
+                const otherTgtSrcs = currentSources.filter(s => s.id !== tgtTrackId)
+                otherTgtSrcs.push({
+                    id: tgtTrackId,
+                    lang: targetLang,
+                    origin: 'generated',
+                    version: 1,
+                    label: 'AI',
+                    fileName: path.basename(savedTgtPath || `${meta.videoBaseName}-generated.${targetLang}.vtt`),
+                    filePath: savedTgtPath,
+                    format: 'vtt',
+                    is_master: !otherTgtSrcs.some(s => s.lang === targetLang && s.is_master),
+                    is_ai_source: false
+                })
+                const updatedSources = normalizeSubtitleSources(otherTgtSrcs, meta.courseLanguage)
+                run('UPDATE videos SET has_transcript = 1, subtitle_sources = ? WHERE id = ?', [
+                    JSON.stringify(updatedSources),
+                    meta.id
+                ])
+                targetChunks = translated
+            }
+        }
+
+        // 3. Sanitize & normalize clauses for speech synthesis
+        const speechSegments = sanitizeCuesForSpeechAndTranslation(targetChunks, targetLang)
+        if (!speechSegments || speechSegments.length === 0) {
+            throw new Error('No speakable dialogue found in subtitle track.')
+        }
+
+        const voiceProfileDir = getCourseVoiceProfileDir(meta.courseFolder, meta.courseId)
+
+        sendEvent({
+            step: 'starting-dub',
+            percent: 36,
+            message: engine === 'clone'
+                ? 'Preparing instructor voice cloning…'
+                : `Starting ${LANG_DISPLAY_MAP[targetLang] || targetLang} neural voice synthesis…`
+        })
+
+        // 4. Submit dubbing job to Python service
+        const jobId = await submitDubJob({
+            videoPath: meta.videoFilePath,
+            segments: speechSegments,
+            targetLang,
+            engine,
+            voiceGender,
+            bgMode,
+            voiceProfileDir,
+            device: rawDevice,
+            unloadIdleModel
+        })
+        activePythonJobId = jobId
+
+        const now = new Date().toISOString()
+        run(
+            `INSERT INTO dub_jobs (id, video_id, language, status, step, progress, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?)`,
+            [jobId, meta.id, targetLang, 'running', 'Synthesizing voice…', 38, now]
+        )
+
+        // 5. Poll Python job status and stream progress to client
+        while (!abortController.signal.aborted) {
+            await new Promise(r => setTimeout(r, 450))
+            if (abortController.signal.aborted) break
+
+            const live = await pollJobStatus(jobId)
+            const scaledPercent = Math.min(98, Math.max(38, Math.round(36 + ((live.progress || 0) / 100) * 62)))
+
+            run(
+                `UPDATE dub_jobs SET status = ?, step = ?, progress = ?, error_message = ? WHERE id = ?`,
+                [live.status, live.step || '', scaledPercent, live.error || null, jobId]
+            )
+
+            if (live.status === 'failed') {
+                throw new Error(live.error || 'Voice dubbing failed')
+            }
+            if (live.status === 'cancelled') {
+                throw new Error('Dubbing cancelled by user')
+            }
+
+            if (live.status === 'done' && live.audio_path && fs.existsSync(live.audio_path)) {
+                const isLocalCourse = Boolean(meta.courseFolder && fs.existsSync(meta.courseFolder))
+                const finalPath = isLocalCourse
+                    ? getDubFilePath(meta.courseFolder, meta.relModulePath, meta.videoBaseName, targetLang)
+                    : getDubCacheWritePath(meta.id, targetLang)
+
+                atomicCopyAudioFile(live.audio_path, finalPath)
+
+                // Clean up stale AppData duplicate if local course
+                if (isLocalCourse) {
+                    try {
+                        const staleCache = getDubCacheWritePath(meta.id, targetLang)
+                        if (fs.existsSync(staleCache)) fs.unlinkSync(staleCache)
+                    } catch { }
+                }
+
+                const completedAt = new Date().toISOString()
+                const trackMeta = {
+                    language: targetLang,
+                    filePath: finalPath,
+                    status: 'ready',
+                    engine: live.engine || engine,
+                    bgMode: live.bg_mode || bgMode,
+                    voiceGender: live.voice_gender || voiceGender,
+                    speechIntervals: Array.isArray(live.speech_intervals) ? live.speech_intervals : [],
+                    generatedAt: completedAt
+                }
+
+                saveDubTrackMeta(meta, targetLang, trackMeta)
+
+                run(
+                    `UPDATE dub_jobs SET status = 'done', step = 'Complete', progress = 100, audio_path = ?, completed_at = ? WHERE id = ?`,
+                    [finalPath, completedAt, jobId]
+                )
+
+                // Clean up Python job temp folder now that MP3 is safely in vault
+                cancelJob(jobId).catch(() => {})
+                activePythonJobId = null
+
+                const reconciled = reconcileVideoDubbedTracks(meta)
+                const savedTrack = reconciled.find(t => t.language === targetLang) || trackMeta
+
+                sendEvent({
+                    step: 'done',
+                    percent: 100,
+                    done: true,
+                    language: targetLang,
+                    track: savedTrack,
+                    message: `${LANG_DISPLAY_MAP[targetLang] || targetLang} dub ready`
+                })
+                return res.end()
+            }
+
+            sendEvent({
+                step: live.bg_mode === 'demucs' && (live.progress || 0) < 20 ? 'separating' : 'synthesizing',
+                percent: scaledPercent,
+                message: live.step || 'Synthesizing dubbed audio…'
+            })
+        }
+
+        res.end()
+    } catch (err) {
+        if (activePythonJobId) {
+            cancelJob(activePythonJobId).catch(() => {})
+        }
+        sendEvent({ error: err.message || 'Voice dubbing failed' })
+        res.end()
+    }
+})
+
+// GET /api/dub/audio/:videoId?lang=ar - Stream dubbed MP3 audio with HTTP Range support
 router.get('/audio/:videoId', (req, res) => {
     try {
-        const lang = req.query.lang
-        if (!lang) return res.status(400).json({ error: 'lang query parameter required' })
-        
-        const { coursePath, relModPath, videoBaseName, video } = getVideoInfo(req.params.videoId)
-        let dubPath = getDubFilePathForPlayback(req.params.videoId, lang, coursePath, relModPath, videoBaseName)
-        
-        // 1. Check direct playback path from vault / legacy folder
-        if (!dubPath || !fs.existsSync(dubPath)) {
-            // 2. Check dub_jobs recorded output path
-            const job = getOne(`
-                SELECT audio_path FROM dub_jobs 
-                WHERE video_id = ? AND language = ? AND status = 'done'
-                ORDER BY completed_at DESC LIMIT 1
-            `, [req.params.videoId, lang])
-            if (job?.audio_path && fs.existsSync(job.audio_path)) {
-                dubPath = job.audio_path
+        const lang = normalizeLangParam(req.query.lang)
+        if (!lang) {
+            return res.status(400).json({ error: 'Invalid language parameter' })
+        }
+
+        const meta = getVideoDubMeta(req.params.videoId)
+        if (!meta) {
+            return res.status(404).json({ error: 'Video not found' })
+        }
+
+        const audioPath = resolveDubAudioPath(meta, lang)
+        if (!audioPath || !fs.existsSync(audioPath)) {
+            return res.status(404).json({ error: 'Dubbed audio not found' })
+        }
+
+        const stat = fs.statSync(audioPath)
+        const fileSize = stat.size
+        const range = req.headers.range
+
+        if (range) {
+            const parts = range.replace(/bytes=/, '').split('-')
+            const start = Number.parseInt(parts[0], 10)
+            const end = parts[1] ? Number.parseInt(parts[1], 10) : fileSize - 1
+
+            if (Number.isNaN(start) || Number.isNaN(end) || start > end || start < 0 || end >= fileSize) {
+                res.status(416).set({ 'Content-Range': `bytes */${fileSize}` }).end()
+                return
+            }
+
+            const chunkSize = end - start + 1
+            res.writeHead(206, {
+                'Content-Range': `bytes ${start}-${end}/${fileSize}`,
+                'Accept-Ranges': 'bytes',
+                'Content-Length': chunkSize,
+                'Content-Type': 'audio/mpeg',
+                'Cache-Control': 'no-cache'
+            })
+            const stream = fs.createReadStream(audioPath, { start, end })
+            res.on('close', () => stream.destroy())
+            stream.pipe(res)
+            return
+        }
+
+        res.writeHead(200, {
+            'Content-Length': fileSize,
+            'Content-Type': 'audio/mpeg',
+            'Accept-Ranges': 'bytes',
+            'Cache-Control': 'no-cache'
+        })
+        const stream = fs.createReadStream(audioPath)
+        res.on('close', () => stream.destroy())
+        stream.pipe(res)
+    } catch (err) {
+        console.error('Failed to stream dubbed audio:', err)
+        res.status(500).json({ error: err.message })
+    }
+})
+
+// DELETE /api/dub/video/:videoId?lang=ar - Delete a dubbed audio track and its metadata sidecar
+router.delete('/video/:videoId', (req, res) => {
+    try {
+        const lang = normalizeLangParam(req.query.lang)
+        if (!lang) {
+            return res.status(400).json({ error: 'Invalid language parameter' })
+        }
+
+        const meta = getVideoDubMeta(req.params.videoId)
+        if (!meta) {
+            return res.status(404).json({ error: 'Video not found' })
+        }
+
+        const candidatePaths = new Set()
+        const vaultPath = getDubFilePathForPlayback(
+            meta.id,
+            lang,
+            meta.courseFolder,
+            meta.relModulePath,
+            meta.videoBaseName
+        )
+        if (vaultPath) candidatePaths.add(vaultPath)
+
+        const cachePath = getDubCachePath(meta.id, lang)
+        if (cachePath) candidatePaths.add(cachePath)
+
+        const dbJobs = getAll(
+            'SELECT id, audio_path, status FROM dub_jobs WHERE video_id = ? AND LOWER(language) = ?',
+            [meta.id, lang]
+        )
+        for (const j of dbJobs) {
+            if (j?.status === 'queued' || j?.status === 'running') {
+                cancelJob(j.id).catch(() => {})
+            }
+            if (j?.audio_path) candidatePaths.add(j.audio_path)
+        }
+
+        for (const t of meta.dubbedTracks) {
+            if (t?.language && String(t.language).trim().toLowerCase() === lang && t.filePath) {
+                candidatePaths.add(t.filePath)
             }
         }
 
-        // 3. Check video.dubbed_tracks JSON
-        if (!dubPath || !fs.existsSync(dubPath)) {
+        for (const p of candidatePaths) {
             try {
-                const tracks = JSON.parse(video.dubbed_tracks || '[]')
-                const tr = tracks.find(t => t.language === lang && t.status === 'ready' && t.filePath)
-                if (tr && fs.existsSync(tr.filePath)) {
-                    dubPath = tr.filePath
-                }
-            } catch {}
+                if (p && fs.existsSync(p)) fs.unlinkSync(p)
+            } catch { }
         }
 
-        // 4. Check AppData cache fallback
-        if (!dubPath || !fs.existsSync(dubPath)) {
-            const appDataPath = path.join(getDataDir(), 'dubs', `${req.params.videoId}.${lang}.mp3`)
-            if (fs.existsSync(appDataPath)) {
-                dubPath = appDataPath
-            }
-        }
+        deleteDubTrackMeta(meta, lang)
 
-        if (dubPath && fs.existsSync(dubPath)) {
-            const stat = fs.statSync(dubPath)
-            const fileSize = stat.size
-            const range = req.headers.range
-
-            res.setHeader('Accept-Ranges', 'bytes')
-            res.setHeader('Content-Type', 'audio/mpeg')
-            res.setHeader('Access-Control-Allow-Origin', '*')
-            res.setHeader('Access-Control-Allow-Headers', 'Range, Origin, Content-Type, Accept')
-            res.setHeader('Access-Control-Expose-Headers', 'Content-Range, Content-Length, Accept-Ranges')
-
-            if (range) {
-                const parts = range.replace(/bytes=/, '').split('-')
-                const start = parseInt(parts[0], 10)
-                const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1
-
-                if (start >= fileSize || end >= fileSize || start > end) {
-                    res.writeHead(416, {
-                        'Content-Range': `bytes */${fileSize}`,
-                    })
-                    return res.end()
-                }
-
-                const chunkSize = end - start + 1
-                res.writeHead(206, {
-                    'Content-Range': `bytes ${start}-${end}/${fileSize}`,
-                    'Content-Length': chunkSize,
-                    'Content-Type': 'audio/mpeg',
-                })
-
-                const stream = fs.createReadStream(dubPath, { start, end })
-                stream.on('error', (err) => {
-                    console.error('[DubAudio] Stream error:', err)
-                    if (!res.headersSent) res.status(500).end()
-                })
-                res.on('close', () => {
-                    if (!stream.destroyed) stream.destroy()
-                })
-                return stream.pipe(res)
-            } else {
-                res.writeHead(200, {
-                    'Content-Length': fileSize,
-                    'Content-Type': 'audio/mpeg',
-                })
-                const stream = fs.createReadStream(dubPath)
-                stream.on('error', (err) => {
-                    console.error('[DubAudio] Stream error:', err)
-                    if (!res.headersSent) res.status(500).end()
-                })
-                res.on('close', () => {
-                    if (!stream.destroyed) stream.destroy()
-                })
-                return stream.pipe(res)
-            }
-        }
-
-        res.status(404).json({ error: 'Audio file not found' })
-    } catch (err) {
-        res.status(500).json({ error: err.message })
-    }
-})
-
-// DELETE /api/dub/video/:videoId
-router.delete('/video/:videoId', async (req, res) => {
-    try {
-        const lang = req.query.lang
-        if (!lang) return res.status(400).json({ error: 'lang query parameter required' })
-        
-        const { coursePath, relModPath, videoBaseName } = getVideoInfo(req.params.videoId)
-
-        const job = getOne(`
-            SELECT id, audio_path, status FROM dub_jobs 
-            WHERE video_id = ? AND language = ?
-            ORDER BY created_at DESC LIMIT 1
-        `, [req.params.videoId, lang])
-        
-        if (job) {
-            if (job.status === 'queued' || job.status === 'running') {
-                await cancelJob(job.id)
-            }
-            if (job.audio_path && fs.existsSync(job.audio_path)) {
-                try { fs.unlinkSync(job.audio_path) } catch {}
-            }
-            run(`DELETE FROM dub_jobs WHERE video_id = ? AND language = ?`, [req.params.videoId, lang])
-        }
-
-        // Delete from .tutin vault if local
-        if (coursePath) {
-            const vaultDub = getDubFilePath(coursePath, relModPath, videoBaseName, lang)
-            if (vaultDub && fs.existsSync(vaultDub)) {
-                try { fs.unlinkSync(vaultDub) } catch {}
-            }
-        }
-
-        // Also clean legacy AppData cache file
-        const cachePath = path.join(getDataDir(), 'dubs', `${req.params.videoId}.${lang}.mp3`)
-        if (fs.existsSync(cachePath)) {
-            try { fs.unlinkSync(cachePath) } catch {}
-        }
-
-        // Update video dubbed_tracks column
         try {
-            const video = getOne('SELECT dubbed_tracks FROM videos WHERE id = ?', [req.params.videoId])
-            if (video) {
-                const existingTracks = JSON.parse(video.dubbed_tracks || '[]')
-                const updatedTracks = existingTracks.filter(t => t.language !== lang)
-                run(`UPDATE videos SET dubbed_tracks = ? WHERE id = ?`, [JSON.stringify(updatedTracks), req.params.videoId])
-            }
-        } catch {}
-        
-        res.json({ success: true })
+            run('DELETE FROM dub_jobs WHERE video_id = ? AND LOWER(language) = ?', [meta.id, lang])
+        } catch { }
+
+        const remainingTracks = reconcileVideoDubbedTracks(meta).filter(
+            (t) => String(t?.language || '').trim().toLowerCase() !== lang
+        )
+        run('UPDATE videos SET dubbed_tracks = ? WHERE id = ?', [
+            JSON.stringify(remainingTracks),
+            meta.id
+        ])
+
+        res.json({ success: true, language: lang, tracks: remainingTracks })
     } catch (err) {
+        console.error('Failed to delete dub track:', err)
         res.status(500).json({ error: err.message })
     }
 })
 
-// GET /api/dub/jobs
-router.get('/jobs', (req, res) => {
+// GET /api/dub/gpu-info - Return Python AI service hardware status & local AI models disk usage
+router.get('/gpu-info', async (_req, res) => {
     try {
-        const status = req.query.status || 'all'
-        let query = `
-            SELECT d.*, v.file_name as video_name, c.title as course_name
-            FROM dub_jobs d
-            JOIN videos v ON d.video_id = v.id
-            JOIN courses c ON v.course_id = c.id
-        `
-        const params = []
-        
-        if (status !== 'all') {
-            query += ` WHERE d.status = ?`
-            params.push(status)
-        }
-        
-        query += ` ORDER BY d.created_at DESC`
-        
-        const jobs = getAll(query, params)
-        res.json(jobs)
-    } catch (err) {
-        res.status(500).json({ error: err.message })
-    }
-})
-
-// GET /api/dub/gpu-info — Proxy to Python backend to get GPU details
-router.get('/gpu-info', async (req, res) => {
-    try {
-        const isUp = await isServiceRunning()
-        if (!isUp) {
+        const modelsStats = getModelsDiskStats()
+        const health = await getServiceHealth()
+        if (!health) {
             return res.json({
                 service_running: false,
                 gpu_available: false,
                 gpu_name: null,
-                current_device: 'cpu',
-                device_preference: 'auto',
-                message: 'Dubbing service is not running. GPU info will be available after the service starts.'
+                current_device: 'auto',
+                models: modelsStats
             })
         }
-        const healthRes = await fetch('http://127.0.0.1:9475/health')
-        if (!healthRes.ok) throw new Error('Python backend returned error')
-        const data = await healthRes.json()
-        res.json({ service_running: true, ...data })
+        res.json({
+            service_running: true,
+            ...health,
+            models: modelsStats
+        })
     } catch (err) {
-        res.json({ service_running: false, gpu_available: false, error: err.message })
+        res.json({
+            service_running: false,
+            gpu_available: false,
+            models: getModelsDiskStats(),
+            error: err.message
+        })
     }
 })
 
-// POST /api/dub/set-device — Set the AI device preference on the Python backend
+// POST /api/dub/set-device - Configure dubbing compute device & idle VRAM reaper
 router.post('/set-device', async (req, res) => {
     try {
-        const { device } = req.body
-        if (!device) return res.status(400).json({ error: 'device parameter required' })
-
-        const isUp = await isServiceRunning()
-        if (!isUp) {
-            return res.json({
-                success: true,
-                preference: device,
-                message: 'Preference saved. Will apply when the dubbing service starts.',
-                service_running: false
-            })
-        }
-
-        const pyRes = await fetch('http://127.0.0.1:9475/set-device', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ device })
-        })
-        if (!pyRes.ok) throw new Error('Python backend returned error')
-        const data = await pyRes.json()
-        res.json({ service_running: true, ...data })
+        const { device, unloadIdleModel } = req.body || {}
+        if (!device) return res.status(400).json({ error: 'device is required' })
+        const data = await setServiceDevice(device, unloadIdleModel)
+        res.json(data)
     } catch (err) {
         res.status(500).json({ error: err.message })
     }
 })
 
-// POST /api/dub/transcribe (faster-whisper GPU transcription)
-router.post('/transcribe', async (req, res) => {
+// POST /api/dub/unload-models - Manually free GPU VRAM
+router.post('/unload-models', async (_req, res) => {
     try {
-        const { videoId, filePath, language, modelName } = req.body
-        let videoPath = filePath
-
-        if (videoId && (!videoPath || !fs.existsSync(videoPath))) {
-            try {
-                const info = getVideoInfo(videoId)
-                videoPath = info.videoPath
-            } catch {}
-        }
-
-        if (!videoPath || !fs.existsSync(videoPath)) {
-            return res.status(400).json({ error: "Video file not found for transcription" })
-        }
-
-        const isRunning = await ensureServiceRunning()
-        if (!isRunning) {
-            return res.status(503).json({ error: "Python transcription service could not be started" })
-        }
-
-        const pyRes = await fetch('http://127.0.0.1:9475/transcribe', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                videoPath,
-                language: language || 'en',
-                modelName: modelName || 'large-v3-turbo',
-                wordTimestamps: true
-            })
-        })
-
-        if (!pyRes.ok) {
-            const errData = await pyRes.json().catch(() => ({}))
-            throw new Error(errData.detail || `Python transcription failed: HTTP ${pyRes.status}`)
-        }
-
-        const data = await pyRes.json()
+        const data = await unloadServiceModels()
         res.json(data)
     } catch (err) {
-        console.error('[DubbingRoute:transcribe] Error:', err)
         res.status(500).json({ error: err.message })
-    }
-})
-
-// GET /api/dub/models/whisper
-router.get('/models/whisper', async (req, res) => {
-    try {
-        const isUp = await isServiceRunning()
-        if (!isUp) {
-            return res.json({ models: [], loaded_models: [] })
-        }
-        const pyRes = await fetch('http://127.0.0.1:9475/models/whisper')
-        if (!pyRes.ok) return res.json({ models: [], loaded_models: [] })
-        const data = await pyRes.json()
-        res.json(data)
-    } catch (err) {
-        res.json({ models: [], loaded_models: [] })
     }
 })
 

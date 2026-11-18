@@ -2,16 +2,16 @@
 trigger: always_on
 ---
 
-## Living UI/UX system: consistency across the product new ui
+## Living UI/UX system: consistency across TutIn
 
 ### Core principle
-- Treat `new ui\masterclass-study-companion-main\docs\UI_UX_SYSTEM.md` as the persistent source of truth for the app's UI/UX direction.
+- Treat `docs\UI_UX_SYSTEM.md` as the persistent source of truth for the app's UI/UX direction.
 - The design system must evolve with the product. It is neither a frozen specification nor a collection of disposable suggestions.
 - Build on established decisions instead of reinventing the interface in every task or conversation.
 - Preserve consistency without preventing intentional improvements. Evolve the system when there is a good reason, not merely because another approach is possible.
 
 ### Before every UI/UX task
-1. Read `new ui\masterclass-study-companion-main\docs\UI_UX_SYSTEM.md` before proposing or implementing UI changes.
+1. Read `docs\UI_UX_SYSTEM.md` before proposing or implementing UI changes.
 2. Inspect the relevant screens, existing shared components, styles, design tokens, and nearby features.
 3. Understand the app's current visual language, interaction patterns, information hierarchy, and product goals before making design decisions.
 4. Reuse existing components, conventions, and patterns whenever they satisfy the requirements.
@@ -36,14 +36,14 @@ trigger: always_on
 
 ### Evolve the system intentionally
 - Treat every UI/UX task as an opportunity to evaluate and improve the system, not as permission to change it.
-- When a task establishes, improves, or changes a reusable design principle, update `new ui\masterclass-study-companion-main\docs\UI_UX_SYSTEM.md` to reflect the new decision.
+- When a task establishes, improves, or changes a reusable design principle, update `docs\UI_UX_SYSTEM.md` to reflect the new decision.
 - If a change intentionally departs from an existing rule, evaluate whether the rule should evolve. Do not automatically change the system to justify an implementation that may be inconsistent or incorrect.
 - Do not create permanent rules from guesses, one-off exceptions, temporary experiments, or accidental implementation details.
 - Distinguish established conventions from emerging patterns that still need validation.
 - When there is genuine uncertainty, prefer existing conventions and make the smallest reasonable decision. Ask for input only when the uncertainty materially affects product direction or user experience.
 
 ### Maintain the documentation
-- Revisit `new ui\masterclass-study-companion-main\docs\UI_UX_SYSTEM.md` after every UI/UX task, including visual refinements and interaction changes.
+- Revisit `docs\UI_UX_SYSTEM.md` after every UI/UX task, including visual refinements and interaction changes.
 - Update the relevant section when a decision, reusable pattern, token, component, or convention has changed or become clearer.
 - Keep the guide concise, actionable, and representative of the current intended product direction.
 - Edit the relevant section rather than repeatedly appending duplicate or conflicting rules.
@@ -55,13 +55,13 @@ trigger: always_on
 1. Check the finished result against the current UI/UX system and relevant existing screens.
 2. Verify that the requested change works and that affected states and viewport sizes remain appropriate.
 3. Check for unintended visual drift, duplicate patterns, inconsistent tokens, and unnecessary UI elements.
-4. Reconcile `new ui\masterclass-study-companion-main\docs\UI_UX_SYSTEM.md` with any intentional system changes.
+4. Reconcile `docs\UI_UX_SYSTEM.md` with any intentional system changes.
 5. Confirm that the work is complete, identify relevant verification performed, and mention meaningful design-system updates or unresolved issues.
 
 ### Decision hierarchy
 When making UI/UX decisions, prioritize:
 1. Explicit requirements and decisions from the user in the current task.
-2. The established product direction documented in `new ui\masterclass-study-companion-main\docs\UI_UX_SYSTEM.md`.
+2. The established product direction documented in `docs\UI_UX_SYSTEM.md`.
 3. Existing, consistent implementation patterns that are not contradicted by the above.
 4. New design proposals, only when the existing system does not adequately solve the problem.
 

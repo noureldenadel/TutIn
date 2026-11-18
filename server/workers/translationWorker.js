@@ -1,159 +1,204 @@
 import { pipeline, env } from '@xenova/transformers'
-import { parentPort } from 'node:worker_threads'
-import path from 'path'
-import { fileURLToPath } from 'url'
 
-import { getAiModelsDir } from '../utils/modelManager.js'
-import {
-    NLLB_LANG_MAP,
-    isNonSpeechText,
-    stitchCuesIntoSentences,
-    sliceTranslatedSentenceToCues
-} from '../utils/aiTranslation.js'
-
-const __filename = fileURLToPath(import.meta.url)
-const __dirname = path.dirname(__filename)
-
-env.cacheDir = getAiModelsDir()
-env.allowLocalModels = true
-
-let cachedNllbTranslator = null
-let nllbLoadingPromise = null
-
-async function getCachedNLLBTranslator(onProgress) {
-    if (cachedNllbTranslator) {
-        onProgress?.({ step: 'loading', message: 'Using loaded NLLB-200 model...', percent: 100 })
-        return cachedNllbTranslator
-    }
-    if (nllbLoadingPromise) {
-        return nllbLoadingPromise
-    }
-
-    const modelId = 'Xenova/nllb-200-distilled-600M'
-    nllbLoadingPromise = pipeline('translation', modelId, {
-        progress_callback: (p) => {
-            if (p.status === 'progress' || p.status === 'downloading') {
-                onProgress?.({ step: 'downloading', message: `Downloading model... (${Math.round(p.progress)}%)`, percent: p.progress })
-            } else if (p.status === 'ready') {
-                onProgress?.({ step: 'loading', message: 'Model loaded. Preparing...', percent: 100 })
-            }
-        }
-    }).then(instance => {
-        cachedNllbTranslator = instance
-        nllbLoadingPromise = null
-        return instance
-    }).catch(err => {
-        nllbLoadingPromise = null
-        throw err
-    })
-
-    return nllbLoadingPromise
+env.allowLocalModels = false
+env.useBrowserCache = false
+if (process.env.TUTIN_XENOVA_CACHE_DIR) {
+    env.cacheDir = process.env.TUTIN_XENOVA_CACHE_DIR
 }
 
-const cancelledTasks = new Set()
+const MODEL_NAME = 'Xenova/nllb-200-distilled-600M'
 
-async function handleTranslateTask({ taskId, chunks, targetLanguage, sourceLanguage }) {
-    const onProgress = (data) => {
-        parentPort?.postMessage({ type: 'progress', taskId, data })
-    }
+const NLLB_LANG_MAP = {
+    'en': 'eng_Latn',
+    'ar': 'arb_Arab',
+    'ar-eg': 'arz_Arab',
+    'ar-sa': 'ars_Arab',
+    'es': 'spa_Latn',
+    'fr': 'fra_Latn',
+    'de': 'deu_Latn',
+    'zh': 'zho_Hans',
+    'ja': 'jpn_Jpan',
+    'ko': 'kor_Hang',
+    'ru': 'rus_Cyrl',
+    'pt': 'por_Latn',
+    'it': 'ita_Latn',
+    'hi': 'hin_Deva',
+    'tr': 'tur_Latn',
+    'nl': 'nld_Latn',
+    'pl': 'pol_Latn',
+    'vi': 'vie_Latn',
+    'th': 'tha_Thai',
+    'cs': 'ces_Latn',
+    'hu': 'hun_Latn',
+    'uk': 'ukr_Cyrl',
+    'id': 'ind_Latn',
+    'sv': 'swe_Latn',
+    'da': 'dan_Latn',
+    'no': 'nob_Latn',
+    'fi': 'fin_Latn',
+    'el': 'ell_Grek',
+    'he': 'heb_Hebr'
+}
 
+let translatorInstance = null
+let isCancelled = false
+
+function sendToParent(payload) {
     try {
-        const tgt_lang = NLLB_LANG_MAP[targetLanguage]
-        const src_lang = NLLB_LANG_MAP[sourceLanguage] || 'eng_Latn'
-        if (!tgt_lang) throw new Error(`Unsupported language code: ${targetLanguage}`)
-
-        const stitchedSentences = stitchCuesIntoSentences(chunks)
-        console.log(`[Worker:NLLB-200] ${stitchedSentences.length} stitched sentences from ${chunks.length} cues | ${sourceLanguage} -> ${targetLanguage}`)
-        const startTime = Date.now()
-        onProgress({ step: 'loading', message: 'Loading NLLB-200 model (1.2GB, downloads once)...', percent: 0 })
-
-        const translator = await getCachedNLLBTranslator(onProgress)
-
-        const BATCH_SIZE = 10
-        const translatedSentences = []
-        const totalBatches = Math.ceil(stitchedSentences.length / BATCH_SIZE)
-
-        for (let i = 0; i < stitchedSentences.length; i += BATCH_SIZE) {
-            if (cancelledTasks.has(taskId)) {
-                cancelledTasks.delete(taskId)
-                throw new Error('Translation cancelled by client')
-            }
-
-            const batch = stitchedSentences.slice(i, i + BATCH_SIZE)
-            const batchNum = Math.floor(i / BATCH_SIZE) + 1
-            onProgress({
-                step: 'translating',
-                message: `Translating batch ${batchNum} of ${totalBatches}...`,
-                batch: batchNum,
-                of: totalBatches,
-                percent: Math.round(((batchNum - 1) / totalBatches) * 100)
-            })
-
-            const textsToTranslate = batch.map(c => (c.isNonSpeech || isNonSpeechText(c.text)) ? '' : c.text)
-            const validIndices = []
-            const validTexts = []
-            for (let j = 0; j < textsToTranslate.length; j++) {
-                if (textsToTranslate[j]) {
-                    validIndices.push(j)
-                    validTexts.push(textsToTranslate[j])
-                }
-            }
-
-            const batchResults = new Array(textsToTranslate.length).fill('')
-            if (validTexts.length > 0) {
-                const output = await translator(validTexts, { src_lang, tgt_lang })
-                for (let k = 0; k < validTexts.length; k++) {
-                    const text = Array.isArray(output[k]) ? output[k][0].translation_text : output[k].translation_text
-                    batchResults[validIndices[k]] = text || ''
-                }
-            }
-
-            translatedSentences.push(...batchResults)
-
-            // Micro-yield to allow message handling
-            await new Promise(resolve => setImmediate(resolve))
+        if (typeof process.send === 'function') {
+            process.send(payload)
         }
+    } catch { }
+}
 
-        const translatedChunks = []
-        for (let i = 0; i < stitchedSentences.length; i++) {
-            const sliced = sliceTranslatedSentenceToCues(translatedSentences[i], stitchedSentences[i].cues)
-            translatedChunks.push(...sliced)
-        }
-
-        const ttsSegments = stitchedSentences.map((s, idx) => ({
-            start: s.start,
-            end: s.end,
-            timestamp: [s.start, s.end],
-            caption: translatedSentences[idx] || '',
-            text: translatedSentences[idx] || ''
-        })).filter(seg => seg.text && seg.text.trim())
-
-        translatedChunks.ttsSegments = ttsSegments
-
-        console.log(`[Worker:NLLB-200] Done in ${((Date.now() - startTime) / 1000).toFixed(2)}s: ${translatedChunks.length} chunks`)
-        onProgress({
-            step: 'done',
-            message: 'Translation complete!',
-            batch: totalBatches,
-            of: totalBatches,
-            percent: 100,
-            lang: targetLanguage,
-            chunkCount: translatedChunks.length
+async function getTranslator() {
+    if (!translatorInstance) {
+        sendToParent({
+            type: 'progress',
+            data: { step: 'loading', message: 'Loading NLLB-200 translation model…', percent: 5 }
         })
 
-        parentPort?.postMessage({ type: 'done', taskId, result: translatedChunks })
-    } catch (err) {
-        cancelledTasks.delete(taskId)
-        parentPort?.postMessage({ type: 'error', taskId, error: err.message })
+        translatorInstance = await pipeline('translation', MODEL_NAME, {
+            progress_callback: (info) => {
+                if (isCancelled) return
+                if (info.status === 'progress' && info.progress) {
+                    sendToParent({
+                        type: 'progress',
+                        data: {
+                            step: 'downloading',
+                            file: info.file,
+                            percent: Math.round(info.progress),
+                            message: `Downloading model: ${Math.round(info.progress)}%`
+                        }
+                    })
+                } else if (info.status === 'done') {
+                    sendToParent({
+                        type: 'progress',
+                        data: {
+                            step: 'loaded_file',
+                            file: info.file,
+                            message: `Loaded ${info.file}`
+                        }
+                    })
+                }
+            }
+        })
+
+        if (isCancelled) return null
+
+        sendToParent({
+            type: 'progress',
+            data: { step: 'ready', message: 'Translation model ready', percent: 15 }
+        })
     }
+    return translatorInstance
 }
 
-if (parentPort) {
-    parentPort.on('message', async (msg) => {
-        if (msg.type === 'translate') {
-            await handleTranslateTask(msg)
-        } else if (msg.type === 'cancel') {
-            if (msg.taskId) cancelledTasks.add(msg.taskId)
+process.on('message', async (msg) => {
+    if (msg?.type === 'cancel') {
+        isCancelled = true
+        setTimeout(() => process.exit(0), 25).unref?.()
+        return
+    }
+    if (msg?.type !== 'translate') return
+
+    const { chunks, targetLangCode, sourceLangCode } = msg
+    const tgtLang = NLLB_LANG_MAP[targetLangCode]
+    if (!tgtLang) {
+        sendToParent({ type: 'error', error: `Unsupported target language code: ${targetLangCode}` })
+        setTimeout(() => process.exit(1), 50)
+        return
+    }
+    const srcLang = NLLB_LANG_MAP[sourceLangCode] || 'eng_Latn'
+
+    try {
+        const translator = await getTranslator()
+        if (!translator || isCancelled) {
+            process.exit(0)
+            return
         }
-    })
-}
+
+        const total = chunks.length
+        const BATCH_SIZE = 10
+        const translatedChunks = []
+
+        for (let i = 0; i < total; i += BATCH_SIZE) {
+            if (isCancelled) {
+                process.exit(0)
+                return
+            }
+
+            const batch = chunks.slice(i, i + BATCH_SIZE)
+            const texts = batch.map(c => (c.text || '').trim())
+            const nonEmptyIndices = []
+            const nonEmptyTexts = []
+
+            texts.forEach((t, idx) => {
+                if (t.length > 0) {
+                    nonEmptyIndices.push(idx)
+                    nonEmptyTexts.push(t)
+                }
+            })
+
+            let translatedTexts = new Array(batch.length).fill('')
+
+            if (nonEmptyTexts.length > 0) {
+                const results = await translator(nonEmptyTexts, {
+                    src_lang: srcLang,
+                    tgt_lang: tgtLang,
+                    max_length: 512
+                })
+
+                if (isCancelled) {
+                    process.exit(0)
+                    return
+                }
+
+                if (Array.isArray(results)) {
+                    nonEmptyIndices.forEach((origIdx, resIdx) => {
+                        const r = results[resIdx]
+                        translatedTexts[origIdx] = r?.translation_text || (Array.isArray(r) ? r[0]?.translation_text : '') || ''
+                    })
+                } else if (results && results.translation_text) {
+                    translatedTexts[nonEmptyIndices[0]] = results.translation_text
+                }
+            }
+
+            for (let j = 0; j < batch.length; j++) {
+                const orig = batch[j]
+                translatedChunks.push({
+                    start: orig.start,
+                    end: orig.end,
+                    timestamp: orig.timestamp || [orig.start, orig.end],
+                    text: translatedTexts[j] || orig.text
+                })
+            }
+
+            const processed = Math.min(i + BATCH_SIZE, total)
+            const percent = Math.round(15 + (processed / total) * 84)
+            sendToParent({
+                type: 'progress',
+                data: {
+                    step: 'translating',
+                    current: processed,
+                    total,
+                    percent,
+                    message: `Translating cues (${processed}/${total})…`
+                }
+            })
+        }
+
+        sendToParent({
+            type: 'progress',
+            data: { step: 'done', current: total, total, percent: 100, message: 'Translation complete' }
+        })
+
+        sendToParent({ type: 'done', result: translatedChunks })
+        setTimeout(() => process.exit(0), 50)
+    } catch (err) {
+        if (!isCancelled) {
+            sendToParent({ type: 'error', error: err.message || 'Worker translation error' })
+        }
+        setTimeout(() => process.exit(isCancelled ? 0 : 1), 50)
+    }
+})

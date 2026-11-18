@@ -5,12 +5,19 @@
  */
 
 const LANG_NAME_MAP = {
-    arabic:'ar', ara:'ar', french:'fr', fre:'fr', fra:'fr', spanish:'es', spa:'es', german:'de', ger:'de', 
-    italian:'it', ita:'it', portuguese:'pt', por:'pt', russian:'ru', rus:'ru', japanese:'ja', jpn:'ja', 
-    korean:'ko', kor:'ko', chinese:'zh', chi:'zh', zho:'zh', hindi:'hi', hin:'hi', turkish:'tr', tur:'tr', 
-    dutch:'nl', dut:'nl', nld:'nl', polish:'pl', pol:'pl', indonesian:'id', ind:'id', vietnamese:'vi', vie:'vi', 
+    arabic:'ar', ara:'ar', french:'fr', fre:'fr', fra:'fr', francais:'fr',
+    spanish:'es', spa:'es', espanol:'es', castellano:'es',
+    german:'de', ger:'de', deu:'de', deutsch:'de',
+    italian:'it', ita:'it', italiano:'it',
+    portuguese:'pt', por:'pt', portugues:'pt',
+    russian:'ru', rus:'ru', japanese:'ja', jpn:'ja',
+    korean:'ko', kor:'ko', chinese:'zh', chi:'zh', zho:'zh', hindi:'hi', hin:'hi',
+    turkish:'tr', tur:'tr', turkce:'tr',
+    dutch:'nl', dut:'nl', nld:'nl', nederlands:'nl',
+    polish:'pl', pol:'pl', polski:'pl',
+    indonesian:'id', ind:'id', vietnamese:'vi', vie:'vi',
     english:'en', eng:'en', hebrew:'he', heb:'he', greek:'el', gre:'el', ell:'el', swedish:'sv', swe:'sv',
-    danish:'da', dan:'da', norwegian:'no', nor:'no', finnish:'fi', fin:'fi', czech:'cs', cze:'cs', ces:'cs', 
+    danish:'da', dan:'da', norwegian:'no', nor:'no', finnish:'fi', fin:'fi', czech:'cs', cze:'cs', ces:'cs',
     hungarian:'hu', hun:'hu', romanian:'ro', rum:'ro', ron:'ro', thai:'th', tha:'th', ukrainian:'uk', ukr:'uk',
 }
 
@@ -27,43 +34,57 @@ export function detectFormat(filename) {
 
 const KNOWN_HYPHENATED_LANGS = new Set(['ar-eg', 'ar-sa', 'zh-cn', 'zh-tw', 'pt-br'])
 
+const ISO_LANG_CODES = new Set(Object.values(LANG_NAME_MAP))
+
 /**
  * Extract ISO 639-1 / BCP-47 language code from subtitle or dub filename.
- * Supports: video.ar.srt | video.ar-eg.vtt | video-generated.ar-eg.vtt | video.Arabic.srt
+ * Supports: video.ar.srt | video.ar-eg.vtt | video-u2.en.vtt | video-generated.ar-eg.vtt | video.Arabic.srt
+ * Avoids false positives from 2-letter words in video titles (like "de", "it", "en", "hi", "no").
  */
 export function extractLangCode(filename, baseName = '') {
-    if (!filename || filename.toLowerCase().includes('.tts.')) return null
-    const nameWithoutExt = filename.replace(/\.(?:srt|vtt|ass|ssa|lrc|mp3|wav|json)$/i, '').toLowerCase()
+    if (!filename) return null
+    const fold = (s) => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim()
+    const nameWithoutExt = fold(filename.replace(/\.(?:srt|vtt|ass|ssa|lrc|mp3|wav|json)$/i, ''))
+    const foldedBase = baseName ? fold(baseName) : ''
 
     // 1. Try strict matching if the file starts with the video base name
-    if (baseName && nameWithoutExt.startsWith(baseName.toLowerCase())) {
+    if (foldedBase && nameWithoutExt.startsWith(foldedBase)) {
         const withoutBase = nameWithoutExt
-            .slice(baseName.length)
-            .replace(/^-(?:generated|uploaded)/i, '')
+            .slice(foldedBase.length)
+            .replace(/^-(?:generated|uploaded|u\d+)/i, '')
         const strictMatch = withoutBase.match(/^[\.\s_-]*([a-z]{2,3}(?:-[a-z]{2,4})?|[a-z]{4,})$/)
         if (strictMatch) {
             const code = strictMatch[1]
+            if (code === 'source') return null
             if (KNOWN_HYPHENATED_LANGS.has(code)) return code
             if (LANG_NAME_MAP[code]) return LANG_NAME_MAP[code]
-            if (Object.values(LANG_NAME_MAP).includes(code)) return code
-            if (code.length <= 3 && code !== 'source') return code
+            if (ISO_LANG_CODES.has(code)) return code
+            if (code.length <= 3) return code
         }
     }
 
-    // 2. Check for known hyphenated dialect codes at the end of nameWithoutExt (e.g. ".ar-eg", "-ar-sa")
-    const hyphenMatch = nameWithoutExt.match(/(?:^|[.\s_-])(ar-eg|ar-sa|zh-cn|zh-tw|pt-br)$/)
+    // 2. Check for known hyphenated dialect codes at the end (e.g. ".ar-eg", "-ar-sa")
+    const hyphenMatch = nameWithoutExt.match(/(?:^|[.\s_\-[(])(ar-eg|ar-sa|zh-cn|zh-tw|pt-br)[\])]*$/)
     if (hyphenMatch) return hyphenMatch[1]
 
-    // 3. Try scanning the whole filename for known language names or codes
-    const words = nameWithoutExt.split(/[^a-z]+/)
-    // Reverse to prefer suffixes (e.g. "my-video-english.srt" -> "english")
-    for (const word of words.reverse()) { 
-        if (!word || word === 'generated' || word === 'uploaded' || word === 'source') continue
-        if (LANG_NAME_MAP[word]) return LANG_NAME_MAP[word]
-        if (Object.values(LANG_NAME_MAP).includes(word)) return word
+    // 3. Check explicit trailing language code or full language name suffix (e.g. ".en", "-ar", "[fr]", "(Spanish)")
+    const strippedOrigin = nameWithoutExt.replace(/(?:^|[.\s_-])(?:generated|uploaded|u\d+)$/i, '').trim()
+    const suffixMatch = strippedOrigin.match(/(?:^|[.\s_\-[(])([a-z]{2,})[\])]*$/)
+    if (suffixMatch) {
+        const token = suffixMatch[1]
+        if (token && token !== 'generated' && token !== 'uploaded' && token !== 'source') {
+            if (LANG_NAME_MAP[token]) return LANG_NAME_MAP[token]
+            if (ISO_LANG_CODES.has(token)) return token
+        }
     }
 
-    return null // source language
+    // 4. Fallback: only match unambiguous full language names (e.g. "arabic", "english", "spanish") anywhere in filename
+    const words = strippedOrigin.split(/[^a-z]+/)
+    for (const word of words.reverse()) {
+        if (LANG_NAME_MAP[word] && word.length >= 4) return LANG_NAME_MAP[word]
+    }
+
+    return null
 }
 
 // ── Time Helpers ──────────────────────────────────────────────

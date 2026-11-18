@@ -11,7 +11,15 @@ import { execFile } from 'child_process'
 import { parseMp4Duration } from '../utils/mp4Parser.js'
 import { extractLangCode } from '../utils/captionParser.js'
 import { parseTsDuration } from '../utils/tsParser.js'
-import { loadFullVaultData } from '../utils/courseAssets.js'
+import { normalizeCuesIntoClauses } from '../utils/aiTranslation.js'
+import {
+    loadFullVaultData,
+    readCaptionFile,
+    saveCaptionFile,
+    normalizeSubtitleSources,
+    migrateLegacyCourseAssets,
+    extractDubLangFromFileName
+} from '../utils/courseAssets.js'
 
 /**
  * Supported video file extensions
@@ -23,7 +31,7 @@ const VIDEO_EXTENSIONS = new Set([
 const SUBTITLE_EXTENSIONS = new Set(['.srt', '.vtt', '.ass', '.ssa'])
 
 // Folder names managed by TutIn — skip during module scanning
-const MANAGED_FOLDERS = new Set(['Captions', 'Dubs', '.tutin'])
+const MANAGED_FOLDERS = new Set(['.tutin'])
 
 /**
  * Check if a filename is a video file
@@ -270,6 +278,7 @@ async function scanDirectoryRecursive(dirPath, onProgress, progressState, course
         }
 
         // Detect pre-existing subtitle files (sibling to video and in local Subs/ subfolders)
+        // and copy them into .tutin/captions/ as 'uploaded' tracks so the vault is self-contained.
         const candidateSubFiles = []
         for (const e of entries) {
             if (e.isFile() && SUBTITLE_EXTENSIONS.has(path.extname(e.name).toLowerCase())) {
@@ -286,61 +295,82 @@ async function scanDirectoryRecursive(dirPath, onProgress, progressState, course
             }
         }
 
-        const subtitleFiles = candidateSubFiles
-            .filter(e => matchSubtitleToVideo(e.name, videoBase))
-            .map(e => ({
-                filePath: e.fullPath,
-                lang: extractLangCode(e.name, videoBase) || 'source',
-                format: path.extname(e.name).slice(1).replace('ssa', 'ass'),
-                origin: 'existing'
-            }))
-
-        // Detect app-managed captions in .tutin/captions/ and legacy Captions/ subfolders
         const vaultCaptionsDir = path.join(courseRoot, '.tutin', 'captions', relModulePath)
-        const legacyCaptionsDir = path.join(courseRoot, 'Captions', relModulePath)
-        const scanCaptionsFrom = (dir) => {
-            if (!fs.existsSync(dir)) return []
-            try {
-                return fs.readdirSync(dir)
-                    .filter(f => f.startsWith(videoBase) && SUBTITLE_EXTENSIONS.has(path.extname(f).toLowerCase()))
-                    .map(f => ({
-                        filePath: path.join(dir, f),
-                        lang: extractLangCode(f, videoBase) || 'source',
-                        format: path.extname(f).slice(1),
-                        origin: 'generated'
-                    }))
-            } catch { return [] }
-        }
-        const managedCaptions = [...scanCaptionsFrom(vaultCaptionsDir), ...scanCaptionsFrom(legacyCaptionsDir)]
 
-        // Detect dubbed audio in .tutin/dubs/ and legacy Dubs/ subfolders
-        const vaultDubsDir = path.join(courseRoot, '.tutin', 'dubs', relModulePath)
-        const legacyDubsDir = path.join(courseRoot, 'Dubs', relModulePath)
-        const scanDubsFrom = (dir) => {
-            if (!fs.existsSync(dir)) return []
-            try {
-                return fs.readdirSync(dir)
-                    .filter(f => f.startsWith(videoBase) && f.endsWith('.mp3'))
-                    .map(f => {
-                        const lang = extractLangCode(f.replace('.mp3', ''), videoBase) || 'unknown'
-                        return {
-                            filePath: path.join(dir, f),
+        // Copy matching sibling subtitle files into .tutin/captions/ if not already present
+        for (const e of candidateSubFiles.filter(item => matchSubtitleToVideo(item.name, videoBase))) {
+            const lang = extractLangCode(e.name, videoBase) || 'en'
+            const targetVaultVtt = path.join(vaultCaptionsDir, `${videoBase}.${lang}.vtt`)
+            if (!fs.existsSync(targetVaultVtt)) {
+                try {
+                    const rawText = fs.readFileSync(e.fullPath, 'utf8')
+                    const parsedChunks = readCaptionFile(rawText, e.fullPath)
+                    const chunks = normalizeCuesIntoClauses(parsedChunks, lang)
+                    if (chunks && chunks.length > 0) {
+                        saveCaptionFile(
+                            { id: videoBase, courseFolder: courseRoot, relModulePath, videoBaseName: videoBase },
                             lang,
-                            language: lang,
-                            status: 'ready'
-                        }
-                    })
-            } catch { return [] }
+                            chunks,
+                            'uploaded',
+                            1
+                        )
+                    }
+                } catch { }
+            }
         }
-        const availableDubs = [...scanDubsFrom(vaultDubsDir), ...scanDubsFrom(legacyDubsDir)]
 
-        // Merge: pre-existing files first, then managed (avoid duplicate langs)
-        const seenLangs = new Set()
-        const allSubtitles = [...subtitleFiles, ...managedCaptions].filter(s => {
-            if (seenLangs.has(`${s.lang}:${s.origin}`)) return false
-            seenLangs.add(`${s.lang}:${s.origin}`)
-            return true
-        })
+        // Scan app-managed captions strictly in .tutin/captions/
+        const managedCaptions = fs.existsSync(vaultCaptionsDir)
+            ? (() => {
+                try {
+                    return fs.readdirSync(vaultCaptionsDir)
+                        .filter(f => {
+                            if (!f.startsWith(videoBase)) return false
+                            const suffix = f.slice(videoBase.length)
+                            if (!/^(?:\.|-(?:generated|u\d+)\.)/i.test(suffix)) return false
+                            return SUBTITLE_EXTENSIONS.has(path.extname(f).toLowerCase())
+                        })
+                        .map(f => {
+                            const isGenerated = f.includes('-generated.')
+                            const verMatch = f.match(/-u(\d+)\.[a-z0-9\-]+\.vtt$/i)
+                            const version = verMatch ? Number(verMatch[1]) : 1
+                            const lang = extractLangCode(f, videoBase) || 'en'
+                            return {
+                                filePath: path.join(vaultCaptionsDir, f),
+                                fileName: f,
+                                lang,
+                                format: path.extname(f).slice(1),
+                                origin: isGenerated ? 'generated' : 'uploaded',
+                                version
+                            }
+                        })
+                } catch { return [] }
+            })()
+            : []
+        const allSubtitles = normalizeSubtitleSources(managedCaptions, 'en')
+
+        // Detect dubbed audio strictly in .tutin/dubs/ (migrating any legacy Dubs/ on first encounter)
+        migrateLegacyCourseAssets(courseRoot)
+        const vaultDubsDir = path.join(courseRoot, '.tutin', 'dubs', relModulePath)
+        const availableDubs = fs.existsSync(vaultDubsDir)
+            ? (() => {
+                try {
+                    const found = []
+                    for (const f of fs.readdirSync(vaultDubsDir)) {
+                        const lang = extractDubLangFromFileName(f, videoBase)
+                        if (lang) {
+                            found.push({
+                                filePath: path.join(vaultDubsDir, f),
+                                lang,
+                                language: lang,
+                                status: 'ready'
+                            })
+                        }
+                    }
+                    return found
+                } catch { return [] }
+            })()
+            : []
 
         // Check for existing video summary in .tutin/summaries/
         const summaryInMod = path.join(courseRoot, '.tutin', 'summaries', relModulePath, `${videoBase}.md`)

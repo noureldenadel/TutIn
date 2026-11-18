@@ -1,15 +1,74 @@
 import express from 'express'
 import fs from 'fs'
 import path from 'path'
-import { getAll, getOne, run } from '../database.js'
-import { saveVaultNotes } from '../utils/courseAssets.js'
+import crypto from 'crypto'
+import { getAll, getOne, run, transaction, getDataDir } from '../database.js'
+import { getScreenshotsDir, saveVaultNotes } from '../utils/courseAssets.js'
+import { deleteLinkedCanvasNodesForNotes, syncCourseCanvasToVault } from './canvas.js'
 
 const router = express.Router()
+
+const MIME_TO_EXT = {
+    'image/png': 'png',
+    'image/jpeg': 'jpg',
+    'image/jpg': 'jpg',
+    'image/webp': 'webp',
+    'image/gif': 'gif',
+}
+
+const EXT_TO_MIME = {
+    '.png': 'image/png',
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.webp': 'image/webp',
+    '.gif': 'image/gif',
+}
+
+function sanitizeMediaKey(rawKey, fallback = 'shared') {
+    const base = path.basename(String(rawKey || '').trim())
+    const clean = base.replace(/[^a-zA-Z0-9._-]/g, '_')
+    return !clean || clean === '.' || clean === '..' ? fallback : clean
+}
+
+function resolveSafePathWithin(baseDir, fileName) {
+    if (!baseDir || !fileName) return null
+    const resolvedBase = path.resolve(baseDir)
+    const resolvedTarget = path.resolve(resolvedBase, fileName)
+    const rel = path.relative(resolvedBase, resolvedTarget)
+    if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return null
+    return resolvedTarget
+}
+
+function safeParseJsonArray(raw) {
+    if (Array.isArray(raw)) return raw
+    if (typeof raw !== 'string' || !raw.trim()) return []
+    try {
+        const parsed = JSON.parse(raw)
+        return Array.isArray(parsed) ? parsed : []
+    } catch {
+        return []
+    }
+}
+
+function getMediaStorageDir(courseId) {
+    if (courseId) {
+        const course = getOne('SELECT folder_path FROM courses WHERE id = ?', [courseId])
+        if (course?.folder_path && fs.existsSync(course.folder_path)) {
+            const dir = getScreenshotsDir(course.folder_path)
+            if (dir) return dir
+        }
+    }
+    const fallback = path.join(getDataDir(), 'screenshots', sanitizeMediaKey(courseId))
+    if (!fs.existsSync(fallback)) {
+        fs.mkdirSync(fallback, { recursive: true })
+    }
+    return fallback
+}
 
 /**
  * Synchronize notes for a course to <courseFolder>/.tutin/notes/notes.json
  */
-function syncCourseNotesToVault(courseId) {
+export function syncCourseNotesToVault(courseId) {
     if (!courseId) return
     try {
         const course = getOne('SELECT folder_path FROM courses WHERE id = ?', [courseId])
@@ -17,16 +76,15 @@ function syncCourseNotesToVault(courseId) {
 
         const courseFolder = course.folder_path
         const videos = getAll('SELECT id, file_name, file_path FROM videos WHERE course_id = ?', [courseId])
+        const videoById = new Map(videos.map(v => [v.id, v]))
         const rawNotes = getAll('SELECT * FROM notes WHERE course_id = ? ORDER BY timestamp ASC', [courseId])
 
         const portableNotes = rawNotes.map(note => {
-            const video = videos.find(v => v.id === note.video_id)
-            let images = []
-            let noteTags = []
-            try { images = JSON.parse(note.images || '[]') } catch { }
-            try { noteTags = JSON.parse(note.tags || '[]') } catch { }
+            const video = videoById.get(note.video_id)
+            const images = safeParseJsonArray(note.images)
+            const noteTags = safeParseJsonArray(note.tags)
 
-            const relVideoPath = video && video.file_path 
+            const relVideoPath = video && video.file_path
                 ? path.relative(courseFolder, video.file_path).replace(/\\/g, '/')
                 : (video?.file_name || '')
 
@@ -50,15 +108,183 @@ function syncCourseNotesToVault(courseId) {
     }
 }
 
+// GET /api/notes/stats
+router.get('/stats', (req, res) => {
+    try {
+        const row = getOne('SELECT COUNT(*) as totalNotes FROM notes')
+        res.json({ totalNotes: Number(row?.totalNotes) || 0 })
+    } catch (err) {
+        res.status(500).json({ error: err.message })
+    }
+})
+
+const mediaHashIndexByDir = new Map()
+
+function getDirHashMap(targetDir) {
+    let dirMap = mediaHashIndexByDir.get(targetDir)
+    if (!dirMap) {
+        dirMap = new Map()
+        mediaHashIndexByDir.set(targetDir, dirMap)
+    }
+    return dirMap
+}
+
+function findExistingMediaByHash(targetDir, targetSize, targetHash) {
+    if (!targetDir || !fs.existsSync(targetDir)) return null
+    const dirMap = getDirHashMap(targetDir)
+    const cachedName = dirMap.get(targetHash)
+    if (cachedName) {
+        const cachedPath = resolveSafePathWithin(targetDir, cachedName)
+        try {
+            if (cachedPath && fs.statSync(cachedPath).size === targetSize) {
+                return cachedName
+            }
+        } catch {
+            // File removed externally; clear stale cache entry and fall through to scan
+        }
+        dirMap.delete(targetHash)
+    }
+
+    try {
+        const entries = fs.readdirSync(targetDir, { withFileTypes: true })
+        for (const entry of entries) {
+            if (!entry.isFile()) continue
+            const fileExt = path.extname(entry.name).toLowerCase()
+            if (!EXT_TO_MIME[fileExt]) continue
+            const candidatePath = resolveSafePathWithin(targetDir, entry.name)
+            if (!candidatePath) continue
+            let stat
+            try {
+                stat = fs.statSync(candidatePath)
+            } catch {
+                continue
+            }
+            if (!stat.isFile() || stat.size !== targetSize) continue
+            try {
+                const candidateHash = crypto
+                    .createHash('sha256')
+                    .update(fs.readFileSync(candidatePath))
+                    .digest('hex')
+                dirMap.set(candidateHash, entry.name)
+                if (candidateHash === targetHash) {
+                    return entry.name
+                }
+            } catch {
+                // Skip unreadable candidate file
+            }
+        }
+    } catch {
+        // Fallback cleanly to writing a new file if directory scan fails
+    }
+    return null
+}
+
+// POST /api/notes/media — Persist note/canvas image inside .tutin/notes/screenshots (or AppData fallback)
+router.post('/media', (req, res) => {
+    const { courseId, dataUrl, filename } = req.body || {}
+    if (!dataUrl || typeof dataUrl !== 'string') {
+        return res.status(400).json({ error: 'Missing dataUrl' })
+    }
+
+    const match = dataUrl.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/)
+    if (!match) {
+        return res.status(400).json({ error: 'Invalid base64 image dataUrl' })
+    }
+
+    const mime = match[1].toLowerCase()
+    const ext = MIME_TO_EXT[mime]
+    if (!ext) {
+        return res.status(400).json({ error: `Unsupported image MIME type: ${mime}` })
+    }
+    const safeCourseId = sanitizeMediaKey(courseId)
+
+    try {
+        const targetDir = getMediaStorageDir(courseId || null)
+        const buffer = Buffer.from(match[2], 'base64')
+        const targetHash = crypto.createHash('sha256').update(buffer).digest('hex')
+        const existingName = findExistingMediaByHash(targetDir, buffer.length, targetHash)
+        if (existingName) {
+            const existingUrl = `/api/notes/media/${encodeURIComponent(safeCourseId)}/${encodeURIComponent(existingName)}`
+            return res.status(200).json({ url: existingUrl, filename: existingName, deduplicated: true })
+        }
+
+        const baseSlug = (filename ? path.basename(filename, path.extname(filename)) : 'shot')
+            .replace(/[^a-zA-Z0-9_-]/g, '_')
+            .slice(0, 40) || 'shot'
+        const outName = `${baseSlug}_${Date.now()}_${crypto.randomBytes(3).toString('hex')}.${ext}`
+        const outPath = resolveSafePathWithin(targetDir, outName)
+        if (!outPath) {
+            return res.status(400).json({ error: 'Invalid output filename' })
+        }
+
+        fs.writeFileSync(outPath, buffer)
+        getDirHashMap(targetDir).set(targetHash, outName)
+
+        const url = `/api/notes/media/${encodeURIComponent(safeCourseId)}/${encodeURIComponent(outName)}`
+        res.status(201).json({ url, filename: outName })
+    } catch (err) {
+        res.status(500).json({ error: err.message })
+    }
+})
+
+// GET /api/notes/media/:courseId/:filename — Serve stored screenshot from .tutin vault or AppData
+router.get('/media/:courseId/:filename', (req, res) => {
+    const { courseId, filename } = req.params
+    const safeCourseId = sanitizeMediaKey(courseId)
+    const safeName = path.basename(filename || '')
+    if (!safeName || safeName === '.' || safeName === '..') {
+        return res.status(400).send('Invalid filename')
+    }
+
+    try {
+        const candidates = []
+        if (courseId && safeCourseId !== 'shared') {
+            const course = getOne('SELECT folder_path FROM courses WHERE id = ?', [courseId])
+            if (course?.folder_path) {
+                const vaultPath = resolveSafePathWithin(
+                    path.join(course.folder_path, '.tutin', 'notes', 'screenshots'),
+                    safeName
+                )
+                if (vaultPath) candidates.push(vaultPath)
+            }
+        }
+        const fallbackPath = resolveSafePathWithin(
+            path.join(getDataDir(), 'screenshots', safeCourseId),
+            safeName
+        )
+        if (fallbackPath) candidates.push(fallbackPath)
+
+        const found = candidates.find(p => fs.existsSync(p) && fs.statSync(p).isFile())
+        if (!found) {
+            return res.status(404).send('Media not found')
+        }
+
+        const ext = path.extname(found).toLowerCase()
+        res.setHeader('Content-Type', EXT_TO_MIME[ext] || 'application/octet-stream')
+        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable')
+        res.sendFile(path.resolve(found), { dotfiles: 'allow' })
+    } catch (err) {
+        res.status(500).send(err.message)
+    }
+})
+
+function formatNoteRow(note) {
+    return {
+        ...note,
+        videoId: note.video_id,
+        courseId: note.course_id,
+        createdAt: note.created_at,
+        updatedAt: note.updated_at,
+        images: safeParseJsonArray(note.images),
+        tags: safeParseJsonArray(note.tags),
+    }
+}
+
 // GET /api/notes/by-video/:videoId
 router.get('/by-video/:videoId', (req, res) => {
     try {
         const notes = getAll('SELECT * FROM notes WHERE video_id = ? ORDER BY timestamp ASC', [req.params.videoId])
-        for (const note of notes) {
-            note.images = JSON.parse(note.images || '[]')
-            note.tags = JSON.parse(note.tags || '[]')
-        }
-        res.json(notes)
+        res.json(notes.map(formatNoteRow))
     } catch (err) {
         res.status(500).json({ error: err.message })
     }
@@ -68,11 +294,7 @@ router.get('/by-video/:videoId', (req, res) => {
 router.get('/by-course/:courseId', (req, res) => {
     try {
         const notes = getAll('SELECT * FROM notes WHERE course_id = ? ORDER BY timestamp ASC', [req.params.courseId])
-        for (const note of notes) {
-            note.images = JSON.parse(note.images || '[]')
-            note.tags = JSON.parse(note.tags || '[]')
-        }
-        res.json(notes)
+        res.json(notes.map(formatNoteRow))
     } catch (err) {
         res.status(500).json({ error: err.message })
     }
@@ -155,10 +377,23 @@ router.put('/:id', (req, res) => {
 router.delete('/by-video/:videoId', (req, res) => {
     try {
         const video = getOne('SELECT course_id FROM videos WHERE id = ?', [req.params.videoId])
-        run('DELETE FROM notes WHERE video_id = ?', [req.params.videoId])
+        const affectedNotes = getAll('SELECT id, course_id FROM notes WHERE video_id = ?', [req.params.videoId])
+        const courseId = video?.course_id || affectedNotes[0]?.course_id || null
+        const noteIds = affectedNotes.map(n => n.id)
+        let removedCanvasNodes = 0
 
-        if (video?.course_id) {
-            syncCourseNotesToVault(video.course_id)
+        transaction(() => {
+            if (courseId && noteIds.length > 0) {
+                removedCanvasNodes = deleteLinkedCanvasNodesForNotes(courseId, noteIds)
+            }
+            run('DELETE FROM notes WHERE video_id = ?', [req.params.videoId])
+        })
+
+        if (courseId) {
+            syncCourseNotesToVault(courseId)
+            if (removedCanvasNodes > 0) {
+                syncCourseCanvasToVault(courseId)
+            }
         }
         res.json({ success: true })
     } catch (err) {
@@ -170,10 +405,20 @@ router.delete('/by-video/:videoId', (req, res) => {
 router.delete('/:id', (req, res) => {
     try {
         const note = getOne('SELECT course_id FROM notes WHERE id = ?', [req.params.id])
-        run('DELETE FROM notes WHERE id = ?', [req.params.id])
+        let removedCanvasNodes = 0
+
+        transaction(() => {
+            if (note?.course_id) {
+                removedCanvasNodes = deleteLinkedCanvasNodesForNotes(note.course_id, [req.params.id])
+            }
+            run('DELETE FROM notes WHERE id = ?', [req.params.id])
+        })
 
         if (note?.course_id) {
             syncCourseNotesToVault(note.course_id)
+            if (removedCanvasNodes > 0) {
+                syncCourseCanvasToVault(note.course_id)
+            }
         }
         res.json({ success: true })
     } catch (err) {

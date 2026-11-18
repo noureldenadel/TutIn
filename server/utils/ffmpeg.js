@@ -23,18 +23,25 @@ export function getFfmpegPath() {
         return cachedFfmpegPath
     }
 
-    // 2. Project virtualenv (imageio-ffmpeg binary)
-    const projectRoot = path.resolve(__dirname, '..', '..')
-    const venvBinDir = path.join(projectRoot, '.venv', 'Lib', 'site-packages', 'imageio_ffmpeg', 'binaries')
-    if (fs.existsSync(venvBinDir)) {
-        try {
-            const files = fs.readdirSync(venvBinDir).filter(f => f.startsWith('ffmpeg') && f.endsWith('.exe'))
-            if (files.length > 0) {
-                cachedFfmpegPath = path.join(venvBinDir, files[0])
-                return cachedFfmpegPath
+    // 2. Project virtualenvs (workspace .venv and parent .venv imageio-ffmpeg binaries)
+    const candidateRoots = [
+        path.resolve(__dirname, '..', '..'),
+        path.resolve(__dirname, '..', '..', '..')
+    ]
+    for (const rootDir of candidateRoots) {
+        const venvBinDir = path.join(rootDir, '.venv', 'Lib', 'site-packages', 'imageio_ffmpeg', 'binaries')
+        if (fs.existsSync(venvBinDir)) {
+            try {
+                const files = fs.readdirSync(venvBinDir).filter(f =>
+                    f.startsWith('ffmpeg') && (process.platform === 'win32' ? f.endsWith('.exe') : !f.endsWith('.py') && !f.endsWith('.md'))
+                )
+                if (files.length > 0) {
+                    cachedFfmpegPath = path.join(venvBinDir, files[0])
+                    return cachedFfmpegPath
+                }
+            } catch (e) {
+                // Continue search
             }
-        } catch (e) {
-            // Continue search
         }
     }
 

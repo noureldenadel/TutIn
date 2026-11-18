@@ -18,6 +18,7 @@ __pycache__/
 dist
 dist-ssr
 build
+.tanstack/
 
 # Environment files
 .env
@@ -81,7 +82,6 @@ fixOrder.mjs
 
 # Resolved docs
 docs/*.resolved
-docs/PRD.md
 docs/notes.md
 docs/showcase.psd
 

@@ -1,65 +1,23 @@
 {
-  "name": "tutin",
-  "version": "5.1.0",
-  "description": "AI-Powered Course Learning Platform",
+  "name": "tutin-app",
+  "private": true,
+  "version": "7.0.0",
   "author": "noor",
   "license": "MIT",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/noureldenadel/TutIn.git"
-  },
-  "keywords": [
-    "course-management",
-    "video-player",
-    "ai-transcription",
-    "learning-platform",
-    "offline-first",
-    "react",
-    "vite"
-  ],
   "type": "module",
-  "workspaces": [
-    "server"
-  ],
   "scripts": {
-    "dev": "vite",
-    "server": "node server/index.js",
-    "server:dev": "node --watch server/index.js",
-    "start": "concurrently \"npm run server\" \"npm run dev\"",
+    "server": "npm --prefix server start",
+    "server:dev": "npm --prefix server run dev",
+    "client": "npm --prefix client run dev",
+    "build": "npm --prefix client run build",
+    "start": "concurrently \"npm run server\" \"npm run client\"",
     "start:prod": "cross-env NODE_ENV=production node server/index.js",
-    "build": "vite build",
-    "lint": "eslint .",
-    "preview": "vite preview"
-  },
-  "dependencies": {
-    "@xenova/transformers": "^2.17.2",
-    "canvas-confetti": "^1.9.4",
-    "cross-env": "^10.1.0",
-    "hls.js": "^1.6.15",
-    "lucide-react": "^0.469.0",
-    "mpegts.js": "^1.8.0",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1",
-    "react-markdown": "^10.1.0",
-    "react-player": "^3.4.0",
-    "react-router-dom": "^7.18.4",
-    "recharts": "^2.15.0"
+    "typecheck": "npm --prefix client run typecheck",
+    "lint": "npm --prefix client run lint"
   },
   "devDependencies": {
-    "@eslint/js": "^9.17.0",
-    "@types/react": "^18.3.18",
-    "@types/react-dom": "^18.3.5",
-    "@vitejs/plugin-react": "^4.3.4",
-    "autoprefixer": "^10.4.20",
     "concurrently": "^9.2.1",
-    "eslint": "^9.17.0",
-    "eslint-plugin-react": "^7.37.2",
-    "eslint-plugin-react-hooks": "^5.0.0",
-    "eslint-plugin-react-refresh": "^0.4.16",
-    "globals": "^15.14.0",
-    "postcss": "^8.4.49",
-    "tailwindcss": "^3.4.17",
-    "terser": "^5.44.1",
-    "vite": "^6.0.5"
+    "cross-env": "^10.1.0"
   }
 }
+

@@ -39,12 +39,22 @@ router.get('/pick-folder', async (req, res) => {
 // POST /api/fs/scan
 // Scans a course folder and returns structured module/video data
 router.post('/scan', async (req, res) => {
-    const { path: folderPath, autoDetectThumbnails } = req.body
+    const folderPath = req.body?.path || req.body?.folderPath
     if (!folderPath) {
         return res.status(400).json({ error: 'Missing path' })
     }
     if (!fs.existsSync(folderPath)) {
         return res.status(404).json({ error: 'Folder not found' })
+    }
+
+    let autoDetectThumbnails = req.body?.autoDetectThumbnails
+    if (typeof autoDetectThumbnails !== 'boolean') {
+        try {
+            const row = getOne("SELECT value FROM settings WHERE key = 'autoDetectThumbnails'")
+            autoDetectThumbnails = row ? Boolean(JSON.parse(row.value)) : true
+        } catch {
+            autoDetectThumbnails = true
+        }
     }
 
     try {
@@ -81,6 +91,40 @@ router.post('/set-root', (req, res) => {
         )
         setAllowedRoots([rootPath])
         res.json({ success: true })
+    } catch (err) {
+        res.status(500).json({ error: err.message })
+    }
+})
+
+// POST /api/fs/open-folder
+// Opens an existing local folder (or course folder) in the OS file explorer
+router.post('/open-folder', (req, res) => {
+    const { path: targetPath, courseId } = req.body || {}
+    try {
+        let folderPath = targetPath
+        if (!folderPath && courseId) {
+            const course = getOne('SELECT folder_path FROM courses WHERE id = ?', [courseId])
+            folderPath = course?.folder_path
+        }
+        if (!folderPath || typeof folderPath !== 'string') {
+            return res.status(400).json({ error: 'Missing folder path' })
+        }
+        const resolved = path.resolve(folderPath)
+        if (!fs.existsSync(resolved)) {
+            return res.status(404).json({ error: 'Folder not found on disk' })
+        }
+        const stat = fs.statSync(resolved)
+        const dirToOpen = stat.isDirectory() ? resolved : path.dirname(resolved)
+
+        if (process.platform === 'win32') {
+            execFile('explorer.exe', [dirToOpen], () => {})
+        } else if (process.platform === 'darwin') {
+            execFile('open', [dirToOpen], () => {})
+        } else {
+            execFile('xdg-open', [dirToOpen], () => {})
+        }
+
+        res.json({ success: true, path: dirToOpen })
     } catch (err) {
         res.status(500).json({ error: err.message })
     }

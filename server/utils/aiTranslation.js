@@ -1,664 +1,650 @@
+/**
+ * TutIn Server — AI Subtitle Normalization & Translation Service
+ *
+ * Best-practice architecture for Subtitles + Future AI Dubbing:
+ * 1. Clause-Level Cue Normalization (`normalizeCuesIntoClauses`):
+ *    - Strips Whisper silence hallucinations and non-speech noise tags (`[Music]`, `♪`).
+ *    - When word-level timestamps (`cue.words`) are available from faster-whisper,
+ *      groups words into natural grammatical clauses (1.5s – 6.5s, max ~84 chars)
+ *      breaking on terminal punctuation, commas, or acoustic pauses (>= 350ms).
+ *    - When raw unpunctuated cues are imported (e.g. YouTube auto-captions or legacy SRTs),
+ *      restores punctuation using acoustic inter-cue pause gaps (>= 500ms) + discourse
+ *      transition/question markers and merges tiny fragments into 1.5s – 6.5s clauses.
+ * 2. 1-to-1 Context-Windowed Translation (`translateChunks`):
+ *    - Offline Engine: Local NLLB-200 worker (`Xenova/nllb-200-distilled-600M`) for 25+ languages.
+ *    - Cloud LLM Engine (OpenRouter): Sliding window of 12 indexed cues with `durationSec`
+ *      isochrony constraints so translations fit naturally inside each speaker time window
+ *      for both readable subtitles and natural XTTS voice dubbing.
+ */
+
+import { fork } from 'child_process'
 import path from 'path'
 import { fileURLToPath } from 'url'
-import { getOne } from '../database.js'
+import { getXenovaCacheDir } from './modelManager.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
-/**
- * aiTranslation.js
- * Routes translation to:
- *   - OpenRouter (GPT-4o-mini) for dialectal Arabic: ar-eg (Egyptian), ar-sa (Gulf/Saudi)
- *   - NLLB-200 (local, offline) for all other languages including standard Arabic (ar)
- */
-
 export const NLLB_LANG_MAP = {
-    'en': 'eng_Latn', 'ar': 'arb_Arab', 'es': 'spa_Latn', 'fr': 'fra_Latn',
-    'de': 'deu_Latn', 'zh': 'zho_Hans', 'ja': 'jpn_Jpan', 'ko': 'kor_Hang',
-    'ru': 'rus_Cyrl', 'pt': 'por_Latn', 'it': 'ita_Latn', 'hi': 'hin_Deva',
-    'tr': 'tur_Latn', 'nl': 'nld_Latn', 'pl': 'pol_Latn', 'vi': 'vie_Latn',
-    'th': 'tha_Thai', 'cs': 'ces_Latn', 'hu': 'hun_Latn', 'uk': 'ukr_Cyrl',
-    'id': 'ind_Latn', 'sv': 'swe_Latn', 'da': 'dan_Latn', 'no': 'nob_Latn',
-    'fi': 'fin_Latn', 'el': 'ell_Grek', 'he': 'heb_Hebr',
-    'ar-eg': 'arb_Arab', 'ar-sa': 'arb_Arab', 'zh-cn': 'zho_Hans', 'zh-tw': 'zho_Hant',
-    'pt-br': 'por_Latn'
+    'en': 'eng_Latn',
+    'ar': 'arb_Arab',
+    'ar-eg': 'arz_Arab',
+    'ar-sa': 'ars_Arab',
+    'es': 'spa_Latn',
+    'fr': 'fra_Latn',
+    'de': 'deu_Latn',
+    'zh': 'zho_Hans',
+    'ja': 'jpn_Jpan',
+    'ko': 'kor_Hang',
+    'ru': 'rus_Cyrl',
+    'pt': 'por_Latn',
+    'it': 'ita_Latn',
+    'hi': 'hin_Deva',
+    'tr': 'tur_Latn',
+    'nl': 'nld_Latn',
+    'pl': 'pol_Latn',
+    'vi': 'vie_Latn',
+    'th': 'tha_Thai',
+    'cs': 'ces_Latn',
+    'hu': 'hun_Latn',
+    'uk': 'ukr_Cyrl',
+    'id': 'ind_Latn',
+    'sv': 'swe_Latn',
+    'da': 'dan_Latn',
+    'no': 'nob_Latn',
+    'fi': 'fin_Latn',
+    'el': 'ell_Grek',
+    'he': 'heb_Hebr'
+}
+
+export const LANG_DISPLAY_MAP = {
+    'en': 'English',
+    'ar': 'Arabic',
+    'ar-eg': 'Arabic (Egyptian)',
+    'ar-sa': 'Arabic (Saudi / Gulf)',
+    'es': 'Spanish',
+    'fr': 'French',
+    'de': 'German',
+    'zh': 'Chinese (Simplified)',
+    'ja': 'Japanese',
+    'ko': 'Korean',
+    'ru': 'Russian',
+    'pt': 'Portuguese',
+    'it': 'Italian',
+    'hi': 'Hindi',
+    'tr': 'Turkish',
+    'nl': 'Dutch',
+    'pl': 'Polish',
+    'vi': 'Vietnamese',
+    'th': 'Thai',
+    'cs': 'Czech',
+    'hu': 'Hungarian',
+    'uk': 'Ukrainian',
+    'id': 'Indonesian',
+    'sv': 'Swedish',
+    'da': 'Danish',
+    'no': 'Norwegian',
+    'fi': 'Finnish',
+    'el': 'Greek',
+    'he': 'Hebrew'
 }
 
 export const XTTS_SUPPORTED_LANGS = new Set([
-    'en', 'es', 'fr', 'de', 'ar', 'ar-eg', 'ar-sa',
-    'it', 'pt', 'pt-br', 'ru', 'zh', 'zh-cn', 'zh-tw',
-    'ja', 'ko', 'hi', 'tr', 'nl', 'pl', 'cs', 'hu'
+    'en', 'es', 'fr', 'de', 'it', 'pt', 'pl', 'tr', 'ru', 'nl', 'cs', 'ar', 'ar-eg', 'ar-sa', 'zh', 'hu', 'ko', 'ja', 'hi'
 ])
 
-export function isDubbingLanguageSupported(lang) {
-    if (!lang || typeof lang !== 'string') return false
-    return XTTS_SUPPORTED_LANGS.has(lang.trim().toLowerCase())
+export function isDubbingLanguageSupported(langCode) {
+    if (!langCode) return false
+    const clean = langCode.toLowerCase().trim()
+    return XTTS_SUPPORTED_LANGS.has(clean) || XTTS_SUPPORTED_LANGS.has(clean.split('-')[0])
 }
 
-const DIALECT_PROMPTS = {
-    'ar-eg': `You are an expert translator specializing in spoken Egyptian Arabic (العامية المصرية).
-Translate the input into authentic spoken Egyptian Arabic dialect — NOT formal Modern Standard Arabic (MSA). Use colloquial vocabulary, contractions, and everyday phrasing that a native Egyptian speaker would use in casual conversation.
+// ── Hallucination & Noise Stripping ──────────────────────────────
 
-CRITICAL ORTHOGRAPHY & TTS RULES:
-1. Use natural, authentic colloquial Egyptian words (e.g. use 'دلوقتي', 'علشان' or 'عشان', 'كده', 'قلتله', 'إيه', 'إزاي', 'فين', 'ليه', 'مين', 'برضه', 'كتير', 'شوية', 'قاعد', 'طريق', 'فوق', 'وقع').
-2. DO NOT include diacritics/tashkeel (no fatḥah, ḍammah, kasrah, sukūn, shaddah). Clean unvowelized text is required for text-to-speech models.
-3. DO NOT invent non-standard pseudo-phonetic spellings with trailing or isolated hamzas (e.g. NEVER write 'طَرِيء' or 'فُوء' or 'وِئِع' or 'أَاعِد'). Write words using standard colloquial Arabic spelling.
+const HALLUCINATION_PATTERNS = [
+    /^thank you( very much)? for watching[.!]*$/i,
+    /^thanks for watching[.!]*$/i,
+    /^please (like and )?subscribe[.!]*$/i,
+    /^subtitles by /i,
+    /^captions by /i,
+    /^translated by /i,
+    /^amara\.org/i,
+    /^www\./i,
+    /^\[.*(music|applause|laughter|silence|noise|blank_audio).*\]$/i,
+    /^\(.*(music|applause|laughter|silence|noise).*\)$/i,
+    /^[♪♫♬\s.…\-_]+$/
+]
 
-CRITICAL ANTI-HALLUCINATION RULES:
-1. Translate ONLY what is explicitly present in the input text. NEVER add extra facts, explanations, or conclusions not found in the input.
-2. DO NOT complete unfinished thoughts or trail-off sentences. If the input is incomplete, translate only the incomplete fragment.
-3. DO NOT add conversational filler, transitions, or greetings (e.g. do NOT insert "يا جماعة", "زي ما انتو شايفين", "خلونا نشوف", "أهلاً بيكم") unless equivalent words are in the input.
-4. If the input consists solely of non-speech markers (e.g. music notes, laughter, applause, silence, or noise), return empty strings: {"caption": "", "tts": ""}.
-
-You MUST output a strict JSON object with EXACTLY two fields:
-{
-  "caption": "Natural, conversational Egyptian Arabic text in standard readable spelling without diacritics.",
-  "tts": "Natural, conversational Egyptian Arabic in standard spelling without diacritics, optimized for speech synthesis flow."
-}
-
-Do NOT wrap in markdown code blocks. Output ONLY the raw JSON object.`,
-
-    'ar-sa': `You are an expert translator specializing in spoken Gulf/Saudi Arabic (اللهجة الخليجية).
-Translate the input into natural, conversational Gulf/Saudi Arabic dialect — NOT formal Modern Standard Arabic (MSA). Use colloquial Gulf vocabulary and everyday phrasing that a native Saudi or Gulf speaker would use in casual conversation.
-
-CRITICAL ORTHOGRAPHY & TTS RULES:
-1. Use natural, authentic colloquial Gulf words (e.g. use 'الحين', 'عشان', 'شلونك', 'شنو', 'إيش', 'كذا', 'وايد', 'زين', 'بعدين', 'تبي', 'أبي').
-2. DO NOT include diacritics/tashkeel (no fatḥah, ḍammah, kasrah, sukūn, shaddah). Clean unvowelized text is required for text-to-speech models.
-3. DO NOT invent non-standard pseudo-phonetic spellings with trailing or isolated hamzas. Write words using standard colloquial Arabic spelling.
-
-CRITICAL ANTI-HALLUCINATION RULES:
-1. Translate ONLY what is explicitly present in the input text. NEVER add extra facts, explanations, or conclusions not found in the input.
-2. DO NOT complete unfinished thoughts or trail-off sentences. If the input is incomplete, translate only the incomplete fragment.
-3. DO NOT add conversational filler, transitions, or greetings (e.g. do NOT insert "يا شباب", "طال عمرك", "زي ما تشوفون", "هلا والله") unless equivalent words are in the input.
-4. If the input consists solely of non-speech markers (e.g. music notes, laughter, applause, silence, or noise), return empty strings: {"caption": "", "tts": ""}.
-
-You MUST output a strict JSON object with EXACTLY two fields:
-{
-  "caption": "Natural, conversational Gulf Arabic text in standard readable spelling without diacritics.",
-  "tts": "Natural, conversational Gulf Arabic in standard spelling without diacritics, optimized for speech synthesis flow."
-}
-
-Do NOT wrap in markdown code blocks. Output ONLY the raw JSON object.`
-}
-
-const WHISPER_HALLUCINATION_REGEX = /^\s*(?:thank\s+you\s+for\s+watching|thanks\s+for\s+watching|please\s+like\s+and\s+subscribe|please\s+subscribe|like\s+and\s+subscribe|don'?t\s+forget\s+to\s+subscribe|subscribe\s+to\s+my\s+channel|see\s+you\s+in\s+the\s+next\s+video|subtitles?\s+by\b|transcribed\s+by\b)[.!]?\s*$/i
-
-/**
- * Detects whether a subtitle cue is a non-speech sound descriptor, music, applause, or whitespace.
- */
-export function isNonSpeechText(text) {
-    if (!text || typeof text !== 'string') return true
-    const trimmed = text.trim()
-    if (!trimmed) return true
-    if (WHISPER_HALLUCINATION_REGEX.test(trimmed)) return true
-    const stripped = trimmed
-        .replace(/<[^>]+>/g, '') // HTML tags
-        .replace(/\[[^\]]*\]/g, '') // [Music], [Applause], [laughter]
-        .replace(/\([^)]*\)/g, '') // (Music), (Applause), (laughter)
-        .replace(/[♪♫#*]+/g, '') // Music notes and symbols
-        .replace(/[\s.\-_–—…,:;!?]+/g, '') // Ellipses, dashes, punctuation
-        .trim()
-    return stripped.length === 0
-}
-
-/**
- * Sanitizes subtitle text before sentence stitching and translation,
- * stripping bracketed sound markers and music notes while preserving spoken words.
- */
-export function sanitizeCueText(text) {
-    if (!text || typeof text !== 'string') return ''
-    let cleaned = text
-        .replace(/<[^>]+>/g, '') // HTML tags
-        .replace(/\[(?:music|applause|laughter|silence|cheering|cough|sigh|sound|audio|intro|outro|instrumental)[^\]]*\]/gi, '')
-        .replace(/\((?:music|applause|laughter|silence|cheering|cough|sigh|sound|audio|intro|outro|instrumental)[^)]*\)/gi, '')
-        .replace(/[♪♫]+/g, '')
+export function cleanSubtitleText(rawText, { stripSdhTags = false } = {}) {
+    if (!rawText || typeof rawText !== 'string') return ''
+    let text = rawText
+        .replace(/<[^>]+>/g, '') // Strip HTML/VTT styling tags
+        .replace(/\{[^}]+\}/g, '') // Strip ASS override tags
         .replace(/\s+/g, ' ')
         .trim()
-    return cleaned
+
+    if (stripSdhTags) {
+        text = text
+            .replace(/\[[^\]]*\]/g, '')
+            .replace(/\([^)]*(?:music|applause|laugh|sigh|cough|noise|audio)[^)]*\)/gi, '')
+            .replace(/^[>\-\s]+:\s*/, '')
+            .replace(/\s+/g, ' ')
+            .trim()
+    }
+
+    if (!text) return ''
+    for (const pat of HALLUCINATION_PATTERNS) {
+        if (pat.test(text)) return ''
+    }
+    return text
 }
 
-export const EGYPTIAN_PHONETIC_GLOSSARY = [
-    { pattern: /(?<=^|[^\p{L}\p{N}_])الآن(?=[^\p{L}\p{N}_]|$)/gu, replace: 'دلوقتي' },
-    { pattern: /(?<=^|[^\p{L}\p{N}_])هكذا(?=[^\p{L}\p{N}_]|$)/gu, replace: 'كده' },
-    { pattern: /(?<=^|[^\p{L}\p{N}_])لكي(?=[^\p{L}\p{N}_]|$)/gu, replace: 'علشان' },
-    { pattern: /(?<=^|[^\p{L}\p{N}_])كذلك(?=[^\p{L}\p{N}_]|$)/gu, replace: 'برضه' },
-    { pattern: /(?<=^|[^\p{L}\p{N}_])أيضا(?=[^\p{L}\p{N}_]|$)/gu, replace: 'برضه' },
-    { pattern: /(?<=^|[^\p{L}\p{N}_])ماذا(?=[^\p{L}\p{N}_]|$)/gu, replace: 'إيه' },
-    { pattern: /(?<=^|[^\p{L}\p{N}_])وماذا(?=[^\p{L}\p{N}_]|$)/gu, replace: 'وإيه' },
-    { pattern: /(?<=^|[^\p{L}\p{N}_])كيف(?=[^\p{L}\p{N}_]|$)/gu, replace: 'إزاي' },
-    { pattern: /(?<=^|[^\p{L}\p{N}_])أين(?=[^\p{L}\p{N}_]|$)/gu, replace: 'فين' },
-    { pattern: /(?<=^|[^\p{L}\p{N}_])لماذا(?=[^\p{L}\p{N}_]|$)/gu, replace: 'ليه' },
-    { pattern: /(?<=^|[^\p{L}\p{N}_])كثيرا(?=[^\p{L}\p{N}_]|$)/gu, replace: 'كتير' },
-    { pattern: /(?<=^|[^\p{L}\p{N}_])قليلا(?=[^\p{L}\p{N}_]|$)/gu, replace: 'شوية' }
-]
+// ── Acoustic Pause + Clause Normalization ────────────────────────
 
-export const GULF_PHONETIC_GLOSSARY = [
-    { pattern: /(?<=^|[^\p{L}\p{N}_])الآن(?=[^\p{L}\p{N}_]|$)/gu, replace: 'الحين' },
-    { pattern: /(?<=^|[^\p{L}\p{N}_])هكذا(?=[^\p{L}\p{N}_]|$)/gu, replace: 'كذا' },
-    { pattern: /(?<=^|[^\p{L}\p{N}_])لكي(?=[^\p{L}\p{N}_]|$)/gu, replace: 'عشان' },
-    { pattern: /(?<=^|[^\p{L}\p{N}_])ماذا(?=[^\p{L}\p{N}_]|$)/gu, replace: 'إيش' },
-    { pattern: /(?<=^|[^\p{L}\p{N}_])وماذا(?=[^\p{L}\p{N}_]|$)/gu, replace: 'وإيش' },
-    { pattern: /(?<=^|[^\p{L}\p{N}_])كيف حالك(?=[^\p{L}\p{N}_]|$)/gu, replace: 'شلونك' },
-    { pattern: /(?<=^|[^\p{L}\p{N}_])كثيرا(?=[^\p{L}\p{N}_]|$)/gu, replace: 'وايد' },
-    { pattern: /(?<=^|[^\p{L}\p{N}_])جيد(?=[^\p{L}\p{N}_]|$)/gu, replace: 'زين' },
-    { pattern: /(?<=^|[^\p{L}\p{N}_])أريد(?=[^\p{L}\p{N}_]|$)/gu, replace: 'أبي' },
-    { pattern: /(?<=^|[^\p{L}\p{N}_])نريد(?=[^\p{L}\p{N}_]|$)/gu, replace: 'نبي' }
-]
+const EN_SENTENCE_STARTERS = new Set([
+    'so', 'now', 'next', 'first', 'second', 'third', 'finally', 'however', 'therefore',
+    'moreover', 'furthermore', 'meanwhile', 'instead', 'otherwise', 'actually', 'basically',
+    'essentially', 'remember', 'notice', 'look', 'let', "let's", 'here', 'today', 'welcome'
+])
 
-export function applyDialectPhoneticNudges(text, dialect) {
-    if (!text || typeof text !== 'string') return text || ''
-    let nudged = text
-    // Strip any Arabic diacritics / tashkeel
-    nudged = nudged.replace(/[\u0617-\u061A\u064B-\u065F\u0670]/g, '')
-    if (dialect === 'ar-eg') {
-        for (const item of EGYPTIAN_PHONETIC_GLOSSARY) {
-            nudged = nudged.replace(item.pattern, item.replace)
-        }
-    } else if (dialect === 'ar-sa') {
-        for (const item of GULF_PHONETIC_GLOSSARY) {
-            nudged = nudged.replace(item.pattern, item.replace)
-        }
-    }
-    return nudged.trim()
+const EN_QUESTION_STARTERS = new Set([
+    'what', 'why', 'how', 'when', 'where', 'who', 'which', 'can', 'could', 'would', 'should', 'do', 'does', 'did', 'is', 'are'
+])
+
+function hasTerminalPunctuation(text) {
+    return /[.?!؟।。！？][\s"')\]]*$/.test((text || '').trim())
 }
 
-function getOpenRouterKey() {
-    try {
-        const row = getOne("SELECT value FROM settings WHERE key = 'openRouterApiKey'")
-        if (!row?.value) return null
-        const val = JSON.parse(row.value)
-        return typeof val === 'string' && val.trim() ? val.trim() : null
-    } catch { return null }
+function hasClausePunctuation(text) {
+    return /[,;:،؛—–\-][\s"')\]]*$/.test((text || '').trim())
 }
 
-const ARABIC_DIACRITICS_REGEX = /[\u0617-\u061A\u064B-\u065F\u0670]/g
-
-function normalizeDualDialectResult(rawCaption, rawTts, dialect) {
-    const cleanCaption = String(rawCaption || '').replace(ARABIC_DIACRITICS_REGEX, '').trim()
-    const baseTts = String(rawTts || cleanCaption).trim()
-    const nudgedTts = applyDialectPhoneticNudges(baseTts, dialect)
-    return {
-        caption: cleanCaption,
-        tts: nudgedTts || cleanCaption
-    }
-}
-
-async function translateOneWithOpenRouter(text, dialect, apiKey) {
-    if (isNonSpeechText(text)) {
-        return { caption: '', tts: '' }
-    }
-
-    const maxAttempts = 3
-    let lastError = null
-    let content = ''
-
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-        try {
-            const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-                method: 'POST',
-                headers: {
-                    'Authorization': `Bearer ${apiKey}`,
-                    'Content-Type': 'application/json',
-                    'HTTP-Referer': 'https://tutin.app',
-                    'X-Title': 'TutIn'
-                },
-                body: JSON.stringify({
-                    model: 'openai/gpt-4o-mini',
-                    messages: [
-                        { role: 'system', content: DIALECT_PROMPTS[dialect] },
-                        { role: 'user', content: `Translate the following text into the requested dual JSON format:\n\n${text}` }
-                    ],
-                    temperature: 0.25,
-                    response_format: { type: 'json_object' },
-                    max_tokens: 650
-                })
-            })
-
-            if (!response.ok) {
-                const errText = await response.text()
-                const isRetryable = response.status === 429 || response.status >= 500
-                lastError = new Error(`OpenRouter API error ${response.status}: ${errText}`)
-                if (isRetryable && attempt < maxAttempts) {
-                    await new Promise(r => setTimeout(r, 600 * Math.pow(2, attempt - 1)))
-                    continue
-                }
-                throw lastError
-            }
-
-            const data = await response.json()
-            content = data.choices?.[0]?.message?.content?.trim() || ''
-            break
-        } catch (err) {
-            lastError = err
-            if (attempt < maxAttempts) {
-                await new Promise(r => setTimeout(r, 600 * Math.pow(2, attempt - 1)))
-                continue
-            }
-            throw lastError
-        }
-    }
-
-    if (!content) {
-        return { caption: '', tts: '' }
-    }
-
-    // Parse JSON dual output
-    try {
-        const parsed = JSON.parse(content)
-        if (parsed && typeof parsed === 'object' && (parsed.caption !== undefined || parsed.tts !== undefined)) {
-            return normalizeDualDialectResult(parsed.caption ?? parsed.tts, parsed.tts ?? parsed.caption, dialect)
-        }
-    } catch {
-        // Fallback 1: search for JSON object in case of markdown wrapping
-        const match = content.match(/\{[\s\S]*\}/)
-        if (match) {
-            try {
-                const parsed = JSON.parse(match[0])
-                if (parsed && typeof parsed === 'object' && (parsed.caption !== undefined || parsed.tts !== undefined)) {
-                    return normalizeDualDialectResult(parsed.caption ?? parsed.tts, parsed.tts ?? parsed.caption, dialect)
-                }
-            } catch {}
-        }
-        // Fallback 2: extract "caption" / "tts" fields from truncated/malformed JSON via regex
-        const capField = content.match(/"caption"\s*:\s*"((?:[^"\\]|\\.)*)"/)
-        const ttsField = content.match(/"tts"\s*:\s*"((?:[^"\\]|\\.)*)"/)
-        if (capField || ttsField) {
-            const capRaw = (capField?.[1] || ttsField?.[1] || '').replace(/\\"/g, '"').replace(/\\n/g, ' ')
-            const ttsRaw = (ttsField?.[1] || capRaw).replace(/\\"/g, '"').replace(/\\n/g, ' ')
-            return normalizeDualDialectResult(capRaw, ttsRaw, dialect)
-        }
-    }
-
-    // Fallback 3: strip any accidental JSON braces/keys before normalizing
-    const strippedPlain = content
-        .replace(/^\s*\{\s*"(?:caption|tts)"\s*:\s*"?/i, '')
-        .replace(/"?\s*\}\s*$/, '')
-        .trim()
-    return normalizeDualDialectResult(strippedPlain, strippedPlain, dialect)
+export function needsPunctuationRestoration(chunks) {
+    if (!Array.isArray(chunks) || chunks.length === 0) return false
+    const fullText = chunks.map(c => (c.text || '').trim()).join(' ')
+    const words = fullText.split(/\s+/).filter(Boolean)
+    if (words.length < 12) return false
+    const punctMatches = fullText.match(/[.?!؟।。！？]/g)
+    const punctCount = punctMatches ? punctMatches.length : 0
+    return (punctCount / words.length) < (1 / 28)
 }
 
 /**
- * Stitches fine-grained subtitle cues into full grammatical sentences.
- * Terminal punctuation, pause gaps (> 550ms), and max duration bounds (> 7.5s)
- * determine sentence boundaries.
+ * Normalizes raw cues (either with word-level timestamps from faster-whisper,
+ * or raw chunk cues from browser Whisper / YouTube / SRT) into clean,
+ * punctuated grammatical clauses (1.5s - 6.5s, max ~84 chars) ready for
+ * both broadcast subtitling and XTTS voice dubbing.
  */
-export function stitchCuesIntoSentences(chunks) {
-    if (!chunks || chunks.length === 0) return []
-    const termRegex = /[.?!؟。！…]+['"]?\s*$/
-    const abbrevRegex = /\b(Mr|Mrs|Ms|Dr|Prof|Sr|Jr|vs|etc|e\.g|i\.e)\.\s*$/i
-    const sentences = []
-    let current = null
+export function normalizeCuesIntoClauses(rawChunks, lang = 'en') {
+    if (!Array.isArray(rawChunks) || rawChunks.length === 0) return []
+    const isArabic = lang.toLowerCase().startsWith('ar')
+    const questionMark = isArabic ? '؟' : '?'
 
-    for (let i = 0; i < chunks.length; i++) {
-        const c = chunks[i]
-        const rawText = (c.text || '').trim()
-        const start = Array.isArray(c.timestamp) ? Number(c.timestamp[0]) : Number(c.start ?? 0)
-        const end = Array.isArray(c.timestamp) ? Number(c.timestamp[1]) : Number(c.end ?? (start + 2))
-
-        const isNonSpeech = isNonSpeechText(rawText)
-        const sanitized = sanitizeCueText(rawText)
-
-        // Non-speech cues, empty cues, or brackets must NOT merge with speech
-        // They are preserved 1-to-1 to guarantee strict array length and zero timing drift
-        if (!rawText || isNonSpeech || !sanitized) {
-            if (current) {
-                sentences.push(current)
-                current = null
+    // Path A: Word-level timestamps present (from faster-whisper)
+    const allWords = []
+    for (const chunk of rawChunks) {
+        if (Array.isArray(chunk.words) && chunk.words.length > 0) {
+            for (const w of chunk.words) {
+                const text = (w.word || w.text || '').trim()
+                if (!text) continue
+                allWords.push({
+                    word: text,
+                    start: Number(w.start ?? chunk.start ?? 0),
+                    end: Number(w.end ?? chunk.end ?? 0)
+                })
             }
-            // Add as a standalone non-speech sentence that produces empty translation
-            sentences.push({
-                start,
-                end,
-                timestamp: [start, end],
-                text: '',
-                isNonSpeech: true,
-                cues: [{ index: i, start, end, timestamp: [start, end], text: rawText || '', isNonSpeech: true }]
-            })
-            continue
         }
+    }
 
-        const cueObj = {
-            index: i,
-            start,
-            end,
-            timestamp: [start, end],
-            text: sanitized
-        }
+    if (allWords.length > 0) {
+        const clauses = []
+        let currentWords = []
 
-        if (!current) {
-            current = {
-                start,
-                end,
-                timestamp: [start, end],
-                text: sanitized,
-                cues: [cueObj]
-            }
-        } else {
-            const gap = start - current.end
-            const isTerm = termRegex.test(current.text) && !abbrevRegex.test(current.text)
-            // Tightly bounded to max 4.5s or 90 chars to prevent word-order inversion smearing across cues
-            const isLong = (end - current.start) >= 4.5 || current.text.length >= 90
-            const isGap = gap >= 0.35 // 350ms is an audible acoustic pause
-            // Discourse transition word at cue boundary
-            const transitionRegex = /^(Next|However|Furthermore|Meanwhile|Finally|First|Second|Third|Moreover|Therefore|In addition|Now|Then|So)\b/i
-            const isTransition = transitionRegex.test(sanitized) && current.text.split(/\s+/).length >= 5
-
-            if (isTerm || isGap || isLong || isTransition) {
-                sentences.push(current)
-                current = {
+        const flushWords = () => {
+            if (currentWords.length === 0) return
+            const joined = cleanSubtitleText(currentWords.map(w => w.word).join(' '))
+            if (joined) {
+                const start = Math.max(0, Number(currentWords[0].start.toFixed(2)))
+                const end = Math.max(start + 0.6, Number(currentWords[currentWords.length - 1].end.toFixed(2)))
+                clauses.push({
                     start,
                     end,
                     timestamp: [start, end],
-                    text: sanitized,
-                    cues: [cueObj]
-                }
-            } else {
-                current.end = end
-                current.timestamp = [current.start, end]
-                current.text = current.text + ' ' + sanitized
-                current.cues.push(cueObj)
+                    text: joined
+                })
+            }
+            currentWords = []
+        }
+
+        for (let i = 0; i < allWords.length; i++) {
+            const w = allWords[i]
+            const nextW = allWords[i + 1]
+            currentWords.push(w)
+
+            const currentText = currentWords.map(x => x.word).join(' ')
+            const duration = w.end - currentWords[0].start
+            const pauseAfter = nextW ? Math.max(0, nextW.start - w.end) : 999
+
+            const endsSentence = hasTerminalPunctuation(w.word)
+            const endsClause = hasClausePunctuation(w.word)
+
+            const shouldBreak =
+                !nextW ||
+                (endsSentence && duration >= 1.2) ||
+                (pauseAfter >= 0.45 && duration >= 1.4) ||
+                (endsClause && (duration >= 3.2 || currentText.length >= 52)) ||
+                duration >= 6.2 ||
+                currentText.length >= 82
+
+            if (shouldBreak) {
+                flushWords()
             }
         }
+        flushWords()
+        if (clauses.length > 0) return clauses
     }
-    if (current) sentences.push(current)
-    return sentences
+
+    // Path B: Chunk-level cues (Browser Whisper, YouTube auto-captions, or uploaded SRT/VTT)
+    const cleaned = []
+    for (const c of rawChunks) {
+        const text = cleanSubtitleText(c.text)
+        if (!text) continue
+        const start = typeof c.start === 'number' ? c.start : (Array.isArray(c.timestamp) ? Number(c.timestamp[0]) : 0)
+        const end = typeof c.end === 'number' ? c.end : (Array.isArray(c.timestamp) ? Number(c.timestamp[1]) : start + 2)
+        const safeStart = Math.max(0, Number(start.toFixed(2)))
+        const safeEnd = Math.max(safeStart + 0.5, Number(end.toFixed(2)))
+        const dur = safeEnd - safeStart
+
+        // Split run-on single cues (> 84 chars or > 6.5s) at clause/sentence boundaries proportionally
+        if (text.length > 84 || dur > 6.5) {
+            const parts = text
+                .split(/(?<=[.?!؟।。！？,;:،؛])\s+/)
+                .map(p => p.trim())
+                .filter(Boolean)
+            if (parts.length > 1) {
+                const totalChars = parts.reduce((acc, p) => acc + p.length, 0) || 1
+                let cursor = safeStart
+                for (let pIdx = 0; pIdx < parts.length; pIdx++) {
+                    const partText = parts[pIdx]
+                    const ratio = partText.length / totalChars
+                    const partEnd = pIdx === parts.length - 1
+                        ? safeEnd
+                        : Number((cursor + dur * ratio).toFixed(2))
+                    cleaned.push({
+                        start: Number(cursor.toFixed(2)),
+                        end: Math.max(Number((cursor + 0.4).toFixed(2)), partEnd),
+                        text: partText
+                    })
+                    cursor = partEnd
+                }
+                continue
+            }
+        }
+
+        cleaned.push({
+            start: safeStart,
+            end: safeEnd,
+            text
+        })
+    }
+
+    if (cleaned.length === 0) return []
+
+    const unpunctuated = needsPunctuationRestoration(cleaned)
+
+    // Merge micro-fragments (e.g. YouTube 1s auto-captions) into natural 1.5s-6.0s clauses
+    const merged = []
+    let current = null
+
+    const finalizeCue = (cue, isLast = false, nextFirstWord = '') => {
+        if (!cue) return
+        let text = cue.text.trim()
+        if (unpunctuated && text) {
+            if (!isArabic && /^[a-z]/.test(text)) {
+                text = text.charAt(0).toUpperCase() + text.slice(1)
+            }
+            text = text.replace(/\bi\b/g, 'I')
+            if (!hasTerminalPunctuation(text) && !hasClausePunctuation(text)) {
+                const firstWord = text.split(/\s+/)[0]?.toLowerCase().replace(/[^a-z]/g, '') || ''
+                if (EN_QUESTION_STARTERS.has(firstWord)) {
+                    text += questionMark
+                } else if (isLast || EN_SENTENCE_STARTERS.has(nextFirstWord) || (cue.pauseAfter ?? 0) >= 0.55) {
+                    text += '.'
+                }
+            }
+        }
+        merged.push({
+            start: cue.start,
+            end: cue.end,
+            timestamp: [cue.start, cue.end],
+            text
+        })
+    }
+
+    for (let i = 0; i < cleaned.length; i++) {
+        const item = cleaned[i]
+        const next = cleaned[i + 1]
+        const pauseAfter = next ? Math.max(0, next.start - item.end) : 999
+        const nextFirstWord = next
+            ? (next.text.split(/\s+/)[0]?.toLowerCase().replace(/[^a-z]/g, '') || '')
+            : ''
+
+        if (!current) {
+            current = { start: item.start, end: item.end, text: item.text, pauseAfter }
+        } else {
+            const combinedText = `${current.text} ${item.text}`
+            const combinedDur = item.end - current.start
+            const prevEndsSentence = hasTerminalPunctuation(current.text)
+            const prevPause = current.pauseAfter ?? 0
+
+            const canMerge =
+                !prevEndsSentence &&
+                prevPause < 0.45 &&
+                combinedDur <= 5.8 &&
+                combinedText.length <= 84 &&
+                !(unpunctuated && EN_SENTENCE_STARTERS.has(item.text.split(/\s+/)[0]?.toLowerCase() || '') && (current.end - current.start) >= 1.8)
+
+            if (canMerge) {
+                current.end = item.end
+                current.text = combinedText
+                current.pauseAfter = pauseAfter
+            } else {
+                const firstW = item.text.split(/\s+/)[0]?.toLowerCase().replace(/[^a-z]/g, '') || ''
+                finalizeCue(current, false, firstW)
+                current = { start: item.start, end: item.end, text: item.text, pauseAfter }
+            }
+        }
+
+        if (!next) {
+            finalizeCue(current, true, nextFirstWord)
+            current = null
+        }
+    }
+
+    return merged
 }
 
 /**
- * Re-slices a translated sentence across the original cue timestamp windows
- * based on relative character/word weights, preserving exact timing synchronization.
- * Pure non-speech and silence cues receive empty strings instead of hallucinated words.
+ * Sanitizes cues specifically before feeding into Translation or XTTS Dubbing
+ * (strips SDH bracket tags like `[Music]` while preserving natural clause boundaries).
  */
-export function sliceTranslatedSentenceToCues(translatedText, originalCues) {
-    if (!originalCues || originalCues.length === 0) return []
-    const cleanText = (translatedText || '').trim()
-    if (originalCues.length === 1) {
-        if (isNonSpeechText(originalCues[0].text)) {
-            return [{
-                timestamp: originalCues[0].timestamp,
-                start: originalCues[0].start,
-                end: originalCues[0].end,
-                text: ''
-            }]
-        }
-        return [{
-            timestamp: originalCues[0].timestamp,
-            start: originalCues[0].start,
-            end: originalCues[0].end,
-            text: cleanText
-        }]
-    }
-
-    const words = cleanText.split(/\s+/).filter(Boolean)
-    if (words.length === 0) {
-        return originalCues.map(c => ({
-            timestamp: c.timestamp,
-            start: c.start,
-            end: c.end,
-            text: ''
+export function sanitizeCuesForSpeechAndTranslation(chunks, lang = 'en') {
+    if (!Array.isArray(chunks) || chunks.length === 0) return []
+    const stripped = chunks
+        .map(c => ({
+            ...c,
+            text: cleanSubtitleText(c.text, { stripSdhTags: true })
         }))
-    }
-
-    // Compute weights based ONLY on cues that actually had spoken dialogue
-    const cueSpeechWeights = originalCues.map(c => {
-        if (c.isNonSpeech || isNonSpeechText(c.text)) return 0
-        const speechOnly = sanitizeCueText(c.text).replace(/[\s\p{P}\p{S}]+/gu, '')
-        return Math.max(1, speechOnly.length)
-    })
-    const totalWeight = cueSpeechWeights.reduce((sum, w) => sum + w, 0)
-
-    // If no cues had real speech, return empty text for all
-    if (totalWeight === 0) {
-        return originalCues.map(c => ({
-            timestamp: c.timestamp,
-            start: c.start,
-            end: c.end,
-            text: ''
-        }))
-    }
-
-    // Identify which cues actually carry speech
-    const speechIndices = []
-    for (let i = 0; i < originalCues.length; i++) {
-        if (cueSpeechWeights[i] > 0) speechIndices.push(i)
-    }
-
-    const result = new Array(originalCues.length)
-    let wordCursor = 0
-
-    for (let si = 0; si < speechIndices.length; si++) {
-        const idx = speechIndices[si]
-        const cue = originalCues[idx]
-        const isLastSpeechCue = (si === speechIndices.length - 1)
-
-        if (isLastSpeechCue) {
-            const remainingWords = words.slice(wordCursor).join(' ')
-            result[idx] = {
-                timestamp: cue.timestamp,
-                start: cue.start,
-                end: cue.end,
-                text: remainingWords
-            }
-        } else {
-            const cueWeight = cueSpeechWeights[idx]
-            const targetWordCount = Math.max(1, Math.round((cueWeight / totalWeight) * words.length))
-            let sliceEnd = wordCursor + targetWordCount
-            const remainingSpeechCues = speechIndices.length - 1 - si
-            if (words.length - sliceEnd < remainingSpeechCues && words.length >= speechIndices.length) {
-                sliceEnd = words.length - remainingSpeechCues
-            }
-            sliceEnd = Math.max(wordCursor, Math.min(words.length, sliceEnd))
-            const cueWords = words.slice(wordCursor, sliceEnd).join(' ')
-            wordCursor = sliceEnd
-            result[idx] = {
-                timestamp: cue.timestamp,
-                start: cue.start,
-                end: cue.end,
-                text: cueWords
-            }
-        }
-    }
-
-    // Any cues with 0 speech weight (silence, music, brackets) remain strictly empty!
-    for (let i = 0; i < originalCues.length; i++) {
-        if (!result[i]) {
-            result[i] = {
-                timestamp: originalCues[i].timestamp,
-                start: originalCues[i].start,
-                end: originalCues[i].end,
-                text: ''
-            }
-        }
-    }
-
-    return result
+        .filter(c => c.text.length > 0)
+    return normalizeCuesIntoClauses(stripped, lang)
 }
 
-async function translateChunksOpenRouter(chunks, targetLanguage, onProgress, req) {
-    const apiKey = getOpenRouterKey()
-    if (!apiKey) throw new Error('OpenRouter API key is required for dialect Arabic translation. Please add your key in Settings.')
+// ── OpenRouter Context-Windowed Isochrony Translator ─────────────
 
-    const dialectLabel = targetLanguage === 'ar-eg' ? 'Egyptian Arabic' : 'Gulf Arabic'
-    const stitchedSentences = stitchCuesIntoSentences(chunks)
-    const total = stitchedSentences.length
-    const captionSentences = []
-    const ttsSentences = []
-    const startTime = Date.now()
+async function translateBatchWithOpenRouter({
+    batch,
+    sourceLangCode,
+    targetLangCode,
+    apiKey,
+    model = 'openai/gpt-4o-mini',
+    courseTitle = '',
+    signal = null
+}) {
+    const srcName = LANG_DISPLAY_MAP[sourceLangCode] || sourceLangCode || 'English'
+    const tgtName = LANG_DISPLAY_MAP[targetLangCode] || targetLangCode
 
-    console.log(`[OpenRouter] Translating ${total} stitched sentences (${chunks.length} cues) to ${dialectLabel} via GPT-4o-mini (Dual-Transcript, 4x Concurrency)`)
-    onProgress?.({ step: 'loading', message: `Connecting to OpenRouter for ${dialectLabel}...`, percent: 0 })
+    let dialectInstruction = ''
+    if (targetLangCode === 'ar-eg') {
+        dialectInstruction = `Translate into natural, idiomatic **Egyptian Arabic (العامية المصرية)** as spoken by an experienced Egyptian instructor explaining technical/creative concepts. Keep technical terms natural, use standard unvowelized Egyptian Arabic spelling, and avoid stiff Modern Standard Arabic (فصحى).`
+    } else if (targetLangCode === 'ar-sa') {
+        dialectInstruction = `Translate into natural, idiomatic **Saudi / Gulf Arabic (اللهجة السعودية / الخليجية)** as spoken by an experienced Saudi instructor explaining technical/creative concepts. Keep technical terms natural, use standard unvowelized Gulf Arabic spelling, and avoid stiff Modern Standard Arabic (فصحى).`
+    } else {
+        dialectInstruction = `Translate into natural, fluent **${tgtName}** suitable for both on-screen video subtitles and spoken voice dubbing.`
+    }
 
-    const CONCURRENCY = 4
-    let completedCount = 0
-    const results = new Array(total)
+    const payloadItems = batch.map((c, idx) => ({
+        i: idx,
+        durationSec: Math.max(0.8, Number(((c.end ?? 2) - (c.start ?? 0)).toFixed(1))),
+        text: c.text
+    }))
 
-    async function translateWorker(index) {
-        if (req?.socket?.destroyed) throw new Error('Translation cancelled by client')
-        const sent = stitchedSentences[index]
-        if (sent.isNonSpeech || isNonSpeechText(sent.text)) {
-            results[index] = { caption: '', tts: '' }
-        } else {
-            const pair = await translateOneWithOpenRouter(sent.text, targetLanguage, apiKey)
-            results[index] = pair
+    const systemPrompt = [
+        `You are an expert technical video localization and dubbing translator (${srcName} -> ${tgtName}).`,
+        courseTitle ? `Course context: "${courseTitle}".` : '',
+        dialectInstruction,
+        `CRITICAL RULES:`,
+        `1. Return ONLY a valid JSON object with key "items" containing an array of objects: {"items": [{"i": 0, "text": "..."}, ...]}.`,
+        `2. Preserve exact 1-to-1 index mapping ("i"). Never merge, drop, or reorder indices.`,
+        `3. ISOCHRONY / PACING FOR DUBBING: Each item includes "durationSec" (how long the speaker talks in the video). Keep each translation concise enough to be spoken comfortably within "durationSec" seconds and read easily as a 1-2 line subtitle.`
+    ].filter(Boolean).join('\n')
+
+    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+            'Authorization': `Bearer ${apiKey}`,
+            'Content-Type': 'application/json',
+            'HTTP-Referer': 'http://localhost:5173',
+            'X-Title': 'TutIn Study Companion'
+        },
+        body: JSON.stringify({
+            model: model || 'openai/gpt-4o-mini',
+            temperature: 0.2,
+            response_format: { type: 'json_object' },
+            messages: [
+                { role: 'system', content: systemPrompt },
+                { role: 'user', content: JSON.stringify({ items: payloadItems }) }
+            ]
+        }),
+        ...(signal ? { signal } : {})
+    })
+
+    if (!response.ok) {
+        const errText = await response.text().catch(() => '')
+        throw new Error(`OpenRouter HTTP ${response.status}: ${errText.slice(0, 160)}`)
+    }
+
+    const data = await response.json()
+    const rawContent = data?.choices?.[0]?.message?.content || '{}'
+    const parsed = JSON.parse(rawContent)
+    const list = Array.isArray(parsed) ? parsed : (Array.isArray(parsed.items) ? parsed.items : (Array.isArray(parsed.translations) ? parsed.translations : []))
+
+    const byIndex = new Map()
+    for (const item of list) {
+        if (typeof item?.i === 'number' && typeof item?.text === 'string' && item.text.trim()) {
+            byIndex.set(item.i, item.text.trim())
         }
-        completedCount++
-        const pct = Math.round((completedCount / total) * 100)
+    }
+
+    return batch.map((orig, idx) => ({
+        start: orig.start,
+        end: orig.end,
+        timestamp: orig.timestamp || [orig.start, orig.end],
+        text: byIndex.get(idx) || orig.text
+    }))
+}
+
+// ── Main Translation Entrypoint ──────────────────────────────────
+
+export async function translateChunks(
+    chunks,
+    targetLangCode,
+    onProgress = null,
+    signal = null,
+    openRouterApiKey = null,
+    openRouterModel = null,
+    sourceLangCode = 'en',
+    courseTitle = ''
+) {
+    const tgt = (targetLangCode || '').toLowerCase().trim()
+    const src = (sourceLangCode || 'en').toLowerCase().split(':')[0].trim()
+
+    if (!NLLB_LANG_MAP[tgt]) {
+        throw new Error(`Unsupported target language code: ${targetLangCode}. Supported: ${Object.keys(NLLB_LANG_MAP).join(', ')}`)
+    }
+
+    // Normalize source cues into clean clauses before translating
+    const normalizedInput = normalizeCuesIntoClauses(chunks, src)
+    if (normalizedInput.length === 0) return []
+
+    const isDialect = tgt === 'ar-eg' || tgt === 'ar-sa'
+    const hasCloudKey = Boolean(openRouterApiKey && openRouterApiKey.trim().length > 10)
+
+    if (isDialect && !hasCloudKey) {
+        throw new Error(
+            `${LANG_DISPLAY_MAP[tgt]} requires an OpenRouter API key in Settings → AI for natural dialect translation, or choose standard Arabic (ar) for 100% offline translation.`
+        )
+    }
+
+    // Path 1: Cloud LLM Translation (Used for Egyptian/Saudi dialects, or when OpenRouter key is configured & preferred)
+    if (hasCloudKey && isDialect) {
         onProgress?.({
-            step: 'translating',
-            message: `Translating sentence ${completedCount} of ${total} (${dialectLabel})...`,
-            batch: completedCount,
-            of: total,
-            percent: pct
+            step: 'loading',
+            percent: 8,
+            message: `Connecting to OpenRouter (${openRouterModel || 'openai/gpt-4o-mini'}) for ${LANG_DISPLAY_MAP[tgt]}…`
         })
-    }
 
-    let nextIndex = 0
-    async function runWorkerLoop() {
-        while (nextIndex < total) {
-            if (req?.socket?.destroyed) throw new Error('Translation cancelled by client')
-            const idx = nextIndex++
-            await translateWorker(idx)
-        }
-    }
+        const WINDOW_SIZE = 14
+        const total = normalizedInput.length
+        const translated = []
 
-    const workerPool = Array.from({ length: Math.min(CONCURRENCY, total) }, () => runWorkerLoop())
-    await Promise.all(workerPool)
+        for (let i = 0; i < total; i += WINDOW_SIZE) {
+            if (signal?.aborted) throw new Error('Translation cancelled by user')
+            const batch = normalizedInput.slice(i, i + WINDOW_SIZE)
+            const batchResult = await translateBatchWithOpenRouter({
+                batch,
+                sourceLangCode: src,
+                targetLangCode: tgt,
+                apiKey: openRouterApiKey.trim(),
+                model: openRouterModel || 'openai/gpt-4o-mini',
+                courseTitle,
+                signal
+            })
+            translated.push(...batchResult)
 
-    for (let i = 0; i < total; i++) {
-        if (results[i]) {
-            captionSentences.push(results[i].caption || '')
-            ttsSentences.push(results[i].tts || '')
-        } else {
-            captionSentences.push('')
-            ttsSentences.push('')
-        }
-    }
-
-    // Re-slice caption sentences back into original cue windows for player subtitles
-    const translatedChunks = []
-    for (let i = 0; i < total; i++) {
-        const sliced = sliceTranslatedSentenceToCues(captionSentences[i], stitchedSentences[i].cues)
-        translatedChunks.push(...sliced)
-    }
-
-    // Attach companion phonetic TTS segments (sentence-level timing + phonetically nudged text)
-    // Filter out non-speech/silent segments so dubbing never synthesizes speech over silence
-    const ttsSegments = stitchedSentences.map((s, idx) => ({
-        start: s.start,
-        end: s.end,
-        timestamp: [s.start, s.end],
-        caption: captionSentences[idx] || '',
-        text: ttsSentences[idx] || ''
-    })).filter(seg => seg.text && seg.text.trim())
-
-    translatedChunks.ttsSegments = ttsSegments
-
-    console.log(`[OpenRouter] ${dialectLabel} dual translation done in ${((Date.now() - startTime) / 1000).toFixed(2)}s`)
-    onProgress?.({ step: 'done', message: 'Translation complete!', percent: 100, lang: targetLanguage, chunkCount: translatedChunks.length })
-    return translatedChunks
-}
-
-import { Worker } from 'node:worker_threads'
-
-let translationWorker = null
-const pendingWorkerTasks = new Map()
-
-function getOrCreateTranslationWorker() {
-    if (translationWorker) return translationWorker
-
-    const workerPath = path.join(__dirname, '..', 'workers', 'translationWorker.js')
-    translationWorker = new Worker(workerPath)
-
-    translationWorker.on('message', (msg) => {
-        const { type, taskId, data, result, error } = msg
-        const task = pendingWorkerTasks.get(taskId)
-        if (!task) return
-
-        if (type === 'progress') {
-            task.onProgress?.(data)
-        } else if (type === 'done') {
-            pendingWorkerTasks.delete(taskId)
-            task.resolve(result)
-        } else if (type === 'error') {
-            pendingWorkerTasks.delete(taskId)
-            task.reject(new Error(error || 'Worker translation failed'))
-        }
-    })
-
-    translationWorker.on('error', (err) => {
-        console.error('[TranslationWorker] Worker crashed:', err)
-        for (const [, task] of pendingWorkerTasks.entries()) {
-            task.reject(err)
-        }
-        pendingWorkerTasks.clear()
-        translationWorker = null
-    })
-
-    translationWorker.on('exit', (code) => {
-        if (code !== 0) {
-            console.warn(`[TranslationWorker] Worker exited with code ${code}`)
-        }
-        translationWorker = null
-    })
-
-    return translationWorker
-}
-
-function runTranslationInWorker(chunks, targetLanguage, sourceLanguage, onProgress, req) {
-    return new Promise((resolve, reject) => {
-        const taskId = `task_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`
-        const worker = getOrCreateTranslationWorker()
-
-        pendingWorkerTasks.set(taskId, { resolve, reject, onProgress })
-
-        if (req?.socket) {
-            req.socket.on('close', () => {
-                if (pendingWorkerTasks.has(taskId)) {
-                    try {
-                        worker.postMessage({ type: 'cancel', taskId })
-                    } catch {}
-                    pendingWorkerTasks.delete(taskId)
-                    reject(new Error('Translation cancelled by client'))
-                }
+            const doneCount = Math.min(i + WINDOW_SIZE, total)
+            const percent = Math.round(10 + (doneCount / total) * 88)
+            onProgress?.({
+                step: 'translating',
+                current: doneCount,
+                total,
+                percent,
+                message: `Translating to ${LANG_DISPLAY_MAP[tgt]} (${doneCount}/${total})…`
             })
         }
 
-        worker.postMessage({
+        onProgress?.({
+            step: 'done',
+            current: total,
+            total,
+            percent: 100,
+            message: 'Translation complete'
+        })
+        return translated
+    }
+
+    // Path 2: 100% Offline Local NLLB-200 Isolated Child Process
+    // Uses child_process.fork instead of worker_threads so cancelling ONNX Runtime
+    // mid-inference never tears down the host Express server process.
+    return new Promise((resolve, reject) => {
+        if (signal?.aborted) {
+            return reject(new Error('Translation cancelled by user'))
+        }
+
+        const workerPath = path.join(__dirname, '..', 'workers', 'translationWorker.js')
+        const child = fork(workerPath, [], {
+            env: {
+                ...process.env,
+                TUTIN_XENOVA_CACHE_DIR: getXenovaCacheDir() || ''
+            }
+        })
+
+        let settled = false
+        let onAbort = null
+
+        const cleanup = () => {
+            if (signal && onAbort) {
+                signal.removeEventListener('abort', onAbort)
+            }
+        }
+
+        const stopChild = () => {
+            try {
+                if (child.connected) {
+                    child.send({ type: 'cancel' })
+                }
+            } catch { }
+            setTimeout(() => {
+                try {
+                    if (!child.killed && child.exitCode === null) {
+                        child.kill()
+                    }
+                } catch { }
+            }, 80).unref?.()
+        }
+
+        if (signal) {
+            onAbort = () => {
+                if (settled) return
+                settled = true
+                cleanup()
+                stopChild()
+                reject(new Error('Translation cancelled by user'))
+            }
+            signal.addEventListener('abort', onAbort, { once: true })
+        }
+
+        child.on('message', (msg) => {
+            if (msg?.type === 'progress') {
+                if (!settled) onProgress?.(msg.data)
+            } else if (msg?.type === 'done') {
+                if (settled) return
+                settled = true
+                cleanup()
+                resolve(msg.result)
+            } else if (msg?.type === 'error') {
+                if (settled) return
+                settled = true
+                cleanup()
+                reject(new Error(msg.error))
+            }
+        })
+
+        child.on('error', (err) => {
+            if (settled) return
+            settled = true
+            cleanup()
+            reject(err)
+        })
+
+        child.on('exit', (code, exitSignal) => {
+            if (!settled) {
+                settled = true
+                cleanup()
+                if (code === 0) {
+                    reject(new Error('Translation worker exited before returning subtitles'))
+                } else {
+                    reject(
+                        new Error(
+                            `Translation worker stopped (${exitSignal ? `signal ${exitSignal}` : `exit code ${code}`})`,
+                        ),
+                    )
+                }
+            }
+        })
+
+        child.send({
             type: 'translate',
-            taskId,
-            chunks,
-            targetLanguage,
-            sourceLanguage
+            chunks: normalizedInput,
+            targetLangCode: tgt,
+            sourceLangCode: src
         })
     })
 }
 
-async function translateChunksNLLB(chunks, targetLanguage, onProgress, req, sourceLanguage) {
-    return runTranslationInWorker(chunks, targetLanguage, sourceLanguage, onProgress, req)
+export function getSupportedTranslationLanguages() {
+    return Object.entries(LANG_DISPLAY_MAP).map(([code, name]) => ({
+        code,
+        name,
+        requiresCloudKey: code === 'ar-eg' || code === 'ar-sa'
+    }))
 }
-
-export async function translateChunks(chunks, targetLanguage, apiKey, modelParams, onProgress, req, sourceLanguage = 'en') {
-    if (targetLanguage === 'ar-eg' || targetLanguage === 'ar-sa') {
-        if (hasOpenRouterKey()) {
-            return translateChunksOpenRouter(chunks, targetLanguage, onProgress, req)
-        }
-        // Offline / No-API-Key Fallback: Use local NLLB-200 for Arabic ('ar') and apply dialect phonetic nudging
-        const dialectLabel = targetLanguage === 'ar-eg' ? 'Egyptian Arabic' : 'Gulf Arabic'
-        console.warn(`[aiTranslation] OpenRouter API key not configured for ${dialectLabel}. Translating via local NLLB-200 with dialect phonetic nudging.`)
-        onProgress?.({ step: 'loading', message: `OpenRouter key not found. Using offline NLLB-200 with ${dialectLabel} phonetic nudging...`, percent: 0 })
-        const translated = await translateChunksNLLB(chunks, 'ar', onProgress, req, sourceLanguage)
-        // Transform the ttsSegments text with dialect phonetic nudges while preserving clean caption
-        if (translated.ttsSegments && Array.isArray(translated.ttsSegments)) {
-            for (const seg of translated.ttsSegments) {
-                seg.text = applyDialectPhoneticNudges(seg.text, targetLanguage)
-            }
-        }
-        return translated
-    }
-    return translateChunksNLLB(chunks, targetLanguage, onProgress, req, sourceLanguage)
-}
-
-export function hasOpenRouterKey() {
-    return !!getOpenRouterKey()
-}
-
