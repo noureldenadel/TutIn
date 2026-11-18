@@ -116,6 +116,7 @@ export interface CourseLessonItem {
   hasSummary: boolean;
   primaryTranscript?: string | null | undefined;
   subtitleSources: SubtitleSource[];
+  dubbedTracks: Array<Record<string, unknown>>;
 }
 
 export interface CourseCurriculumData {
@@ -223,6 +224,7 @@ export function buildCourseCurriculum(
         hasSummary: v.hasSummary,
         primaryTranscript: v.primaryTranscript,
         subtitleSources: v.subtitleSources ?? [],
+        dubbedTracks: v.dubbedTracks ?? [],
       });
       return {
         id: v.id,
@@ -273,6 +275,7 @@ export function buildCourseCurriculum(
         hasSummary: v.hasSummary,
         primaryTranscript: v.primaryTranscript,
         subtitleSources: v.subtitleSources ?? [],
+        dubbedTracks: v.dubbedTracks ?? [],
       });
       return { id: v.id, title: v.title, duration, durationSec };
     });

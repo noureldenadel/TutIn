@@ -44,7 +44,8 @@ function getDotState(
       return { opacity, scale, fill: "currentColor" };
     }
 
-    const colorPhase = ((theta + Math.PI) / (2 * Math.PI)) * THINKING_COLORS.length + t * 0.14 + d * 0.6;
+    const colorPhase =
+      ((theta + Math.PI) / (2 * Math.PI)) * THINKING_COLORS.length + t * 0.14 + d * 0.6;
     const colorIdx =
       ((Math.floor(colorPhase) % THINKING_COLORS.length) + THINKING_COLORS.length) %
       THINKING_COLORS.length;

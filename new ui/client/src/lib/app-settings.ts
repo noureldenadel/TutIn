@@ -4,6 +4,9 @@ export type ThemeMode = "light" | "dark" | "system";
 export type ThemePreset = "obsidian" | "zinc" | "neutral" | "stone" | "graphite" | "classic";
 export type ComputeDevice = "auto" | "gpu" | "cpu";
 export type WhisperModelPreset = "whisper-base" | "whisper-small" | "faster-whisper-large-v3-turbo";
+export type DubVoiceEngine = "neural" | "clone";
+export type DubVoiceGender = "male" | "female";
+export type DubBackgroundMode = "ducking" | "demucs";
 export type CaptionFontSize = "small" | "medium" | "large";
 export type NotesSortOrder = "asc" | "desc";
 export type LibrarySortPreference = "Recent" | "Progress" | "A–Z";
@@ -109,6 +112,11 @@ export interface AppSettings {
   googleApiKey: string;
   computeDevice: ComputeDevice;
   whisperModel: WhisperModelPreset;
+  dubVoiceEngine: DubVoiceEngine;
+  dubVoiceGender: DubVoiceGender;
+  dubBgMode: DubBackgroundMode;
+  dubComputingDevice: ComputeDevice;
+  dubUnloadIdleModel: boolean;
   captionFontSize: CaptionFontSize;
   captionBackground: boolean;
   captionPosition: CaptionPosition | null;
@@ -180,6 +188,11 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   googleApiKey: "",
   computeDevice: "auto",
   whisperModel: "whisper-base",
+  dubVoiceEngine: "neural",
+  dubVoiceGender: "male",
+  dubBgMode: "ducking",
+  dubComputingDevice: "auto",
+  dubUnloadIdleModel: true,
   captionFontSize: "medium",
   captionBackground: true,
   captionPosition: null,
@@ -348,6 +361,28 @@ function sanitizeSettings(raw: Partial<AppSettings> | null | undefined): AppSett
     })(),
     computeDevice,
     whisperModel,
+    dubVoiceEngine:
+      raw.dubVoiceEngine === "clone" || raw.dubVoiceEngine === "neural"
+        ? raw.dubVoiceEngine
+        : DEFAULT_APP_SETTINGS.dubVoiceEngine,
+    dubVoiceGender:
+      raw.dubVoiceGender === "female" || raw.dubVoiceGender === "male"
+        ? raw.dubVoiceGender
+        : DEFAULT_APP_SETTINGS.dubVoiceGender,
+    dubBgMode:
+      raw.dubBgMode === "demucs" || raw.dubBgMode === "ducking"
+        ? raw.dubBgMode
+        : DEFAULT_APP_SETTINGS.dubBgMode,
+    dubComputingDevice:
+      raw.dubComputingDevice === "auto" ||
+      raw.dubComputingDevice === "gpu" ||
+      raw.dubComputingDevice === "cpu"
+        ? raw.dubComputingDevice
+        : DEFAULT_APP_SETTINGS.dubComputingDevice,
+    dubUnloadIdleModel:
+      typeof raw.dubUnloadIdleModel === "boolean"
+        ? raw.dubUnloadIdleModel
+        : DEFAULT_APP_SETTINGS.dubUnloadIdleModel,
     captionFontSize:
       raw.captionFontSize === "small" ||
       raw.captionFontSize === "medium" ||
@@ -711,6 +746,23 @@ export async function hydrateAppSettingsFromServer(force = false): Promise<AppSe
         serverData["captionFontSize"] === "medium" ||
         serverData["captionFontSize"] === "large"
           ? { captionFontSize: serverData["captionFontSize"] as CaptionFontSize }
+          : {}),
+        ...(serverData["dubVoiceEngine"] === "neural" || serverData["dubVoiceEngine"] === "clone"
+          ? { dubVoiceEngine: serverData["dubVoiceEngine"] as DubVoiceEngine }
+          : {}),
+        ...(serverData["dubVoiceGender"] === "male" || serverData["dubVoiceGender"] === "female"
+          ? { dubVoiceGender: serverData["dubVoiceGender"] as DubVoiceGender }
+          : {}),
+        ...(serverData["dubBgMode"] === "ducking" || serverData["dubBgMode"] === "demucs"
+          ? { dubBgMode: serverData["dubBgMode"] as DubBackgroundMode }
+          : {}),
+        ...(serverData["dubComputingDevice"] === "auto" ||
+        serverData["dubComputingDevice"] === "gpu" ||
+        serverData["dubComputingDevice"] === "cpu"
+          ? { dubComputingDevice: serverData["dubComputingDevice"] as ComputeDevice }
+          : {}),
+        ...(typeof serverData["dubUnloadIdleModel"] === "boolean"
+          ? { dubUnloadIdleModel: serverData["dubUnloadIdleModel"] }
           : {}),
         ...(typeof serverData["captionBackground"] === "boolean"
           ? { captionBackground: serverData["captionBackground"] }

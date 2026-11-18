@@ -16,7 +16,9 @@ import {
     loadFullVaultData,
     readCaptionFile,
     saveCaptionFile,
-    normalizeSubtitleSources
+    normalizeSubtitleSources,
+    migrateLegacyCourseAssets,
+    extractDubLangFromFileName
 } from '../utils/courseAssets.js'
 
 /**
@@ -29,7 +31,7 @@ const VIDEO_EXTENSIONS = new Set([
 const SUBTITLE_EXTENSIONS = new Set(['.srt', '.vtt', '.ass', '.ssa'])
 
 // Folder names managed by TutIn — skip during module scanning
-const MANAGED_FOLDERS = new Set(['Dubs', '.tutin'])
+const MANAGED_FOLDERS = new Set(['.tutin'])
 
 /**
  * Check if a filename is a video file
@@ -323,7 +325,6 @@ async function scanDirectoryRecursive(dirPath, onProgress, progressState, course
                 try {
                     return fs.readdirSync(vaultCaptionsDir)
                         .filter(f => {
-                            if (f.includes('.tts.') || f.endsWith('.source.vtt')) return false
                             if (!f.startsWith(videoBase)) return false
                             const suffix = f.slice(videoBase.length)
                             if (!/^(?:\.|-(?:generated|u\d+)\.)/i.test(suffix)) return false
@@ -348,26 +349,28 @@ async function scanDirectoryRecursive(dirPath, onProgress, progressState, course
             : []
         const allSubtitles = normalizeSubtitleSources(managedCaptions, 'en')
 
-        // Detect dubbed audio in .tutin/dubs/ and legacy Dubs/ subfolders
+        // Detect dubbed audio strictly in .tutin/dubs/ (migrating any legacy Dubs/ on first encounter)
+        migrateLegacyCourseAssets(courseRoot)
         const vaultDubsDir = path.join(courseRoot, '.tutin', 'dubs', relModulePath)
-        const legacyDubsDir = path.join(courseRoot, 'Dubs', relModulePath)
-        const scanDubsFrom = (dir) => {
-            if (!fs.existsSync(dir)) return []
-            try {
-                return fs.readdirSync(dir)
-                    .filter(f => f.startsWith(videoBase) && f.endsWith('.mp3'))
-                    .map(f => {
-                        const lang = extractLangCode(f.replace('.mp3', ''), videoBase) || 'unknown'
-                        return {
-                            filePath: path.join(dir, f),
-                            lang,
-                            language: lang,
-                            status: 'ready'
+        const availableDubs = fs.existsSync(vaultDubsDir)
+            ? (() => {
+                try {
+                    const found = []
+                    for (const f of fs.readdirSync(vaultDubsDir)) {
+                        const lang = extractDubLangFromFileName(f, videoBase)
+                        if (lang) {
+                            found.push({
+                                filePath: path.join(vaultDubsDir, f),
+                                lang,
+                                language: lang,
+                                status: 'ready'
+                            })
                         }
-                    })
-            } catch { return [] }
-        }
-        const availableDubs = [...scanDubsFrom(vaultDubsDir), ...scanDubsFrom(legacyDubsDir)]
+                    }
+                    return found
+                } catch { return [] }
+            })()
+            : []
 
         // Check for existing video summary in .tutin/summaries/
         const summaryInMod = path.join(courseRoot, '.tutin', 'summaries', relModulePath, `${videoBase}.md`)

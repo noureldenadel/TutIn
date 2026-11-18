@@ -49,6 +49,7 @@ import {
   COURSES_CHANGED_EVENT,
   COURSE_UPDATED_EVENT,
   fetchCourses,
+  openFolderInExplorer,
   useCoursesList,
 } from "@/lib/courses";
 import { hydrateInstructorAvatars } from "@/components/layout/instructor-avatar";
@@ -62,6 +63,9 @@ import {
   writeAppSettings,
   type AppSettings,
   type ComputeDevice,
+  type DubBackgroundMode,
+  type DubVoiceEngine,
+  type DubVoiceGender,
   type ThemeMode,
   type ThemePreset,
   type WhisperModelPreset,
@@ -73,6 +77,16 @@ type FeedbackCategory = "Bug" | "Feature" | "General";
 interface WorkspaceDataStats {
   coursesCount: number;
   notesCount: number | null;
+}
+
+interface DubHardwareInfo {
+  service_running?: boolean;
+  gpu_available?: boolean;
+  gpu_name?: string | null;
+  models?: {
+    modelsDir?: string;
+    totalMb?: number;
+  };
 }
 
 const tabs = [
@@ -223,7 +237,19 @@ export function SettingsModal({
   const [dataBusy, setDataBusy] = useState(false);
   const [showApiKey, setShowApiKey] = useState(false);
   const [showGoogleApiKey, setShowGoogleApiKey] = useState(false);
+  const [dubHardwareInfo, setDubHardwareInfo] = useState<DubHardwareInfo | null>(null);
   const importInputRef = useRef<HTMLInputElement>(null);
+
+  const loadDubHardwareInfo = useCallback(async (signal?: AbortSignal) => {
+    const res = await apiRequest<DubHardwareInfo>(
+      "/api/dub/gpu-info",
+      signal ? { signal } : undefined,
+    );
+    if (signal?.aborted) return;
+    if (res.ok && res.data) {
+      setDubHardwareInfo(res.data);
+    }
+  }, []);
 
   const loadDataStats = useCallback(
     async (signal?: AbortSignal) => {
@@ -257,10 +283,28 @@ export function SettingsModal({
     return () => controller.abort();
   }, [open, activeTab, loadDataStats]);
 
+  useEffect(() => {
+    if (!open || (activeTab !== "voice" && activeTab !== "data")) return;
+    const controller = new AbortController();
+    void loadDubHardwareInfo(controller.signal);
+    return () => controller.abort();
+  }, [open, activeTab, loadDubHardwareInfo]);
+
   const updateSetting = <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => {
     const next = { ...settings, [key]: value };
     setSettings(next);
     writeAppSettings(next);
+
+    if (key === "dubComputingDevice" || key === "dubUnloadIdleModel") {
+      void apiRequest("/api/dub/set-device", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          device: next.dubComputingDevice,
+          unloadIdleModel: next.dubUnloadIdleModel,
+        }),
+      });
+    }
 
     if (key === "progressCalculationMode") {
       void apiRequest("/api/courses/recalculate-progress", {
@@ -781,55 +825,119 @@ export function SettingsModal({
               )}
 
               {activeTab === "voice" && (
-                <div className="space-y-5">
-                  <p className="rounded-lg bg-secondary/60 px-3.5 py-2.5 text-xs text-muted-foreground">
-                    Voice dubbing is temporarily disabled during rebuild.
-                  </p>
-
-                  <div className="pointer-events-none divide-y divide-border/50 opacity-50 select-none">
-                    <div className="flex items-center justify-between gap-4 pb-5">
-                      <div className="space-y-0.5">
-                        <Label className="text-sm font-medium">Dubbing device</Label>
-                        <p className="text-xs text-muted-foreground">
-                          Hardware used for voice cloning
-                        </p>
-                      </div>
-                      <SegmentedControl<ComputeDevice>
-                        disabled
-                        value={settings.computeDevice}
-                        onChange={() => {}}
-                        options={[
-                          { value: "auto", label: "Auto" },
-                          { value: "gpu", label: "GPU" },
-                          { value: "cpu", label: "CPU" },
-                        ]}
-                      />
+                <div className="divide-y divide-border/50">
+                  <div className="flex flex-col gap-2.5 pb-5 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
+                    <div className="space-y-0.5">
+                      <Label className="text-sm font-medium">Voice engine</Label>
+                      <p className="text-xs text-muted-foreground">
+                        Fast neural voices or local instructor voice cloning
+                      </p>
                     </div>
+                    <SegmentedControl<DubVoiceEngine>
+                      value={settings.dubVoiceEngine}
+                      onChange={(v) => updateSetting("dubVoiceEngine", v)}
+                      options={[
+                        { value: "neural", label: "Neural · Fast" },
+                        { value: "clone", label: "Clone" },
+                      ]}
+                    />
+                  </div>
 
-                    <div className="flex items-center justify-between gap-4 py-5">
-                      <div className="space-y-0.5">
-                        <Label htmlFor="bg-audio" className="text-sm font-medium">
-                          Preserve background audio
-                        </Label>
-                        <p className="text-xs text-muted-foreground">
-                          Separate music and sound effects during dubbing
-                        </p>
-                      </div>
-                      <Switch id="bg-audio" disabled checked />
+                  <div className="flex flex-col gap-2.5 py-5 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
+                    <div className="space-y-0.5">
+                      <Label className="text-sm font-medium">Neural voice</Label>
+                      <p className="text-xs text-muted-foreground">
+                        Default voice profile when using Neural engine
+                      </p>
                     </div>
+                    <SegmentedControl<DubVoiceGender>
+                      value={settings.dubVoiceGender}
+                      onChange={(v) => updateSetting("dubVoiceGender", v)}
+                      options={[
+                        { value: "male", label: "Male" },
+                        { value: "female", label: "Female" },
+                      ]}
+                    />
+                  </div>
 
+                  <div className="flex flex-col gap-2.5 py-5 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
+                    <div className="space-y-0.5">
+                      <Label className="text-sm font-medium">Background audio</Label>
+                      <p className="text-xs text-muted-foreground">
+                        Auto-duck original track during speech or separate music stems
+                      </p>
+                    </div>
+                    <SegmentedControl<DubBackgroundMode>
+                      value={settings.dubBgMode}
+                      onChange={(v) => updateSetting("dubBgMode", v)}
+                      options={[
+                        { value: "ducking", label: "Auto-duck" },
+                        { value: "demucs", label: "Separate music" },
+                      ]}
+                    />
+                  </div>
+
+                  <div className="flex flex-col gap-2.5 py-5 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
+                    <div className="space-y-0.5">
+                      <Label className="text-sm font-medium">Cloning device</Label>
+                      <p className="text-xs text-muted-foreground">
+                        {dubHardwareInfo?.gpu_name
+                          ? `Detected: ${dubHardwareInfo.gpu_name}`
+                          : "Hardware used for voice cloning & music separation"}
+                      </p>
+                    </div>
+                    <SegmentedControl<ComputeDevice>
+                      value={settings.dubComputingDevice}
+                      onChange={(v) => updateSetting("dubComputingDevice", v)}
+                      options={[
+                        { value: "auto", label: "Auto" },
+                        { value: "gpu", label: "GPU" },
+                        { value: "cpu", label: "CPU" },
+                      ]}
+                    />
+                  </div>
+
+                  <div className="flex items-center justify-between gap-4 py-5">
+                    <div className="space-y-0.5">
+                      <Label htmlFor="unload-xtts" className="text-sm font-medium">
+                        Unload idle voice model
+                      </Label>
+                      <p className="text-xs text-muted-foreground">
+                        Release GPU memory automatically after dubbing finishes
+                      </p>
+                    </div>
+                    <Switch
+                      id="unload-xtts"
+                      checked={settings.dubUnloadIdleModel}
+                      onCheckedChange={(v) => updateSetting("dubUnloadIdleModel", v)}
+                    />
+                  </div>
+
+                  {dubHardwareInfo?.models && (
                     <div className="flex items-center justify-between gap-4 pt-5">
                       <div className="space-y-0.5">
-                        <Label htmlFor="unload-xtts" className="text-sm font-medium">
-                          Unload idle voice model
-                        </Label>
-                        <p className="text-xs text-muted-foreground">
-                          Release memory when dubbing finishes
+                        <span className="text-sm font-medium">Local AI models</span>
+                        <p className="font-mono text-xs tabular-nums text-muted-foreground">
+                          {(dubHardwareInfo.models.totalMb ?? 0) >= 1024
+                            ? `${((dubHardwareInfo.models.totalMb ?? 0) / 1024).toFixed(2)} GB used`
+                            : `${Math.round(dubHardwareInfo.models.totalMb ?? 0)} MB used`}
                         </p>
                       </div>
-                      <Switch id="unload-xtts" disabled checked />
+                      {dubHardwareInfo.models.modelsDir && (
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          size="sm"
+                          onClick={() =>
+                            void openFolderInExplorer(dubHardwareInfo.models!.modelsDir!)
+                          }
+                        >
+                          <FolderOpen className="size-3.5" />
+                          Open folder
+                        </Button>
+                      )}
                     </div>
-                  </div>
+                  )}
                 </div>
               )}
 

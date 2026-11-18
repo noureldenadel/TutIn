@@ -1,7 +1,12 @@
 import { useSyncExternalStore } from "react";
 import { toast } from "sonner";
 import { apiUrl } from "@/lib/api";
-import { readAppSettings } from "@/lib/app-settings";
+import {
+  readAppSettings,
+  type DubBackgroundMode,
+  type DubVoiceEngine,
+  type DubVoiceGender,
+} from "@/lib/app-settings";
 import { fetchCourseCurriculum, type SubtitleSource } from "@/lib/course-lessons";
 import { getLanguageLabel, normalizeLanguageCode } from "@/lib/languages";
 
@@ -25,14 +30,26 @@ export interface TranscriptJobStep {
   status: "running" | "done";
 }
 
+export interface DubTrackMeta {
+  language: string;
+  engine?: DubVoiceEngine | undefined;
+  bgMode?: DubBackgroundMode | undefined;
+  voiceGender?: DubVoiceGender | undefined;
+  speechIntervals?: Array<[number, number]> | undefined;
+  generatedAt?: string | null | undefined;
+}
+
 export interface TranscriptJobItem {
   videoId: string;
   courseId: string;
   videoTitle: string;
-  mode: "transcribe" | "translate";
+  mode: "transcribe" | "translate" | "dub";
   targetLanguage: string;
   sourceLanguage: string;
   sourceTrackId?: string | undefined;
+  dubEngine?: DubVoiceEngine | undefined;
+  dubVoiceGender?: DubVoiceGender | undefined;
+  dubBgMode?: DubBackgroundMode | undefined;
   status: "queued" | "running" | "completed" | "failed" | "cancelled";
   progress: number; // 0 to 100
   message: string;
@@ -42,6 +59,7 @@ export interface TranscriptJobItem {
 }
 
 export const TRANSCRIPT_UPDATED_EVENT = "tutin:transcript-updated";
+export const DUB_UPDATED_EVENT = "tutin:dub-updated";
 
 export function notifyTranscriptUpdated(
   videoId: string,
@@ -56,6 +74,28 @@ export function notifyTranscriptUpdated(
           courseId,
           trackId: options?.trackId,
           targetLang: options?.targetLang,
+        },
+      }),
+    );
+  }
+  if (courseId) {
+    void fetchCourseCurriculum(courseId, true).catch(() => {});
+  }
+}
+
+export function notifyDubUpdated(
+  videoId: string,
+  courseId?: string,
+  options?: { targetLang?: string | undefined; track?: DubTrackMeta | null | undefined },
+): void {
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(
+      new CustomEvent(DUB_UPDATED_EVENT, {
+        detail: {
+          videoId,
+          courseId,
+          targetLang: options?.targetLang,
+          track: options?.track,
         },
       }),
     );
@@ -581,6 +621,129 @@ export async function translateVideoSubtitles(
   return createdTrack;
 }
 
+// ── Streaming AI Voice Dubbing Function ─────────────────────────
+
+export async function dubVideoAudio(
+  target: TranscribeVideoTarget,
+  options: {
+    targetLanguage: string;
+    sourceLanguage: string;
+    sourceTrackId?: string | undefined;
+    engine?: DubVoiceEngine | undefined;
+    voiceGender?: DubVoiceGender | undefined;
+    bgMode?: DubBackgroundMode | undefined;
+  },
+  onProgress?: (update: TranscriptProgressUpdate) => void,
+  signal?: AbortSignal,
+): Promise<DubTrackMeta | null> {
+  const settings = readAppSettings();
+  const targetLang = normalizeLanguageCode(options.targetLanguage);
+  const sourceLang = normalizeLanguageCode(options.sourceLanguage);
+  const engine = options.engine ?? settings.dubVoiceEngine;
+  const voiceGender = options.voiceGender ?? settings.dubVoiceGender;
+  const bgMode = options.bgMode ?? settings.dubBgMode;
+
+  onProgress?.({
+    step: "starting-dub",
+    progress: 8,
+    message: `Preparing ${getLanguageLabel(targetLang)} dub…`,
+  });
+
+  const response = await fetch(
+    apiUrl(`/api/dub/video/${encodeURIComponent(target.videoId)}/generate`),
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        targetLanguage: targetLang,
+        sourceLanguage: sourceLang,
+        sourceTrackId: options.sourceTrackId,
+        engine,
+        voiceGender,
+        bgMode,
+        device: settings.dubComputingDevice,
+        unloadIdleModel: settings.dubUnloadIdleModel,
+        openRouterApiKey: settings.openRouterApiKey,
+        openRouterModel: settings.openRouterModel,
+      }),
+      ...(signal ? { signal } : {}),
+    },
+  );
+
+  if (!response.ok || !response.body) {
+    const errData = (await response.json().catch(() => ({}))) as { error?: string };
+    throw new Error(errData.error || `Dubbing failed (HTTP ${response.status})`);
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let createdDubTrack: DubTrackMeta | null = null;
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const parts = buffer.split("\n\n");
+    buffer = parts.pop() || "";
+
+    for (const part of parts) {
+      const line = part.trim();
+      if (!line.startsWith("data:")) continue;
+      const jsonStr = line.slice(5).trim();
+      if (!jsonStr) continue;
+
+      let payload: {
+        error?: string;
+        step?: string;
+        percent?: number;
+        message?: string;
+        done?: boolean;
+        track?: DubTrackMeta;
+      };
+      try {
+        payload = JSON.parse(jsonStr);
+      } catch {
+        continue;
+      }
+
+      if (payload.error) {
+        throw new Error(payload.error);
+      }
+
+      if (typeof payload.percent === "number") {
+        onProgress?.({
+          step: payload.step || "synthesizing",
+          progress: Math.min(99, Math.max(5, Math.round(payload.percent))),
+          message: payload.message || `Synthesizing voice (${Math.round(payload.percent)}%)…`,
+        });
+      }
+
+      if (payload.done) {
+        createdDubTrack = payload.track ?? { language: targetLang, engine, bgMode, voiceGender };
+      }
+    }
+  }
+
+  onProgress?.({
+    step: "done",
+    progress: 100,
+    message: `${getLanguageLabel(targetLang)} dub ready`,
+  });
+
+  // Notify both transcript and dub listeners (in case auto-translation also generated subtitles)
+  notifyTranscriptUpdated(target.videoId, target.courseId, {
+    targetLang,
+  });
+  notifyDubUpdated(target.videoId, target.courseId, {
+    targetLang,
+    track: createdDubTrack,
+  });
+
+  return createdDubTrack;
+}
+
 // ── Track Management Actions (Set Master, Set Source, Delete) ───
 
 export async function setSubtitleTrackMaster(
@@ -757,10 +920,13 @@ export function enqueueTranscriptJobs(
     courseId: string;
     videoTitle: string;
     youtubeId?: string | null | undefined;
-    mode: "transcribe" | "translate";
+    mode: "transcribe" | "translate" | "dub";
     targetLanguage: string;
     sourceLanguage: string;
     sourceTrackId?: string | undefined;
+    dubEngine?: DubVoiceEngine | undefined;
+    dubVoiceGender?: DubVoiceGender | undefined;
+    dubBgMode?: DubBackgroundMode | undefined;
   }>,
 ): void {
   if (items.length === 0) return;
@@ -778,6 +944,9 @@ export function enqueueTranscriptJobs(
       targetLanguage: normalizeLanguageCode(item.targetLanguage),
       sourceLanguage: normalizeLanguageCode(item.sourceLanguage),
       sourceTrackId: item.sourceTrackId,
+      dubEngine: item.dubEngine,
+      dubVoiceGender: item.dubVoiceGender,
+      dubBgMode: item.dubBgMode,
       status: "queued",
       progress: 0,
       message: "Queued…",
@@ -843,7 +1012,21 @@ async function processQueueLoop(): Promise<void> {
       const initialMessage =
         nextJob.mode === "transcribe"
           ? `Transcribing (${getLanguageLabel(nextJob.targetLanguage)})…`
-          : `Translating to ${getLanguageLabel(nextJob.targetLanguage)}…`;
+          : nextJob.mode === "dub"
+            ? `Dubbing to ${getLanguageLabel(nextJob.targetLanguage)}…`
+            : `Translating to ${getLanguageLabel(nextJob.targetLanguage)}…`;
+      const initialStepId =
+        nextJob.mode === "transcribe"
+          ? "starting-transcribe"
+          : nextJob.mode === "dub"
+            ? "starting-dub"
+            : "starting-translate";
+      const initialStepLabel =
+        nextJob.mode === "transcribe"
+          ? "Starting transcription"
+          : nextJob.mode === "dub"
+            ? "Starting voice dubbing"
+            : "Starting translation";
       jobsState[vid] = {
         ...nextJob,
         status: "running",
@@ -857,9 +1040,8 @@ async function processQueueLoop(): Promise<void> {
             status: "done",
           },
           {
-            id: nextJob.mode === "transcribe" ? "starting-transcribe" : "starting-translate",
-            label:
-              nextJob.mode === "transcribe" ? "Starting transcription" : "Starting translation",
+            id: initialStepId,
+            label: initialStepLabel,
             detail: getLanguageLabel(nextJob.targetLanguage),
             status: "running",
           },
@@ -886,6 +1068,25 @@ async function processQueueLoop(): Promise<void> {
             pushProgress,
             controller.signal,
           );
+        } else if (nextJob.mode === "dub") {
+          await dubVideoAudio(
+            {
+              videoId: nextJob.videoId,
+              courseId: nextJob.courseId,
+              title: nextJob.videoTitle,
+              youtubeId: nextJob.youtubeId,
+            },
+            {
+              targetLanguage: nextJob.targetLanguage,
+              sourceLanguage: nextJob.sourceLanguage,
+              sourceTrackId: nextJob.sourceTrackId,
+              engine: nextJob.dubEngine,
+              voiceGender: nextJob.dubVoiceGender,
+              bgMode: nextJob.dubBgMode,
+            },
+            pushProgress,
+            controller.signal,
+          );
         } else {
           await translateVideoSubtitles(
             {
@@ -908,7 +1109,11 @@ async function processQueueLoop(): Promise<void> {
         delete jobsState[vid];
         jobAbortControllers.delete(vid);
         emitJobsChange();
-        toast.success(`${getLanguageLabel(nextJob.targetLanguage)} · AI subtitles ready`);
+        toast.success(
+          nextJob.mode === "dub"
+            ? `${getLanguageLabel(nextJob.targetLanguage)} · Dub ready`
+            : `${getLanguageLabel(nextJob.targetLanguage)} · AI subtitles ready`,
+        );
       } catch (err) {
         jobAbortControllers.delete(vid);
         if (controller.signal.aborted || !jobsState[vid]) {
@@ -919,7 +1124,13 @@ async function processQueueLoop(): Promise<void> {
         delete jobsState[vid];
         emitJobsChange();
         console.error(`[TranscriptQueue] Job failed for ${vid}:`, err);
-        toast.error(err instanceof Error ? err.message : "Subtitle generation failed");
+        toast.error(
+          err instanceof Error
+            ? err.message
+            : nextJob.mode === "dub"
+              ? "Voice dubbing failed"
+              : "Subtitle generation failed",
+        );
       }
     }
   } finally {

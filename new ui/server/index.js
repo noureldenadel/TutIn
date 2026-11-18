@@ -18,6 +18,7 @@ import { initDatabase, closeDatabase, getDb, getDataDir, getAll, getOne, run, tr
 import { streamVideo, setAllowedRoots, addAllowedRoot } from './services/videoStreamer.js'
 import { repairPaths } from './services/pathRepair.js'
 import { parseMp4Duration } from './utils/mp4Parser.js'
+import { relocateAndCleanModelsDir } from './utils/modelManager.js'
 import coursesRouter, { recalculateCourseProgress } from './routes/courses.js'
 import modulesRouter from './routes/modules.js'
 import videosRouter from './routes/videos.js'
@@ -131,6 +132,9 @@ let server
 async function start() {
     // Initialize database (async because sql.js loads WASM)
     await initDatabase()
+
+    // Relocate any previously downloaded AI models into the canonical v6 directory layout
+    relocateAndCleanModelsDir()
 
     // Load allowed roots from settings
     loadAllowedRoots()

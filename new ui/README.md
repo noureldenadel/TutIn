@@ -3,7 +3,7 @@
 Local-first desktop web workstation for organizing, studying, and annotating local video courses, YouTube playlists, Google Drive collections, and external course links.
 
 > [!NOTE]
-> AI speech-to-text transcription (Python `faster-whisper` + Silero VAD with automatic WebGPU/WASM browser fallback), 27-language subtitle translation (offline `Xenova/nllb-200-distilled-600M` worker + OpenRouter dialect translation for Egyptian & Saudi Arabic), clause-level cue normalization, and two-origin (`Uploaded` vs `AI`) multi-track subtitle management (`Master` & `Source` selection) are active across the Video Player, Curriculum Manager, and Settings (`AI` tab). XTTS voice dubbing synthesis and AI summarization remain deferred to a future phase.
+> AI speech-to-text transcription (Python `faster-whisper` + Silero VAD with automatic WebGPU/WASM browser fallback), 29-language subtitle translation (offline `Xenova/nllb-200-distilled-600M` worker + OpenRouter dialect translation for Egyptian & Saudi Arabic), clause-level cue normalization, dual-engine AI voice dubbing (fast `edge-tts` neural voices + local Coqui `XTTS-v2` instructor voice cloning with course-level voice profiles and selectable `Auto-duck` / `Separate music` background modes), and two-origin (`Uploaded` vs `AI`) multi-track subtitle management (`Master` & `Source` selection) are active across the Video Player, Curriculum Manager, and Settings (`AI & APIs` / `Voice` tabs). AI lecture summarization remains deferred to a future phase.
 
 ## Quick Start
 
@@ -38,9 +38,10 @@ new ui/
 ├── server/                  # Express 5 + SQLite (sql.js) API & range-request video server (:9474)
 │   ├── index.js             # Entry point, /api/health (6.0.0), static SPA serving, route mounting
 │   ├── database.js          # SQLite persistence in %APPDATA%/TutIn/tutin.db (or TUTIN_DATA_DIR), migrations 001–008
-│   ├── routes/              # REST API routes (/api/courses, /api/notes, /api/canvas, /api/fs, ...)
-│   ├── services/            # Course folder scanner, video range streamer, missing-path repair
-│   └── utils/               # Caption parser, .tutin vault helpers, MP4/TS duration parsers, FFmpeg helper
+│   ├── routes/              # REST API routes (/api/courses, /api/notes, /api/canvas, /api/transcripts, /api/dub, ...)
+│   ├── services/            # Course folder scanner, video range streamer, Python AI sidecar client, path repair
+│   ├── python/              # FastAPI AI sidecar (:9475) for Edge-TTS neural & XTTS-v2 voice dubbing, Demucs & Faster-Whisper
+│   └── utils/               # Caption parser, .tutin vault helpers, centralized AI model manager, MP4/TS duration & FFmpeg helpers
 ├── client/                  # Vite 8 + React 19 + TanStack Router + Tailwind v4 SPA (:5173)
 │   ├── README.md            # Frontend module & route quick reference
 │   └── src/

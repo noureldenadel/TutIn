@@ -6,19 +6,35 @@ import { getPythonEnv } from '../utils/modelManager.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
-const WORKSPACE_ROOT = path.resolve(__dirname, '..', '..', '..')
+const SERVER_ROOT = path.resolve(__dirname, '..')
+const NEW_UI_ROOT = path.resolve(SERVER_ROOT, '..')
+const PARENT_ROOT = path.resolve(NEW_UI_ROOT, '..')
+
+const PYTHON_SERVICE_URL = 'http://127.0.0.1:9475'
 
 let pythonProcess = null
 let isStarting = false
 
 export async function isServiceRunning() {
     try {
-        const res = await fetch('http://127.0.0.1:9475/health', {
+        const res = await fetch(`${PYTHON_SERVICE_URL}/health`, {
             signal: AbortSignal.timeout(1500)
         })
         return res.ok
     } catch {
         return false
+    }
+}
+
+export async function getServiceHealth() {
+    try {
+        const res = await fetch(`${PYTHON_SERVICE_URL}/health`, {
+            signal: AbortSignal.timeout(2000)
+        })
+        if (!res.ok) return null
+        return await res.json()
+    } catch {
+        return null
     }
 }
 
@@ -53,32 +69,37 @@ export async function ensureServiceRunning() {
 }
 
 function getPythonExecutable() {
-    const venvPythonWin = path.join(WORKSPACE_ROOT, '.venv', 'Scripts', 'python.exe')
-    const venvPythonPosix = path.join(WORKSPACE_ROOT, '.venv', 'bin', 'python')
-    if (fs.existsSync(venvPythonWin)) return venvPythonWin
-    if (fs.existsSync(venvPythonPosix)) return venvPythonPosix
-    return null
+    const candidateRoots = [NEW_UI_ROOT, SERVER_ROOT, PARENT_ROOT]
+    for (const rootDir of candidateRoots) {
+        const venvWin = path.join(rootDir, '.venv', 'Scripts', 'python.exe')
+        if (fs.existsSync(venvWin)) return venvWin
+        const venvPosix = path.join(rootDir, '.venv', 'bin', 'python')
+        if (fs.existsSync(venvPosix)) return venvPosix
+    }
+    return process.platform === 'win32' ? 'python' : 'python3'
 }
 
 function startPythonService() {
     return new Promise((resolve, reject) => {
         const pythonPath = getPythonExecutable()
-        const scriptPath = path.join(WORKSPACE_ROOT, 'python', 'dubbing_server.py')
-        if (!pythonPath || !fs.existsSync(scriptPath)) {
-            return reject(new Error('Python .venv or dubbing_server.py not found'))
+        const scriptPath = path.join(SERVER_ROOT, 'python', 'dubbing_server.py')
+        if (!fs.existsSync(scriptPath)) {
+            return reject(new Error(`dubbing_server.py not found at ${scriptPath}`))
         }
 
-        console.log(`[Python AI Service] Starting python server using "${pythonPath}" at ${scriptPath}...`)
+        console.log(`[Python AI Service] Starting "${pythonPath}" -> ${scriptPath}`)
         pythonProcess = spawn(pythonPath, [scriptPath], {
             env: getPythonEnv()
         })
 
         pythonProcess.stdout.on('data', (data) => {
-            console.log(`[Python AI Service] ${data.toString().trim()}`)
+            const msg = data.toString().trim()
+            if (msg) console.log(`[Python AI Service] ${msg}`)
         })
 
         pythonProcess.stderr.on('data', (data) => {
-            console.error(`[Python AI Service:stderr] ${data.toString().trim()}`)
+            const msg = data.toString().trim()
+            if (msg) console.error(`[Python AI Service:stderr] ${msg}`)
         })
 
         pythonProcess.on('close', (code) => {
@@ -88,7 +109,7 @@ function startPythonService() {
         })
 
         pythonProcess.on('error', (err) => {
-            console.error('[Python AI Service] Failed to start process:', err)
+            console.error('[Python AI Service] Failed to spawn process:', err)
             pythonProcess = null
             reject(err)
         })
@@ -97,13 +118,100 @@ function startPythonService() {
     })
 }
 
+export async function submitDubJob({
+    videoPath,
+    segments,
+    targetLang,
+    engine = 'neural',
+    voiceGender = 'male',
+    bgMode = 'ducking',
+    voiceReferencePath = null,
+    voiceProfileDir = null,
+    device = null,
+    unloadIdleModel = true
+}) {
+    const isRunning = await ensureServiceRunning()
+    if (!isRunning) {
+        throw new Error('Python dubbing service could not be started.')
+    }
+
+    const body = {
+        videoPath,
+        segments,
+        targetLang,
+        engine,
+        voiceGender,
+        bgMode,
+        voiceReferencePath,
+        voiceProfileDir,
+        unloadIdleModel: Boolean(unloadIdleModel)
+    }
+    if (device) body.device = device
+
+    const res = await fetch(`${PYTHON_SERVICE_URL}/dub`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+    })
+
+    if (!res.ok) {
+        const errData = await res.json().catch(() => null)
+        const errText = errData?.detail || (await res.text().catch(() => 'Python dub service error'))
+        throw new Error(errText)
+    }
+
+    const data = await res.json()
+    return data.job_id
+}
+
+export async function pollJobStatus(jobId) {
+    const res = await fetch(`${PYTHON_SERVICE_URL}/status/${encodeURIComponent(jobId)}`)
+    if (!res.ok) {
+        throw new Error('Job not found')
+    }
+    return await res.json()
+}
+
+export async function cancelJob(jobId) {
+    try {
+        await fetch(`${PYTHON_SERVICE_URL}/job/${encodeURIComponent(jobId)}`, {
+            method: 'DELETE'
+        })
+    } catch { }
+}
+
+export async function setServiceDevice(device, unloadIdleModel) {
+    const isUp = await isServiceRunning()
+    if (!isUp) {
+        return {
+            service_running: false,
+            preference: device
+        }
+    }
+    const res = await fetch(`${PYTHON_SERVICE_URL}/set-device`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ device, unloadIdleModel })
+    })
+    if (!res.ok) throw new Error('Failed to update dubbing device')
+    return await res.json()
+}
+
+export async function unloadServiceModels() {
+    const isUp = await isServiceRunning()
+    if (!isUp) return { success: true, model_loaded: false }
+    const res = await fetch(`${PYTHON_SERVICE_URL}/unload-models`, { method: 'POST' })
+    if (!res.ok) return { success: false }
+    return await res.json()
+}
+
 export async function transcribeWithPythonService({ videoPath, language, modelName = 'large-v3-turbo' }) {
     const isRunning = await ensureServiceRunning()
     if (!isRunning) {
         return null
     }
 
-    const pyRes = await fetch('http://127.0.0.1:9475/transcribe', {
+    const pyRes = await fetch(`${PYTHON_SERVICE_URL}/transcribe`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

@@ -54,6 +54,36 @@ export const SPOKEN_COURSE_LANGUAGES: readonly SupportedLanguage[] = SUPPORTED_L
   (l) => !l.requiresCloudKey,
 );
 
+export const XTTS_CLONE_SUPPORTED_CODES = new Set<string>([
+  "en",
+  "ar",
+  "ar-eg",
+  "ar-sa",
+  "es",
+  "fr",
+  "de",
+  "pt",
+  "it",
+  "ja",
+  "zh",
+  "ko",
+  "ru",
+  "hi",
+  "tr",
+  "nl",
+  "pl",
+  "cs",
+  "hu",
+]);
+
+export function isCloneLanguageSupported(code?: string | null): boolean {
+  const norm = normalizeLanguageCode(code);
+  return (
+    XTTS_CLONE_SUPPORTED_CODES.has(norm) ||
+    XTTS_CLONE_SUPPORTED_CODES.has(norm.split("-")[0] ?? norm)
+  );
+}
+
 const LABEL_TO_CODE = new Map<string, string>(
   SUPPORTED_LANGUAGES.flatMap((lang) => [
     [lang.code.toLowerCase(), lang.code],

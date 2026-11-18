@@ -31,7 +31,7 @@ export function AiJobTraceCard({
   const stepsListRef = useRef<HTMLDivElement>(null);
   const [railHeight, setRailHeight] = useState(0);
 
-  const trackLabel = `${getLanguageName(job.targetLanguage)} · AI`;
+  const trackLabel = `${getLanguageName(job.targetLanguage)} · ${job.mode === "dub" ? "Dub" : "AI"}`;
   const steps = job.steps.length
     ? job.steps
     : [

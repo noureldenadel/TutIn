@@ -8,7 +8,6 @@ import {
     saveCaptionFile,
     loadCaptionChunks,
     listVideoLanguages,
-    deleteTtsCompanionFile,
     normalizeSubtitleSources,
     resolveSubtitleSourceEntry,
     buildTrackId,
@@ -118,7 +117,6 @@ function reconcileVideoSubtitleSources(videoMeta) {
         try {
             const files = fs.readdirSync(vaultCaptionsDir)
             for (const f of files) {
-                if (f.includes('.tts.') || f.endsWith('.source.vtt')) continue
                 if (!f.startsWith(videoBaseName) || !f.endsWith('.vtt')) continue
                 const suffix = f.slice(videoBaseName.length)
                 if (!/^(?:\.|-(?:generated|u\d+)\.)/i.test(suffix)) continue
@@ -148,7 +146,6 @@ function reconcileVideoSubtitleSources(videoMeta) {
             try {
                 const files = fs.readdirSync(transcriptsDir)
                 for (const f of files) {
-                    if (f.includes('.tts.')) continue
                     if (!f.startsWith(id) || !f.endsWith('.json')) continue
                     const rest = f.slice(id.length, -5)
                     if (!/^(?:\.|-(?:generated|u\d+)\.)[a-z0-9\-]+$/i.test(rest)) continue
@@ -416,7 +413,6 @@ router.put('/:videoId', (req, res) => {
         }
 
         const filePath = saveCaptionFile(videoMeta, targetLang, chunks, 'generated', 1)
-        deleteTtsCompanionFile(req.params.videoId, targetLang, videoMeta)
 
         const trackId = buildTrackId(targetLang, 'generated', 1)
         const prevAiTrack = existingSources.find(s => s.id === trackId)
@@ -494,7 +490,6 @@ router.post('/:videoId/transcribe', async (req, res) => {
         }
 
         const filePath = saveCaptionFile(videoMeta, targetLang, chunks, 'generated', 1)
-        deleteTtsCompanionFile(req.params.videoId, targetLang, videoMeta)
 
         const trackId = buildTrackId(targetLang, 'generated', 1)
         const prevAiTrack = existingSources.find(s => s.id === trackId)
@@ -638,7 +633,6 @@ router.post('/:videoId/translate', async (req, res) => {
         }
 
         const filePath = saveCaptionFile(videoMeta, targetLang, translatedChunks, 'generated', 1)
-        deleteTtsCompanionFile(req.params.videoId, targetLang, videoMeta)
 
         const trackId = buildTrackId(targetLang, 'generated', 1)
         const prevAiTrack = existingSources.find(s => s.id === trackId)
@@ -907,13 +901,6 @@ router.delete('/:videoId', (req, res) => {
             const cachePath = getCacheFilePath(req.params.videoId, source.lang, source.origin, source.version || 1)
             if (fs.existsSync(cachePath)) fs.unlinkSync(cachePath)
         } catch { }
-
-        // If AI track was deleted, also remove TTS companion
-        if (source.origin === 'generated') {
-            try {
-                deleteTtsCompanionFile(req.params.videoId, source.lang, videoMeta)
-            } catch { }
-        }
 
         sources.splice(sourceIndex, 1)
 

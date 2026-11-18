@@ -123,11 +123,13 @@ import {
 } from "@/lib/app-settings";
 import { formatTrackDisplayLabel, getLanguageLabel, getLanguageName } from "@/lib/languages";
 import {
+  DUB_UPDATED_EVENT,
   TRANSCRIPT_UPDATED_EVENT,
   deleteSubtitleTrack,
   setSubtitleTrackMaster,
   setSubtitleTrackSource,
   useVideoTranscriptJob,
+  type DubTrackMeta,
 } from "@/lib/transcript-ai";
 import { TranscriptTranslateModal } from "@/components/modals/transcript-translate-modal";
 import { AiJobTraceCard } from "@/components/shared/ai-job-trace";
@@ -430,6 +432,8 @@ export function CoursePlayer({
   const pointerBoostActiveRef = useRef(false);
   const suppressNextVideoClickUntilRef = useRef(0);
   const [dubLanguages, setDubLanguages] = useState<string[]>([]);
+  const [dubTracksMeta, setDubTracksMeta] = useState<DubTrackMeta[]>([]);
+  const [dubRefreshTick, setDubRefreshTick] = useState(0);
   const [selectedDubLang, setSelectedDubLang] = useState<string>(
     () => readCourseUiPrefs(String(course.id)).dubLang || "original",
   );
@@ -876,6 +880,25 @@ export function CoursePlayer({
     window.addEventListener(TRANSCRIPT_UPDATED_EVENT, onTranscriptUpdated);
     return () => window.removeEventListener(TRANSCRIPT_UPDATED_EVENT, onTranscriptUpdated);
   }, [currentLesson?.lessonId]);
+
+  useEffect(() => {
+    const onDubUpdated = (e: Event) => {
+      const detail = (
+        e as CustomEvent<{ videoId?: string; targetLang?: string; track?: DubTrackMeta | null }>
+      ).detail;
+      if (!detail?.videoId || detail.videoId === currentLesson?.lessonId) {
+        if (detail?.targetLang) {
+          const nextDub = detail.targetLang.toLowerCase();
+          lastDubLangRef.current = nextDub;
+          setSelectedDubLang(nextDub);
+          updateCourseUiPrefs(String(course.id), { dubLang: nextDub });
+        }
+        setDubRefreshTick((n) => n + 1);
+      }
+    };
+    window.addEventListener(DUB_UPDATED_EVENT, onDubUpdated);
+    return () => window.removeEventListener(DUB_UPDATED_EVENT, onDubUpdated);
+  }, [course.id, currentLesson?.lessonId]);
 
   // Fetch available subtitle/transcript tracks & saved summary for active lesson
   useEffect(() => {
@@ -1598,12 +1621,60 @@ export function CoursePlayer({
     };
   }, [curriculumLoading, isEmbeddedPlayer, isExternalResourceOnly, currentLesson?.lessonId]);
 
+  const activeDubTrackMeta = useMemo(
+    () =>
+      selectedDubLang === "original"
+        ? null
+        : (dubTracksMeta.find((t) => t.language.toLowerCase() === selectedDubLang.toLowerCase()) ??
+          null),
+    [dubTracksMeta, selectedDubLang],
+  );
+  const activeDubTrackMetaRef = useRef<DubTrackMeta | null>(null);
+  activeDubTrackMetaRef.current = activeDubTrackMeta;
+
+  const applyVideoDubVolumeAndDucking = useCallback((v: HTMLVideoElement, isDubActive: boolean) => {
+    if (!isDubActive) {
+      v.muted = mutedRef.current;
+      v.volume = volumeRef.current;
+      return;
+    }
+    if (mutedRef.current) {
+      v.muted = true;
+      return;
+    }
+    const meta = activeDubTrackMetaRef.current;
+    const intervals = meta?.speechIntervals;
+    // If Demucs music separation was baked into the MP3, or no speech intervals exist, mute original video completely
+    if (meta?.bgMode === "demucs" || !Array.isArray(intervals) || intervals.length === 0) {
+      v.muted = true;
+      return;
+    }
+    // Smart Live Auto-Ducking: mute original video while dubbed voice speaks so voices never overlap;
+    // un-duck softly during non-speech tutorial pauses so demos, clicks, and music breaks remain audible
+    const t = v.currentTime || 0;
+    let isSpeaking = false;
+    for (let i = 0; i < intervals.length; i++) {
+      const pair = intervals[i];
+      if (!pair) continue;
+      if (t >= pair[0] - 0.12 && t <= pair[1] + 0.22) {
+        isSpeaking = true;
+        break;
+      }
+      if (pair[0] - 0.12 > t) break;
+    }
+    if (isSpeaking) {
+      v.muted = true;
+    } else {
+      v.muted = false;
+      v.volume = Math.max(0, Math.min(1, volumeRef.current * 0.45));
+    }
+  }, []);
+
   useEffect(() => {
     const isDubActive = !isEmbeddedPlayer && selectedDubLang !== "original";
     const v = videoRef.current;
     if (v) {
-      v.volume = volume;
-      v.muted = isDubActive ? true : muted;
+      applyVideoDubVolumeAndDucking(v, isDubActive);
     }
     const a = dubAudioRef.current;
     if (a) {
@@ -1614,10 +1685,12 @@ export function CoursePlayer({
     volume,
     muted,
     selectedDubLang,
+    activeDubTrackMeta,
     isEmbeddedPlayer,
     isExternalResourceOnly,
     curriculumLoading,
     currentLesson?.lessonId,
+    applyVideoDubVolumeAndDucking,
   ]);
   useEffect(() => {
     syncMediaPlaybackRate(effectiveSpeed);
@@ -1625,33 +1698,40 @@ export function CoursePlayer({
 
   useEffect(() => {
     const lessonId = currentLesson?.lessonId;
-    setSelectedDubLang("original");
     if (!lessonId || isEmbeddedPlayer) {
+      setSelectedDubLang("original");
       setDubLanguages([]);
+      setDubTracksMeta([]);
       return;
     }
 
     let cancelled = false;
     fetch(apiUrl(`/api/dub/video/${encodeURIComponent(lessonId)}/languages`))
-      .then((res) => (res.ok ? res.json() : { languages: [] }))
-      .then((data: { languages?: string[] }) => {
+      .then((res) => (res.ok ? res.json() : { languages: [], tracks: [] }))
+      .then((data: { languages?: string[]; tracks?: DubTrackMeta[] }) => {
         if (cancelled) return;
         const list = Array.isArray(data.languages)
           ? data.languages.map((l) => String(l).trim().toLowerCase()).filter(Boolean)
           : [];
         setDubLanguages(list);
+        setDubTracksMeta(Array.isArray(data.tracks) ? data.tracks : []);
         if (lastDubLangRef.current !== "original" && list.includes(lastDubLangRef.current)) {
           setSelectedDubLang(lastDubLangRef.current);
+        } else {
+          setSelectedDubLang("original");
         }
       })
       .catch(() => {
-        if (!cancelled) setDubLanguages([]);
+        if (!cancelled) {
+          setDubLanguages([]);
+          setDubTracksMeta([]);
+        }
       });
 
     return () => {
       cancelled = true;
     };
-  }, [currentLesson?.lessonId, isEmbeddedPlayer]);
+  }, [currentLesson?.lessonId, isEmbeddedPlayer, dubRefreshTick]);
 
   useEffect(() => {
     const lessonId = currentLesson?.lessonId;
@@ -1676,7 +1756,7 @@ export function CoursePlayer({
     const srcUrl = apiUrl(
       `/api/dub/audio/${encodeURIComponent(lessonId)}?lang=${encodeURIComponent(selectedDubLang)}`,
     );
-    v.muted = true;
+    applyVideoDubVolumeAndDucking(v, true);
     a.volume = volumeRef.current;
     a.muted = mutedRef.current;
     a.playbackRate = v.playbackRate || effectiveSpeedRef.current;
@@ -1696,7 +1776,7 @@ export function CoursePlayer({
     };
 
     const handlePlay = () => {
-      v.muted = true;
+      applyVideoDubVolumeAndDucking(v, true);
       a.playbackRate = v.playbackRate || effectiveSpeedRef.current;
       syncTimeFromVideo();
       if (a.readyState >= 1 && (v.currentTime || 0) < (a.duration || Infinity) - 0.15) {
@@ -1710,6 +1790,7 @@ export function CoursePlayer({
     };
 
     const handleSeek = () => {
+      applyVideoDubVolumeAndDucking(v, true);
       syncTimeFromVideo();
     };
 
@@ -1718,7 +1799,7 @@ export function CoursePlayer({
     };
 
     const handleTimeUpdate = () => {
-      v.muted = true;
+      applyVideoDubVolumeAndDucking(v, true);
       if (v.paused || v.ended || a.readyState < 2) return;
       const limit = Number.isFinite(a.duration) && a.duration > 0 ? a.duration : Infinity;
       if (v.currentTime >= limit - 0.15) return;
@@ -1745,7 +1826,7 @@ export function CoursePlayer({
     };
 
     const handleVideoLoadedMetadata = () => {
-      v.muted = true;
+      applyVideoDubVolumeAndDucking(v, true);
       syncTimeFromVideo();
     };
 
@@ -1784,7 +1865,7 @@ export function CoursePlayer({
       a.removeEventListener("loadedmetadata", handleAudioReady);
       a.removeEventListener("error", handleAudioError);
     };
-  }, [currentLesson?.lessonId, isEmbeddedPlayer, selectedDubLang]);
+  }, [currentLesson?.lessonId, isEmbeddedPlayer, selectedDubLang, applyVideoDubVolumeAndDucking]);
 
   const goTo = useCallback(
     (i: number) => {
@@ -2255,7 +2336,7 @@ export function CoursePlayer({
   } | null>(null);
   const [transcriptModalState, setTranscriptModalState] = useState<{
     open: boolean;
-    mode: "transcribe" | "translate";
+    mode: "transcribe" | "translate" | "dub";
     targetLang?: string | undefined;
   }>({ open: false, mode: "transcribe" });
   const [spokenCourseLang, setSpokenCourseLang] = useState<string>(() =>
@@ -2396,14 +2477,16 @@ export function CoursePlayer({
         if (selectedDubLang === lang) {
           lastDubLangRef.current = "original";
           setSelectedDubLang("original");
+          updateCourseUiPrefs(String(course.id), { dubLang: "original" });
         }
         setDubLanguages((prev) => prev.filter((l) => l !== lang));
+        setDubTracksMeta((prev) => prev.filter((t) => t.language !== lang));
         toast.success("Dub track removed");
       } catch (err) {
         toast.error(err instanceof Error ? err.message : "Failed to remove dub track");
       }
     },
-    [currentLesson, selectedDubLang],
+    [course.id, currentLesson, selectedDubLang],
   );
 
   shortcutKeyUpHandlerRef.current = (e: KeyboardEvent) => {
@@ -3455,6 +3538,7 @@ export function CoursePlayer({
                 });
               }}
               dubLanguages={dubLanguages}
+              dubTracksMeta={dubTracksMeta}
               selectedDubLang={selectedDubLang}
               onSelectDubLang={(nextDubLang) => {
                 lastDubLangRef.current = nextDubLang;
@@ -3501,6 +3585,7 @@ export function CoursePlayer({
                           is_master: tr.is_master,
                           is_ai_source: tr.is_ai_source,
                         })),
+                        dubLanguages,
                         hasTranscript: availableTracks.length > 0,
                       },
                     ]}
@@ -3508,8 +3593,13 @@ export function CoursePlayer({
                     defaultTargetLang={transcriptModalState.targetLang}
                     onCourseLanguageChanged={(nextLang) => setSpokenCourseLang(nextLang)}
                     onJobQueued={(targetLang, mode) => {
-                      const nextId = `${targetLang}:${mode === "translate" || mode === "transcribe" ? "generated" : "uploaded"}`;
-                      pendingTrackSelectionRef.current = nextId;
+                      if (mode === "dub") {
+                        lastDubLangRef.current = targetLang.toLowerCase();
+                        pendingTrackSelectionRef.current = `${targetLang}:generated`;
+                      } else {
+                        const nextId = `${targetLang}:${mode === "translate" || mode === "transcribe" ? "generated" : "uploaded"}`;
+                        pendingTrackSelectionRef.current = nextId;
+                      }
                     }}
                   />
                 ) : null
@@ -5096,6 +5186,7 @@ function TranscriptTab({
   selectedLang,
   onSelectLang,
   dubLanguages,
+  dubTracksMeta,
   selectedDubLang,
   onSelectDubLang,
   onDeleteDubTrack,
@@ -5119,6 +5210,7 @@ function TranscriptTab({
   selectedLang: string | null;
   onSelectLang: (trackId: string) => void;
   dubLanguages: string[];
+  dubTracksMeta: DubTrackMeta[];
   selectedDubLang: string;
   onSelectDubLang: (lang: string) => void;
   onDeleteDubTrack: (lang: string) => void;
@@ -5127,7 +5219,7 @@ function TranscriptTab({
   time: number;
   seek: (t: number, options?: { minLockTime?: number }) => void;
   onImportSubtitles: () => void;
-  onOpenAiModal: (mode: "transcribe" | "translate", targetLang?: string) => void;
+  onOpenAiModal: (mode: "transcribe" | "translate" | "dub", targetLang?: string) => void;
   onSetMaster: (trackId: string) => void;
   onSetSource: (trackId: string) => void;
   onDeleteTrack: (trackId: string) => void;
@@ -5241,7 +5333,11 @@ function TranscriptTab({
   const isJobActive = Boolean(
     activeJob && (activeJob.status === "running" || activeJob.status === "queued"),
   );
-  const activeJobTrackLabel = activeJob ? `${getLanguageName(activeJob.targetLanguage)} · AI` : "";
+  const isSubtitleJobActive = Boolean(isJobActive && activeJob?.mode !== "dub");
+  const isDubJobActive = Boolean(isJobActive && activeJob?.mode === "dub");
+  const activeJobTrackLabel = activeJob
+    ? `${getLanguageName(activeJob.targetLanguage)} · ${activeJob.mode === "dub" ? "Dub" : "AI"}`
+    : "";
 
   return (
     <div className="flex h-full flex-col">
@@ -5253,15 +5349,17 @@ function TranscriptTab({
                 variant="secondary"
                 className={cn(
                   "t-resize relative min-w-0 flex-1 justify-between overflow-hidden rounded-lg bg-secondary/75 hover:bg-secondary",
-                  isJobActive && "ai-shimmer-row border border-primary/25",
+                  isSubtitleJobActive && "ai-shimmer-row border border-primary/25",
                 )}
               >
                 <span className="flex min-w-0 items-center gap-2 truncate">
                   <Subtitles className="shrink-0 text-primary" />
-                  <span className={cn("truncate", isJobActive && "ai-shimmer-text font-medium")}>
+                  <span
+                    className={cn("truncate", isSubtitleJobActive && "ai-shimmer-text font-medium")}
+                  >
                     {currentTrack
                       ? currentTrack.label
-                      : isJobActive
+                      : isSubtitleJobActive
                         ? activeJobTrackLabel
                         : "No subtitles"}
                   </span>
@@ -5277,7 +5375,7 @@ function TranscriptTab({
                   )}
                 </span>
                 <ChevronDown className="ml-2 shrink-0 text-muted-foreground" />
-                {isJobActive && activeJob && (
+                {isSubtitleJobActive && activeJob && (
                   <span
                     aria-hidden="true"
                     className="pointer-events-none absolute inset-x-0 bottom-0 h-0.5 bg-secondary/60"
@@ -5371,11 +5469,11 @@ function TranscriptTab({
                 );
               })}
 
-              {isJobActive && activeJob && (
+              {isSubtitleJobActive && activeJob && (
                 <AiJobTraceCard job={activeJob} compact className="mt-0.5" />
               )}
 
-              {(availableTracks.length > 0 || isJobActive) && <DropdownMenuSeparator />}
+              {(availableTracks.length > 0 || isSubtitleJobActive) && <DropdownMenuSeparator />}
               <DropdownMenuItem
                 className="rounded-md text-primary focus:text-primary"
                 onClick={() =>
@@ -5405,17 +5503,33 @@ function TranscriptTab({
             <DropdownMenuTrigger asChild>
               <Button
                 variant="secondary"
-                className="min-w-0 flex-1 justify-between rounded-lg bg-secondary/75 hover:bg-secondary"
+                className={cn(
+                  "t-resize relative min-w-0 flex-1 justify-between overflow-hidden rounded-lg bg-secondary/75 hover:bg-secondary",
+                  isDubJobActive && "ai-shimmer-row border border-primary/25",
+                )}
               >
                 <span className="flex min-w-0 items-center gap-2 truncate">
                   <Mic className="shrink-0 text-primary" />
-                  <span className="truncate">
-                    {selectedDubLang === "original"
-                      ? "Original audio"
-                      : `${getLanguageName(selectedDubLang)} · Dub`}
+                  <span className={cn("truncate", isDubJobActive && "ai-shimmer-text font-medium")}>
+                    {isDubJobActive
+                      ? activeJobTrackLabel
+                      : selectedDubLang === "original"
+                        ? "Original audio"
+                        : `${getLanguageName(selectedDubLang)} · Dub`}
                   </span>
                 </span>
-                <ChevronDown className="shrink-0 text-muted-foreground" />
+                <ChevronDown className="ml-2 shrink-0 text-muted-foreground" />
+                {isDubJobActive && activeJob && (
+                  <span
+                    aria-hidden="true"
+                    className="pointer-events-none absolute inset-x-0 bottom-0 h-0.5 bg-secondary/60"
+                  >
+                    <span
+                      className="block h-full bg-gradient-to-r from-primary via-chart-2 to-chart-1 transition-all duration-300"
+                      style={{ width: `${Math.max(6, activeJob.progress)}%` }}
+                    />
+                  </span>
+                )}
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent
@@ -5436,6 +5550,9 @@ function TranscriptTab({
               </DropdownMenuItem>
               {dubLanguages.map((lang) => {
                 const isSelected = selectedDubLang === lang;
+                const trackMeta = dubTracksMeta.find(
+                  (t) => t.language.toLowerCase() === lang.toLowerCase(),
+                );
                 return (
                   <DropdownMenuItem
                     key={lang}
@@ -5447,6 +5564,11 @@ function TranscriptTab({
                         className={cn("size-3.5 shrink-0 text-primary", !isSelected && "opacity-0")}
                       />
                       <span className="truncate">{getLanguageName(lang)} · Dub</span>
+                      {trackMeta?.engine && (
+                        <span className="rounded-sm bg-secondary px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+                          {trackMeta.engine === "clone" ? "Cloned" : "Neural"}
+                        </span>
+                      )}
                     </span>
                     {videoId && (
                       <div
@@ -5473,6 +5595,22 @@ function TranscriptTab({
                   </DropdownMenuItem>
                 );
               })}
+
+              {isDubJobActive && activeJob && (
+                <AiJobTraceCard job={activeJob} compact className="mt-0.5" />
+              )}
+
+              {!youtubeId && (
+                <>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    className="rounded-md text-primary focus:text-primary"
+                    onClick={() => onOpenAiModal("dub")}
+                  >
+                    <Sparkles /> Generate dub…
+                  </DropdownMenuItem>
+                </>
+              )}
             </DropdownMenuContent>
           </DropdownMenu>
         </div>

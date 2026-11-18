@@ -42,7 +42,7 @@ const ISO_LANG_CODES = new Set(Object.values(LANG_NAME_MAP))
  * Avoids false positives from 2-letter words in video titles (like "de", "it", "en", "hi", "no").
  */
 export function extractLangCode(filename, baseName = '') {
-    if (!filename || filename.toLowerCase().includes('.tts.')) return null
+    if (!filename) return null
     const fold = (s) => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim()
     const nameWithoutExt = fold(filename.replace(/\.(?:srt|vtt|ass|ssa|lrc|mp3|wav|json)$/i, ''))
     const foldedBase = baseName ? fold(baseName) : ''

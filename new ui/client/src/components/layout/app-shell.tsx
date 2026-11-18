@@ -278,7 +278,7 @@ function IconDock({
           >
             <div className="flex items-center justify-between gap-2 pb-2">
               <span className="ai-shimmer-text truncate text-xs font-semibold">
-                Subtitles ({activeJobs.length})
+                AI Tasks ({activeJobs.length})
               </span>
               {activeJobs.length > 1 && (
                 <button
@@ -307,8 +307,13 @@ function IconDock({
                         {job.videoTitle}
                       </Link>
                       <span className="block truncate text-[10.5px] text-muted-foreground">
-                        {job.mode === "transcribe" ? "Transcribe" : "Translate"} ·{" "}
-                        {getLanguageLabel(job.targetLanguage)} · AI
+                        {job.mode === "transcribe"
+                          ? "Transcribe"
+                          : job.mode === "dub"
+                            ? "Dub"
+                            : "Translate"}{" "}
+                        · {getLanguageLabel(job.targetLanguage)} ·{" "}
+                        {job.mode === "dub" ? "Voice" : "AI"}
                       </span>
                     </div>
                   }

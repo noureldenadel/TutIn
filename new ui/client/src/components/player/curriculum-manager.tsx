@@ -32,6 +32,7 @@ import {
 } from "@/lib/app-settings";
 import { formatTrackDisplayLabel, getLanguageLabel, getOriginLabel } from "@/lib/languages";
 import {
+  DUB_UPDATED_EVENT,
   TRANSCRIPT_UPDATED_EVENT,
   cancelAllTranscriptJobs,
   cancelTranscriptJob,
@@ -211,7 +212,7 @@ export function CurriculumManager({ course: initialCourse }: { course: Course })
   const [expandedJobVideoId, setExpandedJobVideoId] = useState<string | null>(null);
   const [aiModalState, setAiModalState] = useState<{
     open: boolean;
-    mode: "transcribe" | "translate";
+    mode: "transcribe" | "translate" | "dub";
     lessons: TranscriptModalLessonItem[];
   }>({ open: false, mode: "transcribe", lessons: [] });
 
@@ -299,11 +300,15 @@ export function CurriculumManager({ course: initialCourse }: { course: Course })
   }, [course.id]);
 
   useEffect(() => {
-    const onTranscriptUpdated = () => {
+    const onTranscriptOrDubUpdated = () => {
       void loadCurriculum(true);
     };
-    window.addEventListener(TRANSCRIPT_UPDATED_EVENT, onTranscriptUpdated);
-    return () => window.removeEventListener(TRANSCRIPT_UPDATED_EVENT, onTranscriptUpdated);
+    window.addEventListener(TRANSCRIPT_UPDATED_EVENT, onTranscriptOrDubUpdated);
+    window.addEventListener(DUB_UPDATED_EVENT, onTranscriptOrDubUpdated);
+    return () => {
+      window.removeEventListener(TRANSCRIPT_UPDATED_EVENT, onTranscriptOrDubUpdated);
+      window.removeEventListener(DUB_UPDATED_EVENT, onTranscriptOrDubUpdated);
+    };
   }, [loadCurriculum]);
 
   const allLessonsFlat = useMemo(() => modules.flatMap((m) => m.lessons), [modules]);
@@ -377,10 +382,14 @@ export function CurriculumManager({ course: initialCourse }: { course: Course })
     (lesson: CourseLessonItem): TranscriptModalLessonItem => ({
       id: lesson.lessonId,
       title: lesson.title,
+      youtubeId: lesson.youtubeId,
       subtitleSources: lesson.subtitleSources,
       availableLanguages: lesson.subtitleSources
         .map((s) => s.lang)
         .filter((l): l is string => typeof l === "string" && l.length > 0),
+      dubLanguages: (lesson.dubbedTracks ?? [])
+        .map((t) => (typeof t["language"] === "string" ? t["language"] : null))
+        .filter((l): l is string => Boolean(l)),
       hasTranscript: lesson.subtitleSources.length > 0,
     }),
     [],
@@ -1150,7 +1159,8 @@ export function CurriculumManager({ course: initialCourse }: { course: Course })
                                     className="flex items-center gap-1.5 rounded text-left focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                                   >
                                     <span className="ai-shimmer-text max-w-[120px] truncate font-medium">
-                                      {getLanguageLabel(lessonJob.targetLanguage)} · AI
+                                      {getLanguageLabel(lessonJob.targetLanguage)} ·{" "}
+                                      {lessonJob.mode === "dub" ? "Dub" : "AI"}
                                     </span>
                                     <span className="font-mono font-semibold text-primary tabular-nums">
                                       {lessonJob.status === "queued"
@@ -1372,6 +1382,21 @@ export function CurriculumManager({ course: initialCourse }: { course: Course })
                                       <Sparkles className="size-3.5 text-primary" />
                                       <span>Generate / translate AI…</span>
                                     </DropdownMenuItem>
+                                    {!lesson.youtubeId && (
+                                      <DropdownMenuItem
+                                        className="rounded-md"
+                                        onClick={() =>
+                                          setAiModalState({
+                                            open: true,
+                                            mode: "dub",
+                                            lessons: [toModalLesson(lesson)],
+                                          })
+                                        }
+                                      >
+                                        <Mic className="size-3.5 text-primary" />
+                                        <span>Generate dub…</span>
+                                      </DropdownMenuItem>
+                                    )}
                                     <DropdownMenuItem
                                       className="rounded-md"
                                       onClick={() => triggerCaptionUpload(lesson)}

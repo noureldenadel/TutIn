@@ -11,7 +11,7 @@
 - **Data Storage:** Your library, watch history, roadmaps, settings, and canvas boards live in `%APPDATA%/TutIn/tutin.db` (or `TUTIN_DATA_DIR/tutin.db`). Local folder courses also sync portable artifacts inside `<courseFolder>/.tutin/`.
 
 > [!NOTE]
-> AI transcription, neural subtitle translation, AI summarization, and XTTS voice dubbing are intentionally disabled in v6.0 while being rebuilt from scratch. Manual `.srt`/`.vtt` subtitles, Smart Captions batch matching, and viewing existing `.tutin/summaries/*.md` files remain active.
+> AI speech-to-text transcription (`faster-whisper` + WebGPU/WASM fallback), 29-language neural/dialect subtitle translation (`NLLB-200` + OpenRouter), and dual-engine AI voice dubbing (fast `edge-tts` neural voices + local `XTTS-v2` instructor voice cloning with `Auto-duck` / `Separate music` background modes) are active alongside manual `.srt`/`.vtt` subtitles and Smart Captions batch matching. AI lecture summarization remains deferred.
 
 ---
 
@@ -33,7 +33,7 @@
 ## 3. Study Player (`/learn/$courseId`)
 
 - **Formats:** Plays standard HTML5 formats (`.mp4`, `.mkv`, `.webm`, `.mov`, `.m4v`) and streams MPEG-TS (`.ts`) lectures via `mpegts.js`.
-- **Player Controls:** Play/pause (tap video, press `Space`/`K`, or hold primary mouse/touch on video `500ms` for temporary `2×` speed), double-click viewport for fullscreen, previous/next lesson, hover volume slider, playback speed/settings, `.srt`/`.vtt` subtitles (adjust `Size` `S`/`M`/`L` and `Box`/`Outline` style in the player's Audio & Subtitles menu, drag captions anywhere on the video stage to reposition, double-click captions or click `Reset` to recenter) + `Import subtitles…` (`SmartCaptionsModal` auto-matches sibling files in bulk), native Browser Picture-in-Picture (`P` / `I`), fullscreen (`F`), and collapsible study sidebar (`T` or toolbar toggle: `Playlist`, `Notes`, `Transcript`, `Summary`).
+- **Player Controls:** Play/pause (tap video, press `Space`/`K`, or hold primary mouse/touch on video `500ms` for temporary `2×` speed), double-click viewport for fullscreen, previous/next lesson, hover volume slider, playback speed/settings, Audio & Subtitles track switcher (`Original` vs dubbed `.mp3` tracks + `.srt`/`.vtt` subtitles, with `Size` `S`/`M`/`L` and `Box`/`Outline` style controls, drag-to-reposition captions, and double-click/`Reset` to recenter), native Browser Picture-in-Picture (`P` / `I`), fullscreen (`F`), and collapsible study sidebar (`T` or toolbar toggle: `Playlist`, `Notes`, `Transcript`, where you can generate/translate subtitles, import `.srt`/`.vtt`, or dub lectures in `Auto-duck` or `Separate music` mode).
 - **Keyboard Shortcuts** *(toggleable in Settings -> Shortcuts)*:
   - **Playback:** `Space` / `K` play/pause, hold `Space` (`220ms`) for temporary `2×` speed, `Left` / `Right` or `J` / `L` seek, `,` / `.` step 1 frame when paused, `Up` / `Down` adjust volume, `M` mute, `C` toggle subtitles, `T` toggle sidebar (Theater view), `P` / `I` toggle Picture-in-Picture, `F` / double-click toggle fullscreen, `Shift+N` / `Shift+P` next/previous lesson, `<` / `>` adjust playback speed, `Home` / `End` / `0–9` jump across intervals.
 ---
@@ -67,6 +67,8 @@
 ## 6. Settings & Workspace Backups
 
 - **General:** `Appearance` (`Light` / `Dark` / `System`), `Theme` palette presets (`Obsidian`, `Zinc`, `Neutral`, `Stone`, `Graphite`, `Classic`), `Resume playback`, `Mark complete when watched` (`90%` / `95%` / `100%`), `Progress calculation` (`By Videos` / `By Duration` with server recalculation), and `Auto-detect covers`.
+- **AI & APIs:** Select Whisper transcription device/model and store OpenRouter + Google API keys for dialect translation, YouTube, and Google Drive intake.
+- **Voice:** Configure default AI dubbing engine (`Neural · Fast` vs `Clone`), neural gender (`Male` / `Female`), background audio mode (`Auto-duck` vs `Separate music`), cloning compute device (`Auto` / `GPU` / `CPU`), idle VRAM unload toggle, and view local AI model disk usage.
 - **Shortcuts:** Toggle playback shortcuts and inspect Player, Canvas, Notes Editor, and Global (`Ctrl+K` command search) keybindings.
 - **Data:** View SQLite note/course counts, **Export** full workspace JSON (`courses`, `modules`, `videos`, `notes`, `analytics`, `roadmaps`, `settings`, Canvas v2 boards), **Import** backups, or **Reset** local workspace data safely.
 - **About:** View current build (`TutIn v6.0`) and replay the 4-step **Welcome guide** anytime.

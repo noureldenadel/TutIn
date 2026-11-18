@@ -55,12 +55,72 @@ export function getCaptionsDir(courseFolder, relModulePath = '') {
 }
 
 /**
- * Returns (and creates) the dubs directory inside .tutin (or fallback to legacy Dubs/).
+ * Returns (and creates) the dubs directory inside .tutin/dubs.
  */
 export function getDubsDir(courseFolder, relModulePath = '') {
     if (!courseFolder) return null
     const vaultDir = getVaultDir(courseFolder)
     return ensureDir(path.join(vaultDir || courseFolder, 'dubs', relModulePath), 'dubs')
+}
+
+/**
+ * Returns (and creates) the course-level cached speaker voice profile directory:
+ * - Local courses: <courseFolder>/.tutin/dubs/_voice_profile
+ * - Cloud courses: %APPDATA%/TutIn/dubs/_voice_profiles/<courseId>
+ */
+export function getCourseVoiceProfileDir(courseFolder = null, courseId = 'default') {
+    if (courseFolder && fs.existsSync(courseFolder)) {
+        const vaultDir = getVaultDir(courseFolder)
+        if (vaultDir) {
+            return ensureDir(path.join(vaultDir, 'dubs', '_voice_profile'), 'voice_profile')
+        }
+    }
+    const safeCourseId = String(courseId || 'default').replace(/[^a-zA-Z0-9_-]/g, '_')
+    return ensureDir(path.join(getDataDir(), 'dubs', '_voice_profiles', safeCourseId), 'voice_profile')
+}
+
+/**
+ * One-time migration helper: if a course folder still has a legacy `Dubs/` folder
+ * or legacy `.tts.json` files from an earlier version, relocates dub MP3s into `.tutin/dubs/`
+ * and removes the legacy artifacts so zero old-version leftovers remain.
+ */
+export function migrateLegacyCourseAssets(courseFolder) {
+    if (!courseFolder || !fs.existsSync(courseFolder)) return
+    const legacyDubsRoot = path.join(courseFolder, 'Dubs')
+    if (fs.existsSync(legacyDubsRoot)) {
+        const vaultDubsRoot = path.join(courseFolder, '.tutin', 'dubs')
+        const moveRecursive = (srcDir, rel = '') => {
+            try {
+                for (const entry of fs.readdirSync(srcDir, { withFileTypes: true })) {
+                    const srcPath = path.join(srcDir, entry.name)
+                    const nextRel = rel ? path.join(rel, entry.name) : entry.name
+                    if (entry.isDirectory()) {
+                        moveRecursive(srcPath, nextRel)
+                        try { fs.rmdirSync(srcPath) } catch { }
+                    } else if (entry.isFile() && entry.name.endsWith('.mp3')) {
+                        const targetDir = ensureDir(path.join(vaultDubsRoot, rel), 'dubs')
+                        if (targetDir) {
+                            const destPath = path.join(targetDir, entry.name)
+                            if (!fs.existsSync(destPath)) {
+                                try {
+                                    fs.renameSync(srcPath, destPath)
+                                } catch {
+                                    try {
+                                        fs.copyFileSync(srcPath, destPath)
+                                        fs.unlinkSync(srcPath)
+                                    } catch { }
+                                }
+                            } else {
+                                try { fs.unlinkSync(srcPath) } catch { }
+                            }
+                        }
+                    }
+                }
+            } catch { }
+        }
+        moveRecursive(legacyDubsRoot)
+        try { fs.rmdirSync(legacyDubsRoot) } catch { }
+    }
 }
 
 /**
@@ -250,43 +310,6 @@ export function getSummaryFilePath(courseFolder, relModulePath, videoBaseName) {
     const dir = getSummariesVaultDir(courseFolder, relModulePath)
     if (!dir) return null
     return path.join(dir, `${videoBaseName}.md`)
-}
-
-/**
- * Full path for a legacy TTS companion file.
- * Kept internal so transcript deletion/replacement still cleans up legacy artifacts.
- */
-function getTtsCompanionFilePath(courseFolder, relModulePath, videoBaseName, lang) {
-    const dir = getCaptionsDir(courseFolder, relModulePath)
-    if (!dir) return null
-    const safeLang = (lang && lang !== 'source') ? lang : 'en'
-    return path.join(dir, `${videoBaseName}.${safeLang}.tts.json`)
-}
-
-/**
- * Delete stale TTS companion segments when captions for a language are replaced or re-uploaded.
- */
-export function deleteTtsCompanionFile(videoId, lang, videoMeta = {}) {
-    if (!lang) return
-    const { courseFolder, relModulePath = '', videoBaseName } = videoMeta
-    if (courseFolder && videoBaseName && fs.existsSync(courseFolder)) {
-        const ttsPath = getTtsCompanionFilePath(courseFolder, relModulePath, videoBaseName, lang)
-        if (ttsPath && fs.existsSync(ttsPath)) {
-            try {
-                fs.unlinkSync(ttsPath)
-            } catch (err) {
-                console.warn('[CourseAssets] Failed to remove vault TTS companion file:', err.message)
-            }
-        }
-    }
-    const cachePath = path.join(getTranscriptsDir(), 'tts_companion', `${videoId}.${lang}.tts.json`)
-    if (fs.existsSync(cachePath)) {
-        try {
-            fs.unlinkSync(cachePath)
-        } catch (err) {
-            console.warn('[CourseAssets] Failed to remove cached TTS companion file:', err.message)
-        }
-    }
 }
 
 // ── AppData Cache Helpers (used ONLY for Web / Cloud Stream Courses) ─────────────
@@ -518,7 +541,6 @@ export function listCourseLanguages(courseFolder) {
                     if (entry.isDirectory()) {
                         walk(path.join(current, entry.name))
                     } else if (entry.name.endsWith('.vtt')) {
-                        if (entry.name.includes('.tts.')) continue
                         const parts = entry.name.split('.')
                         if (parts.length >= 3) {
                             const l = parts[parts.length - 2]
@@ -569,40 +591,146 @@ export function listVideoLanguages(videoId, subtitleSources = [], courseFolder =
 // ── Dubbing Helpers ─────────────────────────────────────────────
 
 /**
- * List all dubbed languages available for a video.
+ * Strict filename boundary parser for dubbed MP3 files: `<videoBaseName>.<lang>.mp3`
+ * Prevents prefix collisions between e.g. "01 - Intro.mp4" and "01 - Intro to Arnold.mp4".
+ */
+export function extractDubLangFromFileName(fileName, videoBaseName) {
+    if (!fileName || !videoBaseName || !fileName.endsWith('.mp3')) return null
+    if (!fileName.startsWith(videoBaseName)) return null
+    const suffix = fileName.slice(videoBaseName.length)
+    const match = suffix.match(/^\.([a-z]{2,3}(?:-[a-z]{2,4})?)\.mp3$/i)
+    return match ? match[1].toLowerCase() : null
+}
+
+/**
+ * Full path where a dubbed MP3 should be stored for a local course video.
+ */
+export function getDubFilePath(courseFolder, relModulePath = '', videoBaseName = '', lang = 'en') {
+    const dir = getDubsDir(courseFolder, relModulePath)
+    if (!dir || !videoBaseName) return null
+    const safeLang = String(lang || 'en').trim().toLowerCase()
+    return path.join(dir, `${videoBaseName}.${safeLang}.mp3`)
+}
+
+/**
+ * Full path where dub track metadata sidecar JSON is stored for a local course video.
+ */
+export function getDubMetaFilePath(courseFolder, relModulePath = '', videoBaseName = '', lang = 'en') {
+    const dir = getDubsDir(courseFolder, relModulePath)
+    if (!dir || !videoBaseName) return null
+    const safeLang = String(lang || 'en').trim().toLowerCase()
+    return path.join(dir, `${videoBaseName}.${safeLang}.meta.json`)
+}
+
+export function getDubCacheDir() {
+    return ensureDir(path.join(getDataDir(), 'dubs'), 'dubs_cache')
+}
+
+export function getDubCacheWritePath(videoId, lang) {
+    const safeLang = String(lang || 'en').trim().toLowerCase()
+    return path.join(getDubCacheDir(), `${videoId}.${safeLang}.mp3`)
+}
+
+export function getDubCacheMetaPath(videoId, lang) {
+    const safeLang = String(lang || 'en').trim().toLowerCase()
+    return path.join(getDubCacheDir(), `${videoId}.${safeLang}.meta.json`)
+}
+
+export function getDubCachePath(videoId, lang) {
+    const p = getDubCacheWritePath(videoId, lang)
+    return fs.existsSync(p) ? p : null
+}
+
+/**
+ * Save dub track metadata sidecar (engine, bgMode, voiceGender, speechIntervals, generatedAt)
+ * in `.tutin/dubs/` for local courses or `%APPDATA%/TutIn/dubs/` for cloud courses.
+ */
+export function saveDubTrackMeta(videoMeta, lang, metaPayload) {
+    const { id, courseFolder, relModulePath = '', videoBaseName } = videoMeta
+    const safeLang = String(lang || 'en').trim().toLowerCase()
+    const isLocalCourse = Boolean(courseFolder && fs.existsSync(courseFolder))
+    const targetPath = (isLocalCourse && videoBaseName)
+        ? getDubMetaFilePath(courseFolder, relModulePath, videoBaseName, safeLang)
+        : getDubCacheMetaPath(id, safeLang)
+
+    if (!targetPath) return null
+    try {
+        fs.writeFileSync(targetPath, JSON.stringify(metaPayload, null, 2), 'utf8')
+        return targetPath
+    } catch (err) {
+        console.warn('[CourseAssets] Failed to write dub track metadata:', err.message)
+        return null
+    }
+}
+
+/**
+ * Load dub track metadata sidecar if available.
+ */
+export function loadDubTrackMeta(videoMeta, lang) {
+    const { id, courseFolder, relModulePath = '', videoBaseName } = videoMeta
+    const safeLang = String(lang || 'en').trim().toLowerCase()
+    const isLocalCourse = Boolean(courseFolder && fs.existsSync(courseFolder))
+    const targetPath = (isLocalCourse && videoBaseName)
+        ? getDubMetaFilePath(courseFolder, relModulePath, videoBaseName, safeLang)
+        : getDubCacheMetaPath(id, safeLang)
+
+    if (!targetPath || !fs.existsSync(targetPath)) return null
+    try {
+        return JSON.parse(fs.readFileSync(targetPath, 'utf8'))
+    } catch {
+        return null
+    }
+}
+
+/**
+ * Delete dub track metadata sidecar if present.
+ */
+export function deleteDubTrackMeta(videoMeta, lang) {
+    const { id, courseFolder, relModulePath = '', videoBaseName } = videoMeta
+    const safeLang = String(lang || 'en').trim().toLowerCase()
+    const candidates = []
+    if (courseFolder && videoBaseName) {
+        const vaultMeta = getDubMetaFilePath(courseFolder, relModulePath, videoBaseName, safeLang)
+        if (vaultMeta) candidates.push(vaultMeta)
+    }
+    if (id) {
+        candidates.push(getDubCacheMetaPath(id, safeLang))
+    }
+    for (const p of candidates) {
+        try {
+            if (p && fs.existsSync(p)) fs.unlinkSync(p)
+        } catch { }
+    }
+}
+
+/**
+ * List all dubbed languages available for a video (strictly inside .tutin/dubs/ for local courses).
  */
 export function listDubLanguages(videoId, courseFolder = null, relModulePath = '', videoBaseName = '') {
     const langs = new Set()
     const isLocalCourse = Boolean(courseFolder && fs.existsSync(courseFolder))
 
     if (isLocalCourse && videoBaseName) {
-        const checkDubs = (baseDir) => {
-            const modDir = path.join(baseDir, relModulePath)
-            if (fs.existsSync(modDir)) {
-                try {
-                    fs.readdirSync(modDir)
-                        .filter(f => f.startsWith(videoBaseName) && f.endsWith('.mp3'))
-                        .forEach(f => {
-                            const parts = f.split('.')
-                            if (parts.length >= 3) langs.add(parts[parts.length - 2])
-                        })
-                } catch (err) {
-                    console.warn(`[CourseAssets] Failed to list vault dubs (${modDir}):`, err.message)
+        migrateLegacyCourseAssets(courseFolder)
+        const modDir = path.join(courseFolder, '.tutin', 'dubs', relModulePath)
+        if (fs.existsSync(modDir)) {
+            try {
+                for (const f of fs.readdirSync(modDir)) {
+                    const lang = extractDubLangFromFileName(f, videoBaseName)
+                    if (lang) langs.add(lang)
                 }
+            } catch (err) {
+                console.warn(`[CourseAssets] Failed to list vault dubs (${modDir}):`, err.message)
             }
         }
-        checkDubs(path.join(courseFolder, '.tutin', 'dubs'))
-        checkDubs(path.join(courseFolder, 'Dubs'))
     } else if (!isLocalCourse) {
         const dubsDir = path.join(getDataDir(), 'dubs')
         if (fs.existsSync(dubsDir)) {
             try {
-                fs.readdirSync(dubsDir)
-                    .filter(f => f.startsWith(videoId) && f.endsWith('.mp3'))
-                    .forEach(f => {
-                        const match = f.match(new RegExp(`^${videoId}\\.([a-z]{2,3}(?:-[a-z]{2,4})?)\\.mp3$`))
-                        if (match) langs.add(match[1])
-                    })
+                for (const f of fs.readdirSync(dubsDir)) {
+                    const lang = extractDubLangFromFileName(f, videoId)
+                    if (lang) langs.add(lang)
+                }
             } catch (err) {
                 console.warn(`[CourseAssets] Failed to list cached dubs (${dubsDir}):`, err.message)
             }
@@ -613,31 +741,22 @@ export function listDubLanguages(videoId, courseFolder = null, relModulePath = '
 }
 
 /**
- * Get path to dubbed audio file.
- * For local courses: checks exclusively the course folder (.tutin/dubs and Dubs).
- * For cloud courses: checks AppData cache.
+ * Get path to dubbed audio file for playback.
+ * For local courses: checks exclusively `<courseFolder>/.tutin/dubs/`.
+ * For cloud courses: checks `%APPDATA%/TutIn/dubs/`.
  */
 export function getDubFilePathForPlayback(videoId, lang, courseFolder = null, relModulePath = '', videoBaseName = '') {
     const isLocalCourse = Boolean(courseFolder && fs.existsSync(courseFolder))
+    const safeLang = String(lang || 'en').trim().toLowerCase()
 
     if (isLocalCourse && videoBaseName) {
-        const vaultDub = path.join(courseFolder, '.tutin', 'dubs', relModulePath, `${videoBaseName}.${lang}.mp3`)
-        if (fs.existsSync(vaultDub)) return vaultDub
-
-        const legacyDub = path.join(courseFolder, 'Dubs', relModulePath, `${videoBaseName}.${lang}.mp3`)
-        if (fs.existsSync(legacyDub)) return legacyDub
-
-        return null
+        migrateLegacyCourseAssets(courseFolder)
+        const vaultDub = path.join(courseFolder, '.tutin', 'dubs', relModulePath, `${videoBaseName}.${safeLang}.mp3`)
+        return fs.existsSync(vaultDub) ? vaultDub : null
     }
 
-    // Cloud course fallback
-    const cachePath = path.join(getDataDir(), 'dubs', `${videoId}.${lang}.mp3`)
+    const cachePath = path.join(getDataDir(), 'dubs', `${videoId}.${safeLang}.mp3`)
     return fs.existsSync(cachePath) ? cachePath : null
-}
-
-export function getDubCachePath(videoId, lang) {
-    const p = path.join(getDataDir(), 'dubs', `${videoId}.${lang}.mp3`)
-    return fs.existsSync(p) ? p : null
 }
 
 // ── Vault Notes, Screenshots, Canvas & Summaries Persistence ──────────────
@@ -815,7 +934,8 @@ export function scanVaultSummary(courseFolder) {
         walkDir(vaultDir)
     }
 
-    // 1. Dubs (.tutin/dubs and legacy Dubs/)
+    // 1. Dubs (.tutin/dubs)
+    migrateLegacyCourseAssets(courseFolder)
     const dubFiles = []
     const dubLangs = new Set()
     let dubsSizeBytes = 0
@@ -824,6 +944,7 @@ export function scanVaultSummary(courseFolder) {
         function walk(dir) {
             try {
                 for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+                    if (e.name === '_voice_profile') continue
                     const p = path.join(dir, e.name)
                     if (e.isDirectory()) walk(p)
                     else if (e.isFile() && e.name.endsWith('.mp3')) {
@@ -848,7 +969,6 @@ export function scanVaultSummary(courseFolder) {
         walk(baseDir)
     }
     scanDubsDir(path.join(courseFolder, '.tutin', 'dubs'))
-    scanDubsDir(path.join(courseFolder, 'Dubs'))
 
     // 2. Transcripts (.tutin/captions and sibling subtitle files)
     const captionFiles = []
