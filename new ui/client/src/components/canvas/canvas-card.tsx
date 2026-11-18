@@ -112,12 +112,12 @@ function measureNoteContentWidth(
   for (const img of Array.from(contentEl.querySelectorAll("img"))) {
     const rect = img.getBoundingClientRect();
     if (rect.width <= 0 || rect.height <= 0) continue;
-    const imgBoxW = rect.width / scale;
+    const imgBoxW = Math.min(288, rect.width / scale);
     const blockHolder = img.closest("[data-note-image-block='true'], div, p, li");
-    const isCenteredBlock =
+    const isBlockImg =
       window.getComputedStyle(img).display === "block" ||
       Boolean(img.closest("[data-note-image-block='true']"));
-    if (isCenteredBlock) {
+    if (isBlockImg) {
       const holderLeft = blockHolder
         ? Math.max(0, (blockHolder.getBoundingClientRect().left - contentLeft) / scale)
         : 0;

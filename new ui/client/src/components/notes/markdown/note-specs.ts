@@ -31,6 +31,8 @@ export const SELECTION_WRAP_DELIMITERS: Record<string, [string, string]> = {
   "(": ["(", ")"],
   "[": ["[", "]"],
   '"': ['"', '"'],
+  "~": ["~", "~"],
+  "=": ["=", "="],
 };
 
 export const COLLAPSED_PLAIN_PAIRS: Record<string, [string, string]> = {

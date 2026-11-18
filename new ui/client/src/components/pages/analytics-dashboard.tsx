@@ -3,6 +3,12 @@ import { BookOpen, CheckCircle2, Clock, Flame, Loader2 } from "lucide-react";
 
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { apiJson } from "@/lib/api";
+import {
+  readAppSettings,
+  SETTINGS_CHANGED_EVENT,
+  writeAppSettings,
+  type AnalyticsRangePreference,
+} from "@/lib/app-settings";
 import { useCoursesList, type Course } from "@/lib/courses";
 import { formatDurationLabel, formatMinutesLabel } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -26,7 +32,7 @@ interface AnalyticsHistoryItem {
 
 function Card({ className, children }: { className?: string; children: ReactNode }) {
   return (
-    <section className={cn("min-w-0 rounded-xl bg-card p-6 shadow-card", className)}>
+    <section className={cn("min-w-0 rounded-xl bg-card p-4 shadow-card sm:p-6", className)}>
       {children}
     </section>
   );
@@ -46,14 +52,21 @@ function Metric({
   warm?: boolean;
 }) {
   return (
-    <Card className="flex flex-col gap-4">
-      <div className="flex items-center gap-2.5">
-        <span className={cn("text-muted-foreground [&_svg]:size-5", warm && "text-streak")}>
+    <Card className="flex flex-col gap-3 sm:gap-4">
+      <div className="flex items-center gap-2 sm:gap-2.5">
+        <span
+          className={cn(
+            "shrink-0 text-muted-foreground [&_svg]:size-4 sm:[&_svg]:size-5",
+            warm && "text-streak",
+          )}
+        >
           {icon}
         </span>
-        <span className="text-sm font-medium text-muted-foreground">{label}</span>
+        <span className="truncate text-xs font-medium text-muted-foreground sm:text-sm">
+          {label}
+        </span>
       </div>
-      <p className="text-2xl font-bold tracking-tight text-foreground">{value}</p>
+      <p className="text-xl font-bold tracking-tight text-foreground sm:text-2xl">{value}</p>
       <div className="text-xs text-muted-foreground">{children}</div>
     </Card>
   );
@@ -67,8 +80,18 @@ function toLocalDateKey(d: Date): string {
 }
 
 function Heatmap({ byDate }: { byDate: Map<string, { min: number; lessons: number }> }) {
-  const [range, setRange] = useState<"1y" | "3m">("1y");
+  const [range, setRange] = useState<AnalyticsRangePreference>(
+    () => readAppSettings().analyticsRange,
+  );
   const currentYear = new Date().getFullYear();
+
+  useEffect(() => {
+    const syncRange = () => {
+      setRange(readAppSettings().analyticsRange);
+    };
+    window.addEventListener(SETTINGS_CHANGED_EVENT, syncRange);
+    return () => window.removeEventListener(SETTINGS_CHANGED_EVENT, syncRange);
+  }, []);
 
   const days = useMemo(() => {
     const end = new Date();
@@ -119,7 +142,10 @@ function Heatmap({ byDate }: { byDate: Map<string, { min: number; lessons: numbe
             <button
               key={k}
               type="button"
-              onClick={() => setRange(k)}
+              onClick={() => {
+                setRange(k);
+                writeAppSettings({ ...readAppSettings(), analyticsRange: k });
+              }}
               className={cn(
                 "rounded-sm px-3 py-1.5 text-muted-foreground transition",
                 range === k && "bg-card text-foreground shadow-card dark:bg-accent",
@@ -496,8 +522,8 @@ export function AnalyticsDashboard() {
   }, [analyticsRows, historyItems, courses]);
 
   return (
-    <div className="mx-auto w-full max-w-[1440px] px-5 pb-12 pt-6 sm:px-8 sm:pt-8 lg:px-10">
-      <header className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+    <div className="mx-auto w-full max-w-[1440px] px-4 pb-8 pt-4 sm:px-8 sm:pb-12 sm:pt-8 lg:px-10">
+      <header className="mb-4 flex items-center justify-between gap-4 sm:mb-6">
         <h1 className="text-2xl font-bold tracking-tight text-foreground sm:text-3xl">
           Statistics
         </h1>
@@ -508,8 +534,8 @@ export function AnalyticsDashboard() {
         )}
       </header>
 
-      <div className="space-y-6">
-        <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="space-y-4 sm:space-y-6">
+        <div className="grid grid-cols-2 gap-3 sm:gap-5 xl:grid-cols-4">
           <Metric
             icon={<Clock className="size-5 text-chart-2" />}
             label="Watch time"

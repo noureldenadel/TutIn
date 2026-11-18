@@ -35,6 +35,7 @@ import {
   NOTE_IMAGE_BLOCK_ATTR,
   NOTE_IMAGE_TAIL_ATTR,
   activateHorizontalRuleAtClient,
+  applyImageBlockAlignment,
   applyInlineMarkdownAtCaret,
   applyMarkdownOnBackspace,
   applyMarkdownOnDelete,
@@ -51,6 +52,7 @@ import {
   handleMarkdownDelimiterBackspace,
   handleMarkdownDelimiterKeyDown,
   hasVisibleContent,
+  inferImageAlignmentFromContext,
   isImageBlockElement,
   isInsideMarkdownSyntax,
   moveCaretOutOfImageBlock,
@@ -73,6 +75,7 @@ import {
   sanitizeStoredNoteHtml,
   stripChromiumInlineArtifacts,
   stripSyntaxBeforeExecCommand,
+  syncImageBlockAlignments,
   syncImageTailParagraphs,
   syncLiveMarkdownSyntax,
   toggleInlineWrapperCommand,
@@ -864,10 +867,11 @@ function insertImageBlockCleanly(
   range: Range,
   imgWrapper: HTMLElement,
 ): { caretTarget: HTMLElement | null } {
+  applyImageBlockAlignment(imgWrapper, inferImageAlignmentFromContext(range.startContainer, ed));
   range.deleteContents();
   const topBlock = getTopLevelBlock(range.startContainer, ed);
 
-  // Break out of lists so images sit centered across the card rather than indented under list markers
+  // Break out of lists so images sit aligned with the text column rather than indented under list markers
   if (topBlock && (topBlock.tagName === "UL" || topBlock.tagName === "OL")) {
     let curLi: Node | null = range.startContainer;
     while (curLi && curLi !== topBlock && (curLi as Element).tagName !== "LI") {
@@ -1536,6 +1540,7 @@ export function RichNoteSurface({
         ({ caretTarget } = insertImageBlockCleanly(ed, liveRange, imgWrapper));
       } else {
         const lastEl = ed.lastElementChild as HTMLElement | null;
+        applyImageBlockAlignment(imgWrapper, inferImageAlignmentFromContext(lastEl, ed));
         if (lastEl && isBlockEmptyForImage(lastEl)) {
           lastEl.replaceWith(imgWrapper);
         } else {
@@ -2060,7 +2065,7 @@ export function RichNoteSurface({
       !e.ctrlKey &&
       !e.metaKey &&
       !e.altKey &&
-      ["(", ")", "[", "]", '"', "`", "*", "~", "="].includes(e.key)
+      ["(", ")", "[", "]", '"', "`", "*", "_", "~", "="].includes(e.key)
     ) {
       const snapBefore = {
         html: serializeContainerMediaHtml(ed),
@@ -2905,11 +2910,14 @@ export function RichNoteSurface({
 
             if (ed && !isComposing) {
               syncImageTailParagraphs(ed);
-              const hasLooseImg = Array.from(ed.querySelectorAll("img")).some(
+              const imgs = Array.from(ed.querySelectorAll("img"));
+              const hasLooseImg = imgs.some(
                 (img) => !img.closest(`[${NOTE_IMAGE_BLOCK_ATTR}="true"]`),
               );
               if (hasLooseImg) {
                 normalizeEditorImageBlocks(ed);
+              } else if (imgs.length > 0) {
+                syncImageBlockAlignments(ed);
               }
               stripChromiumInlineArtifacts(ed, true);
               if (insertedSpaceViaIme) {

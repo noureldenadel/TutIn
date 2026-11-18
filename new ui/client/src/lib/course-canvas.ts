@@ -233,8 +233,9 @@ export function estimateVideoNoteCardHeight(
         : baseChrome;
   const imgTags = (html.match(/<img\b/gi) ?? []).length;
   const effectiveImages = Math.max(imageCount, imgTags);
-  // Embedded screenshots scale cleanly inside the card column (capped at 380px high)
-  const estImgHeight = Math.min(380, Math.round(innerWidth * (9 / 16))) + 16;
+  // Embedded screenshots are capped at 288×220px so widening cards never inflates image height
+  const cappedImgWidth = Math.min(innerWidth, 288);
+  const estImgHeight = Math.min(220, Math.round(cappedImgWidth * (9 / 16))) + 16;
   const mediaHeight = effectiveImages * estImgHeight;
   const minFloor = cardType === "video-note" ? 136 : getCardMinHeight(cardType);
   return Math.max(minFloor, Math.min(2200, textHeight + mediaHeight));

@@ -77,12 +77,17 @@ import { SettingsModal, type ThemeMode } from "@/components/modals/settings-moda
 import { WelcomeGuideModal } from "@/components/modals/welcome-guide-modal";
 import {
   DEFAULT_APP_SETTINGS,
+  SETTINGS_CHANGED_EVENT,
   THEME_PRESET_STORAGE_KEY,
   hydrateAppSettingsFromServer,
   isThemePreset,
   isWelcomeGuideSeen,
   readAppSettings,
+  readSessionFilters,
+  readSessionScroll,
+  updateSessionFilters,
   writeAppSettings,
+  writeSessionScroll,
   type ThemePreset,
 } from "@/lib/app-settings";
 import { SyncPreviewModal } from "@/components/modals/sync-preview-modal";
@@ -135,9 +140,15 @@ function DockButton({
   const cls = cn(
     "group/dock relative z-10 size-10 rounded-lg text-muted-foreground shadow-none transition-[color,background-color,transform] duration-150 active:scale-95 [&_svg]:transition-transform [&_svg]:duration-150 group-hover/dock:[&_svg]:scale-105",
     active
-      ? "text-foreground hover:bg-transparent hover:text-foreground"
+      ? "text-foreground max-md:bg-accent hover:bg-transparent max-md:hover:bg-accent hover:text-foreground"
       : "hover:bg-accent/60 hover:text-accent-foreground",
   );
+  const mobileActivePill = active ? (
+    <span
+      aria-hidden="true"
+      className="pointer-events-none absolute -bottom-1 left-1/2 h-1 w-4 -translate-x-1/2 rounded-full bg-foreground/70 md:hidden"
+    />
+  ) : null;
   return (
     <Tooltip>
       <TooltipTrigger asChild>
@@ -145,6 +156,7 @@ function DockButton({
           <Button asChild variant="ghost" size="icon" className={cls}>
             <Link to={to} aria-label={label} aria-current={active ? "page" : undefined}>
               {children}
+              {mobileActivePill}
             </Link>
           </Button>
         ) : (
@@ -158,10 +170,11 @@ function DockButton({
             className={cls}
           >
             {children}
+            {mobileActivePill}
           </Button>
         )}
       </TooltipTrigger>
-      <TooltipContent side="right" sideOffset={10}>
+      <TooltipContent side="right" sideOffset={10} className="hidden md:block">
         {label}
       </TooltipContent>
     </Tooltip>
@@ -238,7 +251,7 @@ function IconDock({
 
   return (
     <aside
-      className="sticky top-0 flex h-dvh w-16 shrink-0 flex-col items-center py-3 sm:py-4 select-none z-30"
+      className="order-2 z-30 flex h-14 w-full shrink-0 select-none flex-row items-center justify-around border-t border-border/50 bg-shell px-2 pb-[env(safe-area-inset-bottom)] md:order-1 md:sticky md:top-0 md:h-dvh md:w-16 md:flex-col md:justify-start md:border-t-0 md:px-0 md:py-4"
       aria-label="Main navigation"
     >
       {activeJobs.length > 0 ? (
@@ -258,6 +271,7 @@ function IconDock({
             side="right"
             align="start"
             sideOffset={12}
+            collisionPadding={12}
             onMouseEnter={openJobsHover}
             onMouseLeave={closeJobsHover}
             className="w-72 rounded-xl border border-border/50 bg-card p-3 shadow-workspace"
@@ -306,22 +320,22 @@ function IconDock({
       ) : (
         <Link
           to="/"
-          className="flex size-10 items-center justify-center rounded-lg text-foreground transition-colors hover:text-foreground/70 shrink-0"
+          className="hidden size-10 shrink-0 items-center justify-center rounded-lg text-foreground transition-colors hover:text-foreground/70 md:flex"
           aria-label="TutIn home"
         >
           <DotLogo mode={logoMode} />
         </Link>
       )}
-      <nav className="relative mt-9 flex flex-col gap-2 shrink-0">
+      <nav className="contents md:relative md:mt-9 md:flex md:shrink-0 md:flex-col md:gap-2">
         <span
           aria-hidden="true"
           style={indicatorStyle}
-          className="pointer-events-none absolute left-0 top-0 size-10 rounded-lg bg-accent transition-transform duration-250 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none"
+          className="pointer-events-none absolute left-0 top-0 hidden size-10 rounded-lg bg-accent transition-transform duration-250 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none md:block"
         />
         <span
           aria-hidden="true"
           style={indicatorStyle}
-          className="pointer-events-none absolute -left-[13px] top-2.5 h-5 w-1 rounded-full bg-foreground/70 transition-transform duration-250 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none"
+          className="pointer-events-none absolute -left-[13px] top-2.5 hidden h-5 w-1 rounded-full bg-foreground/70 transition-transform duration-250 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none md:block"
         />
         {navItems.map((item, idx) => {
           const Icon = item.icon;
@@ -337,23 +351,25 @@ function IconDock({
           );
         })}
       </nav>
-      <div className="mt-auto flex flex-col items-center gap-2 shrink-0 pt-4">
-        <DockButton label={dark ? "Light theme" : "Dark theme"} onClick={onThemeToggle}>
-          <span className="relative flex size-4 items-center justify-center">
-            <Sun
-              className={cn(
-                "size-4 transition-all duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none",
-                dark ? "rotate-0 scale-100 opacity-100" : "-rotate-90 scale-0 opacity-0",
-              )}
-            />
-            <Moon
-              className={cn(
-                "absolute size-4 transition-all duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none",
-                dark ? "rotate-90 scale-0 opacity-0" : "rotate-0 scale-100 opacity-100",
-              )}
-            />
-          </span>
-        </DockButton>
+      <div className="contents md:mt-auto md:flex md:shrink-0 md:flex-col md:items-center md:gap-2 md:pt-4">
+        <div className="hidden md:flex">
+          <DockButton label={dark ? "Light theme" : "Dark theme"} onClick={onThemeToggle}>
+            <span className="relative flex size-4 items-center justify-center">
+              <Sun
+                className={cn(
+                  "size-4 transition-all duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none",
+                  dark ? "rotate-0 scale-100 opacity-100" : "-rotate-90 scale-0 opacity-0",
+                )}
+              />
+              <Moon
+                className={cn(
+                  "absolute size-4 transition-all duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none",
+                  dark ? "rotate-90 scale-0 opacity-0" : "rotate-0 scale-100 opacity-100",
+                )}
+              />
+            </span>
+          </DockButton>
+        </div>
         <DockButton label="Settings" onClick={onSettings}>
           <Settings />
         </DockButton>
@@ -748,15 +764,15 @@ export function CourseCard({
           {course.duration}
         </span>
       </div>
-      <div className="flex flex-1 flex-col p-5">
+      <div className="flex flex-1 flex-col p-4 sm:p-5">
         <h2
-          className="truncate text-lg font-semibold leading-7 text-foreground transition-colors duration-200 group-hover:text-foreground/80 group-data-[menu-open=true]:text-foreground/80 dark:group-hover:text-white dark:group-data-[menu-open=true]:text-white"
+          className="truncate text-base font-semibold leading-6 text-foreground transition-colors duration-200 group-hover:text-foreground/80 group-data-[menu-open=true]:text-foreground/80 dark:group-hover:text-white dark:group-data-[menu-open=true]:text-white sm:text-lg sm:leading-7"
           title={course.title}
         >
           {course.title}
         </h2>
         {course.instructor.trim() ? (
-          <div className="mt-3 flex items-center">
+          <div className="mt-2.5 flex items-center sm:mt-3">
             <Link
               to="/instructors"
               search={{ instructor: normalizeInstructorSlug(course.instructor) }}
@@ -769,7 +785,7 @@ export function CourseCard({
             </Link>
           </div>
         ) : null}
-        <div className="mt-auto pt-5">
+        <div className="mt-auto pt-4 sm:pt-5">
           <div className="h-1.5 overflow-hidden rounded-sm bg-secondary">
             <div
               className={cn(
@@ -833,9 +849,16 @@ export function AppShell({ children }: { children: ReactNode }) {
     setNavMotion({ pathname, navIndex: activeNavIndex, transitionClass });
   }
 
-  useEffect(() => {
-    mainRef.current?.scrollTo({ top: 0 });
-  }, [pathname]);
+  useLayoutEffect(() => {
+    const el = mainRef.current;
+    if (!el) return;
+    if (fixedViewport || pathname.startsWith("/learn/")) {
+      el.scrollTo({ top: 0 });
+      return;
+    }
+    const saved = readSessionScroll(`page:${pathname}`);
+    el.scrollTo({ top: saved ?? 0 });
+  }, [fixedViewport, pathname]);
 
   const [dark, setDark] = useState(false);
   const [mode, setMode] = useState<ThemeMode>("system");
@@ -960,7 +983,7 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   return (
     <TooltipProvider delayDuration={250}>
-      <div className="flex h-dvh overflow-hidden bg-shell text-foreground">
+      <div className="flex h-dvh flex-col overflow-hidden bg-shell text-foreground md:flex-row">
         <IconDock
           activeIndex={activeNavIndex}
           dark={dark}
@@ -990,8 +1013,12 @@ export function AppShell({ children }: { children: ReactNode }) {
         />
         <main
           ref={mainRef}
+          onScroll={(e) => {
+            if (fixedViewport || pathname.startsWith("/learn/")) return;
+            writeSessionScroll(`page:${pathname}`, e.currentTarget.scrollTop);
+          }}
           className={cn(
-            "h-dvh min-w-0 flex-1 border-l border-border/50 bg-background",
+            "order-1 min-h-0 min-w-0 flex-1 bg-background md:order-2 md:h-dvh md:border-l md:border-border/50",
             fixedViewport
               ? "overflow-hidden"
               : "overflow-y-auto overflow-x-hidden custom-scrollbar",
@@ -1041,9 +1068,9 @@ export function CourseSortDropdown({
 }
 
 export function HomePage() {
-  const [filter, setFilter] = useState<string>("All");
-  const [sort, setSort] = useState<CourseSortOption>("Recent");
-  const [query, setQuery] = useState("");
+  const [filter, setFilter] = useState<string>(() => readSessionFilters().homeFilter || "All");
+  const [sort, setSort] = useState<CourseSortOption>(() => readAppSettings().librarySort);
+  const [query, setQuery] = useState(() => readSessionFilters().homeQuery ?? "");
   const searchRef = useRef<HTMLInputElement>(null);
   const filterScrollRef = useRef<HTMLDivElement>(null);
   const filterTrackRef = useRef<HTMLDivElement>(null);
@@ -1057,6 +1084,18 @@ export function HomePage() {
   const [filterScrollEdges, setFilterScrollEdges] = useState({ left: false, right: false });
   const [tabIndicator, setTabIndicator] = useState({ left: 0, width: 0, ready: false });
   const { courses: allCourses, isLoading, error } = useCoursesList();
+
+  useEffect(() => {
+    const syncLibrarySort = () => {
+      setSort(readAppSettings().librarySort);
+    };
+    window.addEventListener(SETTINGS_CHANGED_EVENT, syncLibrarySort);
+    return () => window.removeEventListener(SETTINGS_CHANGED_EVENT, syncLibrarySort);
+  }, []);
+
+  useEffect(() => {
+    updateSessionFilters({ homeFilter: filter, homeQuery: query });
+  }, [filter, query]);
 
   useEffect(() => {
     const onShortcut = (event: KeyboardEvent) => {
@@ -1079,6 +1118,17 @@ export function HomePage() {
     }
     return Array.from(tagSet).sort((a, b) => a.localeCompare(b));
   }, [allCourses]);
+
+  useEffect(() => {
+    if (
+      !isLoading &&
+      allCourses.length > 0 &&
+      !(STATUS_FILTERS as readonly string[]).includes(filter) &&
+      !allTags.includes(filter)
+    ) {
+      setFilter("All");
+    }
+  }, [allCourses.length, allTags, filter, isLoading]);
 
   const updateFilterScrollEdges = useCallback(() => {
     const el = filterScrollRef.current;
@@ -1227,10 +1277,10 @@ export function HomePage() {
   }, [allCourses, filter, query, sort]);
 
   return (
-    <div className="mx-auto max-w-[1440px] px-5 pb-12 pt-6 sm:px-8 sm:pt-8 lg:px-10">
+    <div className="mx-auto max-w-[1440px] px-4 pb-8 pt-4 sm:px-8 sm:pb-12 sm:pt-8 lg:px-10">
       <header className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-end">
-        <div className="flex items-center gap-3">
-          <label className="flex h-11 min-w-0 flex-1 items-center gap-2 rounded-lg bg-secondary/75 px-3 transition-colors focus-within:bg-card focus-within:ring-2 focus-within:ring-ring/30 sm:w-64 lg:w-80">
+        <div className="flex items-center gap-2.5 sm:gap-3">
+          <label className="flex h-10 min-w-0 flex-1 items-center gap-2 rounded-lg bg-secondary/75 px-3 transition-colors focus-within:bg-card focus-within:ring-2 focus-within:ring-ring/30 sm:h-11 sm:w-64 lg:w-80">
             <Search className="size-4 shrink-0 text-muted-foreground" />
             <input
               ref={searchRef}
@@ -1254,7 +1304,7 @@ export function HomePage() {
         </div>
       </header>
 
-      <div className="mt-5 flex flex-col gap-3 border-b border-border/50 pb-3 sm:flex-row sm:items-center sm:justify-between">
+      <div className="mt-4 flex items-center justify-between gap-2 border-b border-border/50 pb-3 sm:mt-5 sm:gap-3">
         <div
           ref={filterScrollRef}
           onScroll={updateFilterScrollEdges}
@@ -1355,7 +1405,13 @@ export function HomePage() {
         </div>
 
         <div className="flex shrink-0 items-center justify-end">
-          <CourseSortDropdown sort={sort} onSortChange={setSort} />
+          <CourseSortDropdown
+            sort={sort}
+            onSortChange={(nextSort) => {
+              setSort(nextSort);
+              writeAppSettings({ ...readAppSettings(), librarySort: nextSort });
+            }}
+          />
         </div>
       </div>
 
@@ -1369,7 +1425,7 @@ export function HomePage() {
         </div>
       ) : (
         <section
-          className="mt-8 grid gap-5 md:grid-cols-2 xl:grid-cols-4"
+          className="mt-5 grid gap-4 sm:mt-8 sm:gap-5 md:grid-cols-2 xl:grid-cols-4"
           aria-label="Course library"
         >
           {visibleCourses.length ? (

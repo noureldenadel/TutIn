@@ -173,8 +173,8 @@ export function SyncPreviewModal({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex h-[min(640px,88dvh)] w-full max-w-2xl flex-col gap-0 overflow-hidden rounded-xl border-0 bg-card p-0 shadow-workspace sm:rounded-xl">
-        <div className="flex items-center justify-between border-b border-border/50 px-6 py-4 pr-12">
+      <DialogContent className="flex h-[min(640px,88dvh)] max-w-2xl flex-col gap-0 overflow-hidden rounded-xl border-0 bg-card p-0 shadow-workspace sm:rounded-xl">
+        <div className="flex items-center justify-between border-b border-border/50 px-4 py-3.5 pr-12 sm:px-6 sm:py-4">
           <DialogTitle className="truncate text-base font-semibold tracking-tight text-foreground">
             Course &amp; Vault Sync
           </DialogTitle>
@@ -184,7 +184,7 @@ export function SyncPreviewModal({
         </div>
 
         {/* Vault Banner */}
-        <div className="flex items-center justify-between gap-4 border-b border-border/50 bg-secondary/30 px-6 py-2.5 text-xs">
+        <div className="flex items-center justify-between gap-4 border-b border-border/50 bg-secondary/30 px-4 py-2.5 text-xs sm:px-6">
           <div className="flex min-w-0 items-center gap-2">
             {preview?.folderMissing ? (
               <span className="flex items-center gap-1.5 font-medium text-amber-600 dark:text-amber-400">
@@ -217,7 +217,7 @@ export function SyncPreviewModal({
         </div>
 
         {/* Segmented Tabs */}
-        <div className="border-b border-border/50 bg-card/60 px-6 py-2.5">
+        <div className="border-b border-border/50 bg-card/60 px-4 py-2.5 sm:px-6">
           <div className="flex items-center gap-1 overflow-x-auto scrollbar-none rounded-lg bg-secondary/75 p-1">
             {tabs.map((tab) => (
               <button
@@ -237,7 +237,7 @@ export function SyncPreviewModal({
         </div>
 
         {/* Body */}
-        <div className="flex-1 overflow-y-auto p-6 space-y-5 custom-scrollbar">
+        <div className="flex-1 space-y-5 overflow-y-auto p-4 custom-scrollbar sm:p-6">
           {isLoading ? (
             <div className="flex h-full flex-col items-center justify-center gap-3 py-14 text-sm text-muted-foreground">
               <Loader2 className="size-7 animate-spin text-foreground" />
@@ -518,7 +518,7 @@ export function SyncPreviewModal({
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-between border-t border-border/50 bg-card px-6 py-4">
+        <div className="flex items-center justify-between gap-2 border-t border-border/50 bg-card px-4 py-3.5 sm:px-6 sm:py-4">
           <div className="text-xs text-muted-foreground">
             {isLoading ? (
               <span>Scanning…</span>

@@ -452,8 +452,8 @@ export function AddCourseModal({
         onOpenChange(isOpen);
       }}
     >
-      <DialogContent className="flex h-[min(680px,90dvh)] w-full max-w-2xl flex-col gap-0 overflow-hidden rounded-xl border-0 bg-card p-0 shadow-workspace sm:rounded-xl">
-        <div className="flex items-center justify-between border-b border-border/50 px-6 py-4 pr-12">
+      <DialogContent className="flex h-[min(680px,90dvh)] max-w-2xl flex-col gap-0 overflow-hidden rounded-xl border-0 bg-card p-0 shadow-workspace sm:rounded-xl">
+        <div className="flex items-center justify-between border-b border-border/50 px-4 py-3.5 pr-12 sm:px-6 sm:py-4">
           <DialogTitle className="truncate text-base font-semibold tracking-tight text-foreground">
             Add course
           </DialogTitle>
@@ -463,15 +463,15 @@ export function AddCourseModal({
         </div>
 
         {/* Source Segmented Control */}
-        <div className="border-b border-border/50 bg-card/60 px-6 py-2.5">
-          <div className="inline-flex rounded-lg bg-secondary/75 p-1 text-xs">
+        <div className="border-b border-border/50 bg-card/60 px-4 py-2.5 sm:px-6">
+          <div className="flex w-full overflow-x-auto rounded-lg bg-secondary/75 p-1 text-xs scrollbar-none sm:inline-flex sm:w-auto">
             {SOURCES.map((s) => (
               <button
                 key={s.id}
                 type="button"
                 onClick={() => setSource(s.id)}
                 className={cn(
-                  "rounded-sm px-3.5 py-1.5 font-medium transition-colors",
+                  "flex-1 shrink-0 whitespace-nowrap rounded-sm px-2.5 py-1.5 font-medium transition-colors sm:flex-none sm:px-3.5",
                   source === s.id
                     ? "bg-card text-foreground shadow-card dark:bg-accent"
                     : "text-muted-foreground hover:text-foreground",
@@ -484,7 +484,7 @@ export function AddCourseModal({
         </div>
 
         {/* Body */}
-        <div className="flex-1 overflow-y-auto p-6 space-y-4 custom-scrollbar">
+        <div className="flex-1 space-y-4 overflow-y-auto p-4 custom-scrollbar sm:p-6">
           {source === "local" ? (
             !scannedLocal ? (
               <div className="space-y-4">
@@ -656,7 +656,7 @@ export function AddCourseModal({
                         className="rounded-lg border-0 bg-secondary/75 text-sm"
                       />
                     </div>
-                    <div className="grid grid-cols-2 gap-3">
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                       <div className="space-y-1">
                         <Label htmlFor="local-inst" className="text-xs font-medium">
                           Instructor
@@ -920,8 +920,8 @@ export function AddCourseModal({
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-between border-t border-border/50 bg-card px-6 py-4">
-          <span className="font-mono text-xs text-muted-foreground">
+        <div className="flex items-center justify-between gap-2 border-t border-border/50 bg-card px-4 py-3.5 sm:px-6 sm:py-4">
+          <span className="truncate font-mono text-xs text-muted-foreground">
             {source === "local" ? "SQLite + .tutin vault" : "SQLite library"}
           </span>
           <div className="flex items-center gap-2">

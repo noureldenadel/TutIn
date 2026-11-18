@@ -2,6 +2,8 @@
   "name": "tutin-app",
   "private": true,
   "version": "6.0.0",
+  "author": "noor",
+  "license": "MIT",
   "type": "module",
   "scripts": {
     "server": "npm --prefix server start",

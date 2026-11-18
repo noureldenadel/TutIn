@@ -16,7 +16,7 @@ import {
   Plus,
   Redo2,
   StickyNote,
-  Spline,
+  ArrowRight,
   Type,
   Undo2,
 } from "lucide-react";
@@ -120,22 +120,22 @@ export function CanvasHud({
         onPointerDown={(e) => e.stopPropagation()}
         onDoubleClick={(e) => e.stopPropagation()}
         onWheel={(e) => e.stopPropagation()}
-        className="pointer-events-auto absolute left-4 top-4 z-20 flex max-w-[calc(100vw-11rem)] items-center gap-1 rounded-xl border border-border/70 bg-card/95 p-1 shadow-card backdrop-blur-sm"
+        className="pointer-events-auto absolute left-2.5 top-2.5 z-20 flex max-w-[calc(100vw-11rem)] items-center gap-1 rounded-xl border border-border/70 bg-card/95 p-1 shadow-card backdrop-blur-sm sm:left-4 sm:top-4"
       >
         <Link
           to="/learn/$courseId"
           params={{ courseId }}
-          className="inline-flex h-8 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground [&_svg]:stroke-[1.75]"
+          className="inline-flex h-8 items-center gap-1.5 rounded-md px-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground sm:px-2.5 [&_svg]:stroke-[1.75]"
         >
           <ArrowLeft className="size-3.5" />
-          <span>Player</span>
+          <span className="hidden sm:inline">Player</span>
         </Link>
 
-        <div className="h-4 w-px bg-border" />
+        <div className="hidden h-4 w-px bg-border md:block" />
 
         <span
           title={courseTitle}
-          className="max-w-[200px] truncate px-2 text-xs font-semibold text-foreground"
+          className="hidden max-w-[200px] truncate px-2 text-xs font-semibold text-foreground md:inline"
         >
           {courseTitle}
         </span>
@@ -147,7 +147,7 @@ export function CanvasHud({
           onClick={onToggleDrawer}
           title={drawerOpen ? "Hide notes drawer" : "Show notes drawer"}
           className={cn(
-            "inline-flex h-8 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground [&_svg]:stroke-[1.75]",
+            "inline-flex h-8 items-center gap-1.5 rounded-md px-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground sm:px-2.5 [&_svg]:stroke-[1.75]",
             drawerOpen && "bg-secondary text-foreground",
           )}
         >
@@ -156,7 +156,7 @@ export function CanvasHud({
           ) : (
             <PanelRightOpen className="size-3.5" />
           )}
-          <span>Notes</span>
+          <span className="hidden sm:inline">Notes</span>
           {unplacedCount > 0 && (
             <span className="rounded-sm bg-primary/15 px-1.5 py-0.5 font-mono text-[10px] font-semibold tabular-nums text-primary">
               {unplacedCount}
@@ -171,7 +171,7 @@ export function CanvasHud({
         onPointerDown={(e) => e.stopPropagation()}
         onDoubleClick={(e) => e.stopPropagation()}
         onWheel={(e) => e.stopPropagation()}
-        className="pointer-events-auto absolute right-4 top-4 z-20 flex items-center gap-1 rounded-xl border border-border/70 bg-card/95 p-1 shadow-card backdrop-blur-sm"
+        className="pointer-events-auto absolute right-2.5 top-2.5 z-20 flex items-center gap-0.5 rounded-xl border border-border/70 bg-card/95 p-1 shadow-card backdrop-blur-sm sm:right-4 sm:top-4 sm:gap-1"
       >
         <HudBtn label="Undo" shortcut="Ctrl+Z" disabled={!canUndo} onClick={onUndo}>
           <Undo2 />
@@ -188,20 +188,22 @@ export function CanvasHud({
 
         <div className="mx-0.5 h-4 w-px bg-border" />
 
-        <HudBtn label="Zoom out" onClick={onZoomOut}>
-          <Minus />
-        </HudBtn>
-        <button
-          type="button"
-          onClick={onResetView}
-          title="Reset zoom"
-          className="min-w-12 rounded-md px-1.5 py-1 font-mono text-xs font-medium tabular-nums text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
-        >
-          {Math.round(zoom * 100)}%
-        </button>
-        <HudBtn label="Zoom in" onClick={onZoomIn}>
-          <Plus />
-        </HudBtn>
+        <div className="hidden items-center gap-0.5 sm:flex sm:gap-1">
+          <HudBtn label="Zoom out" onClick={onZoomOut}>
+            <Minus />
+          </HudBtn>
+          <button
+            type="button"
+            onClick={onResetView}
+            title="Reset zoom"
+            className="min-w-12 rounded-md px-1.5 py-1 font-mono text-xs font-medium tabular-nums text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+          >
+            {Math.round(zoom * 100)}%
+          </button>
+          <HudBtn label="Zoom in" onClick={onZoomIn}>
+            <Plus />
+          </HudBtn>
+        </div>
         <HudBtn label="Reset view" onClick={onResetView}>
           <Maximize />
         </HudBtn>
@@ -213,7 +215,7 @@ export function CanvasHud({
         onPointerDown={(e) => e.stopPropagation()}
         onDoubleClick={(e) => e.stopPropagation()}
         onWheel={(e) => e.stopPropagation()}
-        className="pointer-events-auto absolute bottom-4 left-1/2 z-20 flex -translate-x-1/2 flex-col items-center gap-2"
+        className="pointer-events-auto absolute bottom-3 left-1/2 z-20 flex max-w-[calc(100vw-1rem)] -translate-x-1/2 flex-col items-center gap-2 sm:bottom-4"
       >
         {showInkOptions && (
           <div className="flex items-center gap-2 rounded-xl border border-border/70 bg-card/95 px-2.5 py-1.5 shadow-card backdrop-blur-sm animate-in fade-in slide-in-from-bottom-1 duration-150">
@@ -259,7 +261,7 @@ export function CanvasHud({
           </div>
         )}
 
-        <div className="flex items-center gap-0.5 rounded-xl border border-border/70 bg-card/95 p-1 shadow-workspace backdrop-blur-sm">
+        <div className="flex max-w-full items-center gap-0.5 overflow-x-auto rounded-xl border border-border/70 bg-card/95 p-1 shadow-workspace backdrop-blur-sm scrollbar-none">
           <HudBtn
             label="Select"
             shortcut="V"
@@ -301,7 +303,7 @@ export function CanvasHud({
             active={tool === "connect"}
             onClick={() => onSelectTool("connect")}
           >
-            <Spline />
+            <ArrowRight />
           </HudBtn>
 
           <div className="mx-1 h-4 w-px bg-border" />

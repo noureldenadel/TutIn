@@ -17,6 +17,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { CourseThumbnail } from "@/components/layout/course-thumbnail";
 import { apiRequest } from "@/lib/api";
+import { readSessionFilters, updateSessionFilters } from "@/lib/app-settings";
 import {
   COURSES_CHANGED_EVENT,
   COURSE_DELETED_EVENT,
@@ -127,8 +128,14 @@ export function HistoryPage() {
   const { courses } = useCoursesList();
   const [entries, setEntries] = useState<HistoryEntry[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [query, setQuery] = useState("");
-  const [dateFilter, setDateFilter] = useState<DateFilter>("All Time");
+  const [query, setQuery] = useState(() => readSessionFilters().historyQuery ?? "");
+  const [dateFilter, setDateFilter] = useState<DateFilter>(
+    () => readSessionFilters().historyDateFilter ?? "All Time",
+  );
+
+  useEffect(() => {
+    updateSessionFilters({ historyQuery: query, historyDateFilter: dateFilter });
+  }, [query, dateFilter]);
 
   const courseMap = useMemo(() => {
     const map = new Map<string, Course>();
@@ -221,10 +228,10 @@ export function HistoryPage() {
   };
 
   return (
-    <div className="mx-auto w-full max-w-[1440px] px-5 pb-12 pt-6 sm:px-8 sm:pt-8 lg:px-10">
-      <header className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+    <div className="mx-auto w-full max-w-[1440px] px-4 pb-8 pt-4 sm:px-8 sm:pb-12 sm:pt-8 lg:px-10">
+      <header className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
         <h1 className="text-2xl font-bold tracking-tight text-foreground sm:text-3xl">History</h1>
-        <label className="flex h-11 min-w-0 items-center gap-2 rounded-lg bg-secondary/75 px-3 transition-colors focus-within:bg-card focus-within:ring-2 focus-within:ring-ring/30 sm:w-80 lg:w-96">
+        <label className="flex h-10 min-w-0 items-center gap-2 rounded-lg bg-secondary/75 px-3 transition-colors focus-within:bg-card focus-within:ring-2 focus-within:ring-ring/30 sm:h-11 sm:w-80 lg:w-96">
           <Search className="size-4 shrink-0 text-muted-foreground" />
           <input
             value={query}
@@ -235,8 +242,8 @@ export function HistoryPage() {
         </label>
       </header>
 
-      <div className="mt-7 flex flex-col gap-4 border-b border-border/50 pb-4 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex w-fit max-w-full flex-wrap items-center gap-1 rounded-lg bg-secondary/75 p-1">
+      <div className="mt-5 flex items-center justify-between gap-2 border-b border-border/50 pb-3 sm:mt-7 sm:gap-4 sm:pb-4">
+        <div className="flex max-w-full items-center gap-1 overflow-x-auto rounded-lg bg-secondary/75 p-1 scrollbar-none">
           {dateFilters.map((item) => (
             <Button
               key={item}
@@ -245,7 +252,7 @@ export function HistoryPage() {
               variant="ghost"
               onClick={() => setDateFilter(item)}
               className={cn(
-                "rounded-sm px-4 text-muted-foreground shadow-none",
+                "shrink-0 rounded-sm px-3 text-xs text-muted-foreground shadow-none sm:px-4 sm:text-sm",
                 dateFilter === item &&
                   "bg-card font-medium text-foreground shadow-card hover:bg-card dark:bg-accent dark:hover:bg-accent",
               )}
@@ -254,7 +261,7 @@ export function HistoryPage() {
             </Button>
           ))}
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex shrink-0 items-center gap-3">
           {entries.length > 0 && (
             <AlertDialog>
               <AlertDialogTrigger asChild>
@@ -364,7 +371,7 @@ function HistoryRow({
 
   const content = (
     <>
-      <div className="relative aspect-video w-36 shrink-0 overflow-hidden rounded-lg sm:w-44">
+      <div className="relative aspect-video w-28 shrink-0 overflow-hidden rounded-lg sm:w-44">
         <CourseThumbnail course={thumbnailCourse} className="size-full" />
         <span className="duration-badge-text absolute bottom-1.5 right-1.5 z-10 inline-flex h-5 items-center justify-center rounded-sm bg-black/75 px-1.5 font-mono text-[10px] font-semibold tabular-nums text-white backdrop-blur-sm">
           {entry.durationLabel}
@@ -383,7 +390,7 @@ function HistoryRow({
         <p className="mt-0.5 truncate text-xs text-muted-foreground transition-colors group-hover:text-foreground/90 sm:text-sm">
           {entry.courseTitle}
         </p>
-        <div className="mt-2 flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
+        <div className="mt-1.5 flex flex-wrap items-center gap-2 text-xs text-muted-foreground sm:mt-2 sm:gap-3">
           {instructor && <span className="font-medium text-foreground/80">{instructor}</span>}
           <span className="flex items-center gap-1">
             <Clock className="size-3.5 shrink-0 text-muted-foreground" />
@@ -401,7 +408,7 @@ function HistoryRow({
         }}
         title="Remove from history"
         aria-label="Remove from history"
-        className="flex size-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground opacity-0 transition hover:bg-destructive/10 hover:text-destructive focus-visible:opacity-100 group-hover:opacity-100"
+        className="flex size-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground opacity-0 transition hover:bg-destructive/10 hover:text-destructive focus-visible:opacity-100 group-hover:opacity-100 [@media(hover:none)]:opacity-100"
       >
         <Trash2 className="size-4" />
       </button>
@@ -409,7 +416,7 @@ function HistoryRow({
   );
 
   const rowClassName =
-    "group flex w-full items-center gap-4 rounded-xl px-3 py-2.5 text-left transition-colors hover:bg-secondary/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:px-4 sm:py-3.5";
+    "group flex w-full items-center gap-3 rounded-xl px-2.5 py-2.5 text-left transition-colors hover:bg-secondary/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:gap-4 sm:px-4 sm:py-3.5";
 
   if (isExternalLink && entry.courseUrl) {
     return (

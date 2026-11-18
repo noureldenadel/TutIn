@@ -323,19 +323,81 @@ function insertActiveInlinePair(
   return true;
 }
 
-function upgradeEmptyItalicToBold(editor: HTMLElement, emEl: HTMLElement): boolean {
-  const strong = document.createElement("strong");
-  strong.setAttribute(MD_ACTIVE_ATTR, "true");
-  const openSpan = createSyntaxSpan("open", "**");
-  const anchor = document.createTextNode("\u200B");
-  const closeSpan = createSyntaxSpan("close", "**");
-  strong.appendChild(openSpan);
-  strong.appendChild(anchor);
-  strong.appendChild(closeSpan);
-  emEl.replaceWith(strong);
-  placeCaret(anchor, 1);
-  syncLiveMarkdownSyntax(editor);
-  return true;
+function upgradeInlineElementTag(
+  inlineEl: HTMLElement,
+  nextTag: "strong" | "em",
+  nextDelimiter: string,
+): HTMLElement {
+  const replacement = document.createElement(nextTag);
+  replacement.setAttribute(MD_ACTIVE_ATTR, "true");
+  while (inlineEl.firstChild) {
+    replacement.appendChild(inlineEl.firstChild);
+  }
+  const openSpan = getDirectSyntaxChild(replacement, "open");
+  const closeSpan = getDirectSyntaxChild(replacement, "close");
+  if (openSpan) openSpan.textContent = nextDelimiter;
+  if (closeSpan) closeSpan.textContent = nextDelimiter;
+  inlineEl.replaceWith(replacement);
+  return replacement;
+}
+
+function getEnclosingFullSelectionInline(range: Range, editor: HTMLElement): HTMLElement | null {
+  let curr: Node | null = range.commonAncestorContainer;
+  let inlineEl: HTMLElement | null = null;
+  while (curr && curr !== editor) {
+    if (curr.nodeType === Node.ELEMENT_NODE) {
+      const el = curr as HTMLElement;
+      const tag = el.tagName.toLowerCase();
+      if (BLOCK_TAG_SET.has(tag)) break;
+      if (INLINE_MARK_TAGS.has(tag)) {
+        inlineEl = el;
+        break;
+      }
+    }
+    curr = curr.parentNode;
+  }
+  if (!inlineEl) return null;
+
+  const openSpan = getDirectSyntaxChild(inlineEl, "open");
+  const closeSpan = getDirectSyntaxChild(inlineEl, "close");
+
+  const beforeProbe = document.createRange();
+  if (openSpan) {
+    beforeProbe.setStartAfter(openSpan);
+  } else {
+    beforeProbe.setStart(inlineEl, 0);
+  }
+  beforeProbe.setEnd(range.startContainer, range.startOffset);
+  if (stripZeroWidth(beforeProbe.toString()).length > 0) return null;
+
+  const afterProbe = document.createRange();
+  afterProbe.setStart(range.endContainer, range.endOffset);
+  if (closeSpan) {
+    afterProbe.setEndBefore(closeSpan);
+  } else {
+    afterProbe.setEnd(inlineEl, inlineEl.childNodes.length);
+  }
+  if (stripZeroWidth(afterProbe.toString()).length > 0) return null;
+
+  return inlineEl;
+}
+
+function selectInlineContent(sel: Selection, inlineEl: HTMLElement): void {
+  const openSpan = getDirectSyntaxChild(inlineEl, "open");
+  const closeSpan = getDirectSyntaxChild(inlineEl, "close");
+  const nextRange = document.createRange();
+  if (openSpan && openSpan.nextSibling) {
+    nextRange.setStartBefore(openSpan.nextSibling);
+  } else {
+    nextRange.setStart(inlineEl, 0);
+  }
+  if (closeSpan && closeSpan.previousSibling) {
+    nextRange.setEndAfter(closeSpan.previousSibling);
+  } else {
+    nextRange.setEnd(inlineEl, inlineEl.childNodes.length);
+  }
+  sel.removeAllRanges();
+  sel.addRange(nextRange);
 }
 
 export function wrapSelectionWithDelimiter(editor: HTMLElement, key: string): boolean {
@@ -348,7 +410,70 @@ export function wrapSelectionWithDelimiter(editor: HTMLElement, key: string): bo
   const selectedText = range.toString();
   if (!selectedText) return false;
 
-  if (key === "`" || key === "*") {
+  // 1. Pressing `*` or `_` a second time (`**` / `__`) on a selection already inside `<em>`
+  //    upgrades `<em>` in-place to `<strong>` (Bold), and a 3rd press (`***`) adds inner `<em>` (Bold+Italic).
+  if (key === "*" || key === "_") {
+    const enclosingInline = getEnclosingFullSelectionInline(range, editor);
+    if (enclosingInline) {
+      const enclosingTag = enclosingInline.tagName.toLowerCase();
+      if (enclosingTag === "em" || enclosingTag === "i") {
+        const parentTag = enclosingInline.parentElement?.tagName.toLowerCase();
+        if (parentTag === "strong" || parentTag === "b") {
+          // Already `***text***` (`<strong><em>text</em></strong>`)
+          return true;
+        }
+        const openSpan = getDirectSyntaxChild(enclosingInline, "open");
+        const existingChar = openSpan?.textContent?.[0] || "*";
+        if (existingChar === key) {
+          const upgraded = upgradeInlineElementTag(enclosingInline, "strong", `${key}${key}`);
+          selectInlineContent(sel, upgraded);
+          syncLiveMarkdownSyntax(editor);
+          return true;
+        }
+      }
+    }
+  }
+
+  // 2. Pressing `~` or `=` a second time (`~~` / `==`) on a selection already wrapped in `~...~` or `=...=`
+  //    upgrades it into `<s data-md-active="true">` or `<mark data-md-active="true">`.
+  if (
+    (key === "~" || key === "=") &&
+    range.startContainer === range.endContainer &&
+    range.startContainer.nodeType === Node.TEXT_NODE
+  ) {
+    const tn = range.startContainer as Text;
+    const val = tn.nodeValue || "";
+    const startOff = range.startOffset;
+    const endOff = range.endOffset;
+    if (startOff > 0 && endOff < val.length && val[startOff - 1] === key && val[endOff] === key) {
+      const tag = key === "~" ? "s" : "mark";
+      const delimiter = `${key}${key}`;
+      const el = document.createElement(tag);
+      el.setAttribute(MD_ACTIVE_ATTR, "true");
+      const openSpan = createSyntaxSpan("open", delimiter);
+      const contentNode = document.createTextNode(selectedText);
+      const closeSpan = createSyntaxSpan("close", delimiter);
+      el.appendChild(openSpan);
+      el.appendChild(contentNode);
+      el.appendChild(closeSpan);
+
+      const replaceRange = document.createRange();
+      replaceRange.setStart(tn, startOff - 1);
+      replaceRange.setEnd(tn, endOff + 1);
+      replaceRange.deleteContents();
+      replaceRange.insertNode(el);
+
+      const nextRange = document.createRange();
+      nextRange.selectNodeContents(contentNode);
+      sel.removeAllRanges();
+      sel.addRange(nextRange);
+      syncLiveMarkdownSyntax(editor);
+      return true;
+    }
+  }
+
+  // 3. Single-char live inline wrappers (`` ` ``, `*`, `_`).
+  if (key === "`" || key === "*" || key === "_") {
     const tag = key === "`" ? "code" : "em";
     const delimiter = key;
     const el = document.createElement(tag);
@@ -370,6 +495,7 @@ export function wrapSelectionWithDelimiter(editor: HTMLElement, key: string): bo
     return true;
   }
 
+  // 4. Plain pair wrappers (`(`, `[`, `"`, first `~`, first `=`).
   const pair = SELECTION_WRAP_DELIMITERS[key];
   if (!pair) return false;
 
@@ -386,7 +512,7 @@ export function wrapSelectionWithDelimiter(editor: HTMLElement, key: string): bo
 
 /**
  * Handles Obsidian-style auto-pairing, overtyping closing delimiters, and selection wrapping
- * for `` ` ``, `*`, `~`, `=`, `(`, `)`, `[`, `]`, and `"`.
+ * for `` ` ``, `*`, `_`, `~`, `=`, `(`, `)`, `[`, `]`, and `"`.
  */
 export function handleMarkdownDelimiterKeyDown(editor: HTMLElement, key: string): boolean {
   const sel = window.getSelection();
@@ -395,7 +521,7 @@ export function handleMarkdownDelimiterKeyDown(editor: HTMLElement, key: string)
   if (!editor.contains(range.startContainer)) return false;
 
   if (!range.collapsed) {
-    if (["(", "[", '"', "`", "*"].includes(key)) {
+    if (["(", "[", '"', "`", "*", "_", "~", "="].includes(key)) {
       return wrapSelectionWithDelimiter(editor, key);
     }
     return false;
@@ -424,11 +550,37 @@ export function handleMarkdownDelimiterKeyDown(editor: HTMLElement, key: string)
     const { inlineEl, closeSpan, charIndexInClose } = overtype;
     const tag = inlineEl.tagName.toLowerCase();
     const rule = INLINE_LIVE_RULES[tag];
-    if (rule && rule.delimiter[0] === key) {
+    const openSpan = getDirectSyntaxChild(inlineEl, "open");
+    const activeDelimChar = openSpan?.textContent?.[0] || rule?.delimiter[0];
+    if (rule && activeDelimChar === key) {
       const innerEmpty = getTextWithoutArtifacts(inlineEl).length === 0;
 
-      if (tag === "em" && key === "*" && innerEmpty) {
-        return upgradeEmptyItalicToBold(editor, inlineEl);
+      if ((tag === "em" || tag === "i") && (key === "*" || key === "_") && innerEmpty) {
+        const upgraded = upgradeInlineElementTag(inlineEl, "strong", `${key}${key}`);
+        const anchor = Array.from(upgraded.childNodes).find(
+          (n) => n.nodeType === Node.TEXT_NODE,
+        ) as Text | undefined;
+        if (anchor) {
+          placeCaret(anchor, anchor.nodeValue?.length ?? 0);
+        }
+        syncLiveMarkdownSyntax(editor);
+        return true;
+      }
+
+      if ((tag === "strong" || tag === "b") && (key === "*" || key === "_") && innerEmpty) {
+        const block = getClosestBlock(inlineEl, editor);
+        if (
+          block &&
+          ["p", "div"].includes(block.tagName.toLowerCase()) &&
+          getTextWithoutArtifacts(block).length === 0 &&
+          block.querySelectorAll("img").length === 0
+        ) {
+          const tn = document.createTextNode(`${key}${key}${key}`);
+          inlineEl.replaceWith(tn);
+          placeCaret(tn, 3);
+          syncLiveMarkdownSyntax(editor);
+          return true;
+        }
       }
 
       if (tag === "code" && key === "`" && innerEmpty) {

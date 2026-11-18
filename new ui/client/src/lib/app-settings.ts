@@ -5,6 +5,10 @@ export type ThemePreset = "obsidian" | "zinc" | "neutral" | "stone" | "graphite"
 export type ComputeDevice = "auto" | "gpu" | "cpu";
 export type WhisperModelPreset = "whisper-base" | "whisper-small" | "faster-whisper-large-v3-turbo";
 export type CaptionFontSize = "small" | "medium" | "large";
+export type NotesSortOrder = "asc" | "desc";
+export type LibrarySortPreference = "Recent" | "Progress" | "A–Z";
+export type AnalyticsRangePreference = "1y" | "3m";
+export type CourseSidebarTab = "playlist" | "notes" | "transcript";
 
 export interface CaptionPosition {
   x: number;
@@ -87,12 +91,19 @@ export interface AppSettings {
   autoDetectThumbnails: boolean;
   playbackSpeed: number;
   skipDuration: number;
+  playerVolume: number;
+  playerMuted: boolean;
+  playerRemainingTime: boolean;
+  playerSidebarOpen: boolean;
   autoPauseOnNotes: boolean;
+  notesSortOrder: NotesSortOrder;
   notesSmartPauseEnabled: boolean;
   notesSmartPauseDelay: number;
   notesSmartPauseRewind: boolean;
   notesAutocompleteEnabled: boolean;
   playerShortcutsEnabled: boolean;
+  librarySort: LibrarySortPreference;
+  analyticsRange: AnalyticsRangePreference;
   openRouterApiKey: string;
   openRouterModel: string;
   googleApiKey: string;
@@ -103,8 +114,38 @@ export interface AppSettings {
   captionPosition: CaptionPosition | null;
 }
 
+export interface CourseUiPrefs {
+  activeTab?: CourseSidebarTab | undefined;
+  lastVideoId?: string | undefined;
+  openModules?: Record<string, boolean> | undefined;
+  subtitleTrack?: string | undefined;
+  transcriptLang?: string | undefined;
+  dubLang?: string | undefined;
+  updatedAt?: number | undefined;
+}
+
+export interface SessionNoteDraft {
+  mode: "add" | "edit";
+  editingNoteId: string | null;
+  content: string;
+  timestamp: number | null;
+}
+
+export interface SessionFilterState {
+  homeFilter?: string | undefined;
+  homeQuery?: string | undefined;
+  instructorsQuery?: string | undefined;
+  historyDateFilter?: "All Time" | "This Week" | "This Month" | undefined;
+  historyQuery?: string | undefined;
+}
+
 export const SETTINGS_STORAGE_KEY = "tutin_settings";
 export const SETTINGS_CHANGED_EVENT = "tutin:settings_changed";
+export const COURSE_UI_PREFS_STORAGE_KEY = "tutin_course_ui_prefs";
+export const COURSE_UI_PREFS_CHANGED_EVENT = "tutin:course_ui_prefs_changed";
+export const SESSION_SCROLL_STORAGE_KEY = "tutin_session_scroll";
+export const SESSION_NOTE_DRAFTS_STORAGE_KEY = "tutin_session_note_drafts";
+export const SESSION_FILTERS_STORAGE_KEY = "tutin_session_filters";
 export const WELCOME_SEEN_KEY = "tutin_welcome_seen";
 export const GOOGLE_API_KEY_STORAGE = "tutin_google_api_key";
 export const YT_API_KEY_STORAGE = "tutin_yt_api_key";
@@ -121,12 +162,19 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   autoDetectThumbnails: true,
   playbackSpeed: 1,
   skipDuration: 10,
+  playerVolume: 0.8,
+  playerMuted: false,
+  playerRemainingTime: false,
+  playerSidebarOpen: true,
   autoPauseOnNotes: false,
+  notesSortOrder: "asc",
   notesSmartPauseEnabled: true,
   notesSmartPauseDelay: 2.5,
   notesSmartPauseRewind: true,
   notesAutocompleteEnabled: true,
   playerShortcutsEnabled: true,
+  librarySort: "Recent",
+  analyticsRange: "1y",
   openRouterApiKey: "",
   openRouterModel: DEFAULT_OPENROUTER_MODEL,
   googleApiKey: "",
@@ -156,8 +204,11 @@ function sanitizeCaptionPosition(raw: unknown): CaptionPosition | null {
 
 let pendingSyncTimer: number | null = null;
 let pendingSyncSnapshot: AppSettings | null = null;
+let pendingCoursePrefsSyncTimer: number | null = null;
+let pendingCoursePrefsSnapshot: Record<string, CourseUiPrefs> | null = null;
 let hydrationPromise: Promise<AppSettings> | null = null;
 let pageHideListenerRegistered = false;
+let courseDeletedListenerRegistered = false;
 
 function sanitizeSettings(raw: Partial<AppSettings> | null | undefined): AppSettings {
   if (!raw || typeof raw !== "object") return { ...DEFAULT_APP_SETTINGS };
@@ -193,8 +244,24 @@ function sanitizeSettings(raw: Partial<AppSettings> | null | undefined): AppSett
       ? raw.progressCalculationMode
       : DEFAULT_APP_SETTINGS.progressCalculationMode;
 
+  const notesSortOrder: NotesSortOrder =
+    raw.notesSortOrder === "asc" || raw.notesSortOrder === "desc"
+      ? raw.notesSortOrder
+      : DEFAULT_APP_SETTINGS.notesSortOrder;
+
+  const librarySort: LibrarySortPreference =
+    raw.librarySort === "Recent" || raw.librarySort === "Progress" || raw.librarySort === "A–Z"
+      ? raw.librarySort
+      : DEFAULT_APP_SETTINGS.librarySort;
+
+  const analyticsRange: AnalyticsRangePreference =
+    raw.analyticsRange === "1y" || raw.analyticsRange === "3m"
+      ? raw.analyticsRange
+      : DEFAULT_APP_SETTINGS.analyticsRange;
+
   const speed = Number(raw.playbackSpeed);
   const skip = Number(raw.skipDuration);
+  const volume = Number(raw.playerVolume);
   const notesSmartPauseDelay = Number(raw.notesSmartPauseDelay);
 
   return {
@@ -217,10 +284,25 @@ function sanitizeSettings(raw: Partial<AppSettings> | null | undefined): AppSett
         : DEFAULT_APP_SETTINGS.playbackSpeed,
     skipDuration:
       Number.isFinite(skip) && skip >= 1 && skip <= 120 ? skip : DEFAULT_APP_SETTINGS.skipDuration,
+    playerVolume:
+      Number.isFinite(volume) && volume >= 0 && volume <= 1
+        ? Math.round(volume * 100) / 100
+        : DEFAULT_APP_SETTINGS.playerVolume,
+    playerMuted:
+      typeof raw.playerMuted === "boolean" ? raw.playerMuted : DEFAULT_APP_SETTINGS.playerMuted,
+    playerRemainingTime:
+      typeof raw.playerRemainingTime === "boolean"
+        ? raw.playerRemainingTime
+        : DEFAULT_APP_SETTINGS.playerRemainingTime,
+    playerSidebarOpen:
+      typeof raw.playerSidebarOpen === "boolean"
+        ? raw.playerSidebarOpen
+        : DEFAULT_APP_SETTINGS.playerSidebarOpen,
     autoPauseOnNotes:
       typeof raw.autoPauseOnNotes === "boolean"
         ? raw.autoPauseOnNotes
         : DEFAULT_APP_SETTINGS.autoPauseOnNotes,
+    notesSortOrder,
     notesSmartPauseEnabled:
       typeof raw.notesSmartPauseEnabled === "boolean"
         ? raw.notesSmartPauseEnabled
@@ -243,6 +325,8 @@ function sanitizeSettings(raw: Partial<AppSettings> | null | undefined): AppSett
       typeof raw.playerShortcutsEnabled === "boolean"
         ? raw.playerShortcutsEnabled
         : DEFAULT_APP_SETTINGS.playerShortcutsEnabled,
+    librarySort,
+    analyticsRange,
     openRouterApiKey:
       typeof raw.openRouterApiKey === "string"
         ? raw.openRouterApiKey
@@ -322,18 +406,66 @@ function flushPendingServerSettingsSync(): void {
   });
 }
 
+function flushPendingCoursePrefsSync(): void {
+  if (typeof window === "undefined") return;
+  if (pendingCoursePrefsSyncTimer !== null) {
+    window.clearTimeout(pendingCoursePrefsSyncTimer);
+    pendingCoursePrefsSyncTimer = null;
+  }
+  const snapshot = pendingCoursePrefsSnapshot;
+  pendingCoursePrefsSnapshot = null;
+  if (!snapshot) return;
+  void apiRequest("/api/settings", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    keepalive: true,
+    body: JSON.stringify({
+      courseUiPrefs: snapshot,
+    }),
+  });
+}
+
+function registerLifecycleSyncListeners(): void {
+  if (typeof window === "undefined") return;
+  if (!pageHideListenerRegistered) {
+    pageHideListenerRegistered = true;
+    window.addEventListener("pagehide", () => {
+      flushPendingServerSettingsSync();
+      flushPendingCoursePrefsSync();
+    });
+  }
+  if (!courseDeletedListenerRegistered) {
+    courseDeletedListenerRegistered = true;
+    window.addEventListener("tutin:course_deleted", (e: Event) => {
+      const courseId = (e as CustomEvent<{ courseId?: string }>).detail?.courseId;
+      if (courseId) {
+        removeCourseUiPrefs(String(courseId));
+      }
+    });
+  }
+}
+
 function scheduleServerSettingsSync(next: AppSettings): void {
   if (typeof window === "undefined") return;
   pendingSyncSnapshot = next;
-  if (!pageHideListenerRegistered) {
-    pageHideListenerRegistered = true;
-    window.addEventListener("pagehide", flushPendingServerSettingsSync);
-  }
+  registerLifecycleSyncListeners();
   if (pendingSyncTimer !== null) {
     window.clearTimeout(pendingSyncTimer);
   }
   pendingSyncTimer = window.setTimeout(() => {
     flushPendingServerSettingsSync();
+  }, 180);
+}
+
+function scheduleCoursePrefsServerSync(nextMap: Record<string, CourseUiPrefs>): void {
+  if (typeof window === "undefined") return;
+  pendingCoursePrefsSnapshot = nextMap;
+  registerLifecycleSyncListeners();
+  if (pendingCoursePrefsSyncTimer !== null) {
+    window.clearTimeout(pendingCoursePrefsSyncTimer);
+  }
+  pendingCoursePrefsSyncTimer = window.setTimeout(() => {
+    flushPendingCoursePrefsSync();
   }, 180);
 }
 
@@ -362,8 +494,128 @@ export function writeAppSettings(next: AppSettings, options?: { skipServerSync?:
   }
 }
 
+function sanitizeCourseUiPref(raw: unknown): CourseUiPrefs | null {
+  if (!raw || typeof raw !== "object") return null;
+  const candidate = raw as Record<string, unknown>;
+  const out: CourseUiPrefs = {};
+
+  if (
+    candidate["activeTab"] === "playlist" ||
+    candidate["activeTab"] === "notes" ||
+    candidate["activeTab"] === "transcript"
+  ) {
+    out.activeTab = candidate["activeTab"];
+  }
+  if (typeof candidate["lastVideoId"] === "string" && candidate["lastVideoId"].trim()) {
+    out.lastVideoId = candidate["lastVideoId"].trim();
+  }
+  if (candidate["openModules"] && typeof candidate["openModules"] === "object") {
+    const map: Record<string, boolean> = {};
+    for (const [k, v] of Object.entries(candidate["openModules"] as Record<string, unknown>)) {
+      if (k && typeof v === "boolean") {
+        map[k] = v;
+      }
+    }
+    out.openModules = map;
+  }
+  if (typeof candidate["subtitleTrack"] === "string" && candidate["subtitleTrack"].trim()) {
+    out.subtitleTrack = candidate["subtitleTrack"].trim();
+  }
+  if (typeof candidate["transcriptLang"] === "string" && candidate["transcriptLang"].trim()) {
+    out.transcriptLang = candidate["transcriptLang"].trim();
+  }
+  if (typeof candidate["dubLang"] === "string" && candidate["dubLang"].trim()) {
+    out.dubLang = candidate["dubLang"].trim();
+  }
+  if (typeof candidate["updatedAt"] === "number" && Number.isFinite(candidate["updatedAt"])) {
+    out.updatedAt = candidate["updatedAt"];
+  }
+  return out;
+}
+
+function readAllCourseUiPrefsMap(): Record<string, CourseUiPrefs> {
+  if (typeof window === "undefined") return {};
+  try {
+    const raw = window.localStorage.getItem(COURSE_UI_PREFS_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object") return {};
+    const result: Record<string, CourseUiPrefs> = {};
+    for (const [courseId, val] of Object.entries(parsed as Record<string, unknown>)) {
+      const clean = sanitizeCourseUiPref(val);
+      if (courseId && clean) {
+        result[courseId] = clean;
+      }
+    }
+    return result;
+  } catch {
+    return {};
+  }
+}
+
+function writeAllCourseUiPrefsMap(
+  nextMap: Record<string, CourseUiPrefs>,
+  options?: { skipServerSync?: boolean },
+): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(COURSE_UI_PREFS_STORAGE_KEY, JSON.stringify(nextMap));
+  } catch {
+    // ignore storage failures
+  }
+  if (!options?.skipServerSync) {
+    scheduleCoursePrefsServerSync(nextMap);
+  }
+}
+
+export function readCourseUiPrefs(courseId: string): CourseUiPrefs {
+  if (!courseId) return {};
+  const all = readAllCourseUiPrefsMap();
+  return all[String(courseId)] ?? {};
+}
+
+export function updateCourseUiPrefs(
+  courseId: string,
+  patch: Partial<CourseUiPrefs>,
+): CourseUiPrefs {
+  const key = String(courseId);
+  if (!key || typeof window === "undefined") return {};
+  const all = readAllCourseUiPrefsMap();
+  const prev = all[key] ?? {};
+  const mergedOpenModules =
+    patch.openModules !== undefined
+      ? { ...(prev.openModules ?? {}), ...patch.openModules }
+      : prev.openModules;
+  const nextPref: CourseUiPrefs = {
+    ...prev,
+    ...patch,
+    ...(mergedOpenModules ? { openModules: mergedOpenModules } : {}),
+    updatedAt: Date.now(),
+  };
+  all[key] = nextPref;
+  writeAllCourseUiPrefsMap(all);
+  window.dispatchEvent(
+    new CustomEvent(COURSE_UI_PREFS_CHANGED_EVENT, {
+      detail: { courseId: key, prefs: nextPref },
+    }),
+  );
+  return nextPref;
+}
+
+export function removeCourseUiPrefs(courseId: string): void {
+  const key = String(courseId);
+  if (!key || typeof window === "undefined") return;
+  const all = readAllCourseUiPrefsMap();
+  if (key in all) {
+    delete all[key];
+    writeAllCourseUiPrefsMap(all);
+  }
+  clearCourseSessionUiState(key);
+}
+
 export async function hydrateAppSettingsFromServer(force = false): Promise<AppSettings> {
   if (typeof window === "undefined") return { ...DEFAULT_APP_SETTINGS };
+  registerLifecycleSyncListeners();
   if (hydrationPromise && !force) return hydrationPromise;
 
   hydrationPromise = (async () => {
@@ -414,8 +666,23 @@ export async function hydrateAppSettingsFromServer(force = false): Promise<AppSe
         ...(typeof serverData["skipDuration"] === "number"
           ? { skipDuration: serverData["skipDuration"] }
           : {}),
+        ...(typeof serverData["playerVolume"] === "number"
+          ? { playerVolume: serverData["playerVolume"] }
+          : {}),
+        ...(typeof serverData["playerMuted"] === "boolean"
+          ? { playerMuted: serverData["playerMuted"] }
+          : {}),
+        ...(typeof serverData["playerRemainingTime"] === "boolean"
+          ? { playerRemainingTime: serverData["playerRemainingTime"] }
+          : {}),
+        ...(typeof serverData["playerSidebarOpen"] === "boolean"
+          ? { playerSidebarOpen: serverData["playerSidebarOpen"] }
+          : {}),
         ...(typeof serverData["autoPauseOnNotes"] === "boolean"
           ? { autoPauseOnNotes: serverData["autoPauseOnNotes"] }
+          : {}),
+        ...(serverData["notesSortOrder"] === "asc" || serverData["notesSortOrder"] === "desc"
+          ? { notesSortOrder: serverData["notesSortOrder"] as NotesSortOrder }
           : {}),
         ...(typeof serverData["notesSmartPauseEnabled"] === "boolean"
           ? { notesSmartPauseEnabled: serverData["notesSmartPauseEnabled"] }
@@ -432,6 +699,14 @@ export async function hydrateAppSettingsFromServer(force = false): Promise<AppSe
         ...(typeof serverData["playerShortcutsEnabled"] === "boolean"
           ? { playerShortcutsEnabled: serverData["playerShortcutsEnabled"] }
           : {}),
+        ...(serverData["librarySort"] === "Recent" ||
+        serverData["librarySort"] === "Progress" ||
+        serverData["librarySort"] === "A–Z"
+          ? { librarySort: serverData["librarySort"] as LibrarySortPreference }
+          : {}),
+        ...(serverData["analyticsRange"] === "1y" || serverData["analyticsRange"] === "3m"
+          ? { analyticsRange: serverData["analyticsRange"] as AnalyticsRangePreference }
+          : {}),
         ...(serverData["captionFontSize"] === "small" ||
         serverData["captionFontSize"] === "medium" ||
         serverData["captionFontSize"] === "large"
@@ -446,6 +721,28 @@ export async function hydrateAppSettingsFromServer(force = false): Promise<AppSe
       });
 
       writeAppSettings(merged, { skipServerSync: true });
+
+      if (serverData["courseUiPrefs"] && typeof serverData["courseUiPrefs"] === "object") {
+        const localCoursePrefs = readAllCourseUiPrefsMap();
+        const serverCoursePrefs = serverData["courseUiPrefs"] as Record<string, unknown>;
+        const mergedCoursePrefs: Record<string, CourseUiPrefs> = { ...localCoursePrefs };
+        for (const [cid, rawPref] of Object.entries(serverCoursePrefs)) {
+          const cleanServer = sanitizeCourseUiPref(rawPref);
+          if (!cid || !cleanServer) continue;
+          const existingLocal = localCoursePrefs[cid];
+          if (!existingLocal || (cleanServer.updatedAt ?? 0) >= (existingLocal.updatedAt ?? 0)) {
+            mergedCoursePrefs[cid] = {
+              ...existingLocal,
+              ...cleanServer,
+              openModules: {
+                ...(existingLocal?.openModules ?? {}),
+                ...(cleanServer.openModules ?? {}),
+              },
+            };
+          }
+        }
+        writeAllCourseUiPrefsMap(mergedCoursePrefs, { skipServerSync: true });
+      }
 
       if (typeof serverData["welcomeSeen"] === "boolean" && serverData["welcomeSeen"]) {
         try {
@@ -464,6 +761,141 @@ export async function hydrateAppSettingsFromServer(force = false): Promise<AppSe
   });
 
   return hydrationPromise;
+}
+
+function readSessionJsonMap<T>(storageKey: string): Record<string, T> {
+  if (typeof window === "undefined") return {};
+  try {
+    const raw = window.sessionStorage.getItem(storageKey);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as unknown;
+    return parsed && typeof parsed === "object" ? (parsed as Record<string, T>) : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeSessionJsonMap<T>(storageKey: string, map: Record<string, T>): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.sessionStorage.setItem(storageKey, JSON.stringify(map));
+  } catch {
+    // ignore storage failures
+  }
+}
+
+export function readSessionScroll(key: string): number | null {
+  if (!key) return null;
+  const map = readSessionJsonMap<number>(SESSION_SCROLL_STORAGE_KEY);
+  const val = map[key];
+  return typeof val === "number" && Number.isFinite(val) && val >= 0 ? val : null;
+}
+
+export function writeSessionScroll(key: string, scrollTop: number): void {
+  if (!key || !Number.isFinite(scrollTop) || scrollTop < 0) return;
+  const map = readSessionJsonMap<number>(SESSION_SCROLL_STORAGE_KEY);
+  const rounded = Math.round(scrollTop);
+  if (map[key] === rounded) return;
+  map[key] = rounded;
+  writeSessionJsonMap(SESSION_SCROLL_STORAGE_KEY, map);
+}
+
+export function readSessionNoteDraft(courseId: string, lessonKey: string): SessionNoteDraft | null {
+  const compositeKey = `${courseId}:${lessonKey}`;
+  const map = readSessionJsonMap<SessionNoteDraft>(SESSION_NOTE_DRAFTS_STORAGE_KEY);
+  const draft = map[compositeKey];
+  if (!draft || typeof draft !== "object") return null;
+  if (draft.mode !== "add" && draft.mode !== "edit") return null;
+  return {
+    mode: draft.mode,
+    editingNoteId: typeof draft.editingNoteId === "string" ? draft.editingNoteId : null,
+    content: typeof draft.content === "string" ? draft.content : "",
+    timestamp:
+      typeof draft.timestamp === "number" && Number.isFinite(draft.timestamp)
+        ? draft.timestamp
+        : null,
+  };
+}
+
+export function writeSessionNoteDraft(
+  courseId: string,
+  lessonKey: string,
+  draft: SessionNoteDraft | null,
+): void {
+  if (!courseId || !lessonKey) return;
+  const compositeKey = `${courseId}:${lessonKey}`;
+  const map = readSessionJsonMap<SessionNoteDraft>(SESSION_NOTE_DRAFTS_STORAGE_KEY);
+  if (!draft) {
+    if (!(compositeKey in map)) return;
+    delete map[compositeKey];
+  } else {
+    map[compositeKey] = draft;
+  }
+  writeSessionJsonMap(SESSION_NOTE_DRAFTS_STORAGE_KEY, map);
+}
+
+export function readSessionFilters(): SessionFilterState {
+  if (typeof window === "undefined") return {};
+  try {
+    const raw = window.sessionStorage.getItem(SESSION_FILTERS_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as unknown;
+    return parsed && typeof parsed === "object" ? (parsed as SessionFilterState) : {};
+  } catch {
+    return {};
+  }
+}
+
+export function updateSessionFilters(patch: Partial<SessionFilterState>): void {
+  if (typeof window === "undefined") return;
+  try {
+    const current = readSessionFilters();
+    const next: SessionFilterState = { ...current, ...patch };
+    window.sessionStorage.setItem(SESSION_FILTERS_STORAGE_KEY, JSON.stringify(next));
+  } catch {
+    // ignore
+  }
+}
+
+function clearCourseSessionUiState(courseId: string): void {
+  if (!courseId || typeof window === "undefined") return;
+  const scrollMap = readSessionJsonMap<number>(SESSION_SCROLL_STORAGE_KEY);
+  let scrollChanged = false;
+  for (const k of Object.keys(scrollMap)) {
+    if (
+      k === `playlist:${courseId}` ||
+      k.startsWith(`notes:${courseId}:`) ||
+      k.startsWith(`transcript:${courseId}:`)
+    ) {
+      delete scrollMap[k];
+      scrollChanged = true;
+    }
+  }
+  if (scrollChanged) writeSessionJsonMap(SESSION_SCROLL_STORAGE_KEY, scrollMap);
+
+  const draftsMap = readSessionJsonMap<SessionNoteDraft>(SESSION_NOTE_DRAFTS_STORAGE_KEY);
+  let draftsChanged = false;
+  for (const k of Object.keys(draftsMap)) {
+    if (k.startsWith(`${courseId}:`)) {
+      delete draftsMap[k];
+      draftsChanged = true;
+    }
+  }
+  if (draftsChanged) writeSessionJsonMap(SESSION_NOTE_DRAFTS_STORAGE_KEY, draftsMap);
+}
+
+export function clearAllSessionUiState(): void {
+  if (typeof window === "undefined") return;
+  try {
+    const keysToRemove: string[] = [];
+    for (let i = 0; i < window.sessionStorage.length; i += 1) {
+      const key = window.sessionStorage.key(i);
+      if (key && key.startsWith("tutin")) keysToRemove.push(key);
+    }
+    keysToRemove.forEach((key) => window.sessionStorage.removeItem(key));
+  } catch {
+    // ignore
+  }
 }
 
 export function isWelcomeGuideSeen(): boolean {

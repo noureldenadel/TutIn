@@ -84,7 +84,7 @@ export function CanvasNotesDrawer({
       onPointerDown={(e) => e.stopPropagation()}
       onDoubleClick={(e) => e.stopPropagation()}
       onWheel={(e) => e.stopPropagation()}
-      className="pointer-events-auto absolute bottom-20 right-4 top-16 z-20 flex w-80 flex-col overflow-hidden rounded-xl border border-border/70 bg-card/95 shadow-workspace backdrop-blur-sm animate-in fade-in slide-in-from-right-2 duration-150 md:bottom-4"
+      className="pointer-events-auto absolute bottom-16 left-2.5 right-2.5 top-14 z-20 flex w-auto flex-col overflow-hidden rounded-xl border border-border/70 bg-card/95 shadow-workspace backdrop-blur-sm animate-in fade-in slide-in-from-right-2 duration-150 sm:bottom-20 sm:left-auto sm:right-4 sm:top-16 sm:w-80 md:bottom-4"
     >
       {/* Header */}
       <div className="flex items-center justify-between border-b border-border/50 px-3.5 py-2.5">

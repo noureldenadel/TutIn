@@ -53,6 +53,7 @@ import {
 } from "@/lib/courses";
 import { hydrateInstructorAvatars } from "@/components/layout/instructor-avatar";
 import {
+  clearAllSessionUiState,
   DEFAULT_APP_SETTINGS,
   DEFAULT_OPENROUTER_MODEL,
   THEME_PRESETS,
@@ -388,6 +389,7 @@ export function SettingsModal({
         if (key && key.startsWith("tutin")) keysToRemove.push(key);
       }
       keysToRemove.forEach((key) => window.localStorage.removeItem(key));
+      clearAllSessionUiState();
 
       writeAppSettings(DEFAULT_APP_SETTINGS, { skipServerSync: true });
       setSettings(DEFAULT_APP_SETTINGS);
@@ -457,7 +459,7 @@ export function SettingsModal({
             </DialogDescription>
           </DialogHeader>
 
-          <aside className="flex shrink-0 flex-row gap-1 overflow-x-auto border-b border-border/50 bg-shell p-3 sm:w-56 sm:flex-col sm:border-b-0 sm:border-r sm:p-4">
+          <aside className="flex shrink-0 flex-row gap-1 overflow-x-auto border-b border-border/50 bg-shell p-3 pr-12 scrollbar-none sm:w-56 sm:flex-col sm:border-b-0 sm:border-r sm:p-4">
             <p className="hidden px-2.5 pb-2 pt-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground sm:block">
               Settings
             </p>
@@ -470,7 +472,7 @@ export function SettingsModal({
                   type="button"
                   onClick={() => setActiveTab(tab.id)}
                   className={cn(
-                    "flex shrink-0 items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
+                    "flex shrink-0 items-center gap-2 rounded-lg px-2.5 py-2 text-xs font-medium transition-colors sm:gap-2.5 sm:px-3 sm:text-sm",
                     isActive
                       ? "bg-card text-foreground shadow-card"
                       : "text-muted-foreground hover:bg-secondary/60 hover:text-foreground",
@@ -484,14 +486,14 @@ export function SettingsModal({
           </aside>
 
           <div className="flex min-h-0 flex-1 flex-col">
-            <header className="shrink-0 border-b border-border/50 px-6 py-4 pr-12 sm:px-7">
+            <header className="shrink-0 border-b border-border/50 px-4 py-3.5 sm:px-7 sm:py-4 sm:pr-12">
               <h2 className="text-base font-semibold">{currentTabMeta.label}</h2>
             </header>
 
-            <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5 custom-scrollbar sm:px-7">
+            <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 custom-scrollbar sm:px-7 sm:py-5">
               {activeTab === "general" && (
                 <div className="divide-y divide-border/50">
-                  <div className="flex items-center justify-between gap-4 pb-5">
+                  <div className="flex flex-col gap-2.5 pb-5 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
                     <Label className="text-sm font-medium">Appearance</Label>
                     <SegmentedControl<ThemeMode>
                       value={theme}
@@ -561,7 +563,7 @@ export function SettingsModal({
                     />
                   </div>
 
-                  <div className="flex items-center justify-between gap-4 py-5">
+                  <div className="flex flex-col gap-2.5 py-5 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
                     <div className="space-y-0.5">
                       <Label className="text-sm font-medium">Auto-mark complete</Label>
                       <p className="text-xs text-muted-foreground">
@@ -579,7 +581,7 @@ export function SettingsModal({
                     />
                   </div>
 
-                  <div className="flex items-center justify-between gap-4 py-5">
+                  <div className="flex flex-col gap-2.5 py-5 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
                     <div className="space-y-0.5">
                       <Label className="text-sm font-medium">Progress mode</Label>
                       <p className="text-xs text-muted-foreground">
@@ -659,7 +661,7 @@ export function SettingsModal({
 
               {activeTab === "ai" && (
                 <div className="divide-y divide-border/50">
-                  <div className="flex items-center justify-between gap-4 pb-5">
+                  <div className="flex flex-col gap-2.5 pb-5 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
                     <div className="space-y-0.5">
                       <Label className="text-sm font-medium">Transcription device</Label>
                       <p className="text-xs text-muted-foreground">
@@ -677,7 +679,7 @@ export function SettingsModal({
                     />
                   </div>
 
-                  <div className="flex items-center justify-between gap-4 py-5">
+                  <div className="flex flex-col gap-2.5 py-5 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
                     <div className="space-y-0.5">
                       <Label className="text-sm font-medium">Whisper model</Label>
                       <p className="text-xs text-muted-foreground">

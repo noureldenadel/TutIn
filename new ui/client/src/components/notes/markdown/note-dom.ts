@@ -45,7 +45,28 @@ export const INLINE_WRAPPER_TAGS = new Set([
 ]);
 
 export const NOTE_IMAGE_BLOCK_ATTR = "data-note-image-block";
+export const NOTE_IMAGE_ALIGN_ATTR = "data-align";
 export const NOTE_IMAGE_TAIL_ATTR = "data-image-tail";
+export const NOTE_IMAGE_MAX_WIDTH = 288;
+export const NOTE_IMAGE_MAX_HEIGHT = 220;
+
+const STRONG_RTL_CHAR_RE =
+  /[\p{Script=Arabic}\p{Script=Hebrew}\p{Script=Syriac}\p{Script=Thaana}\p{Script=Nko}]/u;
+const STRONG_LTR_CHAR_RE =
+  /[\p{Script=Latin}\p{Script=Greek}\p{Script=Cyrillic}\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u;
+
+/**
+ * Inspects text using the Unicode BiDi first-strong character rule (UAX #9 / HTML `dir="auto"`)
+ * and returns `"rtl"` when the first strong directional character is RTL, `"ltr"` when LTR,
+ * or `null` when the string contains no strong directional characters.
+ */
+export function detectTextBlockDirection(text: string): "ltr" | "rtl" | null {
+  for (const ch of text) {
+    if (STRONG_RTL_CHAR_RE.test(ch)) return "rtl";
+    if (STRONG_LTR_CHAR_RE.test(ch)) return "ltr";
+  }
+  return null;
+}
 export const MD_SYNTAX_ATTR = "data-md-syntax";
 export const MD_ACTIVE_ATTR = "data-md-active";
 export const MD_URL_ATTR = "data-md-url";
@@ -775,6 +796,9 @@ export function sanitizeClipboardHtml(rawHtml: string): string {
       }
 
       if (SAFE_CLIPBOARD_BLOCK_TAGS.has(tag) || SAFE_CLIPBOARD_INLINE_TAGS.has(tag)) {
+        const isImgBlock = tag === "div" && el.hasAttribute(NOTE_IMAGE_BLOCK_ATTR);
+        const imgAlign = isImgBlock ? el.getAttribute(NOTE_IMAGE_ALIGN_ATTR) : null;
+        const imgDir = isImgBlock ? el.getAttribute("dir") : null;
         const keepTaskList = tag === "ul" && el.hasAttribute("data-task-list");
         const isTaskItem =
           tag === "li" && (el.hasAttribute("data-task") || el.hasAttribute("data-task-item"));
@@ -788,6 +812,15 @@ export function sanitizeClipboardHtml(rawHtml: string): string {
         const codeLang = tag === "code" ? el.getAttribute("data-lang") : null;
         for (const attr of Array.from(el.attributes)) {
           el.removeAttribute(attr.name);
+        }
+        if (isImgBlock) {
+          el.setAttribute(NOTE_IMAGE_BLOCK_ATTR, "true");
+          if (imgAlign && ["left", "right", "center"].includes(imgAlign)) {
+            el.setAttribute(NOTE_IMAGE_ALIGN_ATTR, imgAlign);
+          }
+          if (imgDir && ["ltr", "rtl"].includes(imgDir)) {
+            el.setAttribute("dir", imgDir);
+          }
         }
         if (keepTaskList) el.setAttribute("data-task-list", "true");
         if (isTaskItem) {
@@ -993,6 +1026,7 @@ const SAFE_STORED_ATTRS = new Set([
   "checked",
   "class",
   "contenteditable",
+  "data-align",
   "data-checked",
   "data-code-eol",
   "data-image-tail",
@@ -1005,6 +1039,7 @@ const SAFE_STORED_ATTRS = new Set([
   "data-task-checkbox",
   "data-task-content",
   "data-task-list",
+  "dir",
   "disabled",
   "draggable",
   "height",
@@ -1123,8 +1158,100 @@ export function sanitizeStoredNoteHtml(rawHtml: string): string {
   sanitizeNodeTree(doc.body);
   stripLiveSyntaxArtifacts(doc.body);
   convertStandaloneHrLines(doc.body);
+  syncImageBlockAlignments(doc.body);
 
   return doc.body.innerHTML;
+}
+
+function isImageBlockNode(node: Node | null): boolean {
+  return (
+    Boolean(node) &&
+    node!.nodeType === Node.ELEMENT_NODE &&
+    (node as HTMLElement).hasAttribute(NOTE_IMAGE_BLOCK_ATTR)
+  );
+}
+
+function resolveElementTextAlignment(
+  el: HTMLElement | null,
+  root: HTMLElement,
+): "left" | "right" | null {
+  if (!el || el === root || isImageBlockNode(el) || el.tagName === "HR") return null;
+
+  const inlineAlign = el.style?.textAlign?.trim().toLowerCase();
+  if (inlineAlign === "right" || inlineAlign === "end") return "right";
+  if (inlineAlign === "left" || inlineAlign === "start") return "left";
+
+  const attrAlign = el.getAttribute("align")?.trim().toLowerCase();
+  if (attrAlign === "right") return "right";
+  if (attrAlign === "left") return "left";
+
+  const explicitDir = el.getAttribute("dir")?.trim().toLowerCase();
+  if (explicitDir === "rtl") return "right";
+  if (explicitDir === "ltr") return "left";
+
+  const detectedDir = detectTextBlockDirection(getTextWithoutArtifacts(el));
+  if (detectedDir === "rtl") return "right";
+  if (detectedDir === "ltr") return "left";
+  return null;
+}
+
+export function inferImageAlignmentFromContext(
+  anchorNode: Node | null,
+  editor: HTMLElement,
+): "left" | "right" {
+  const topBlock = anchorNode ? getTopLevelBlock(anchorNode, editor) : null;
+  if (topBlock && !isImageBlockNode(topBlock)) {
+    const direct = resolveElementTextAlignment(topBlock, editor);
+    if (direct) return direct;
+  }
+
+  let prev = topBlock ? topBlock.previousElementSibling : editor.lastElementChild;
+  while (prev) {
+    const align = resolveElementTextAlignment(prev as HTMLElement, editor);
+    if (align) return align;
+    prev = prev.previousElementSibling;
+  }
+
+  let next = topBlock ? topBlock.nextElementSibling : editor.firstElementChild;
+  while (next) {
+    const align = resolveElementTextAlignment(next as HTMLElement, editor);
+    if (align) return align;
+    next = next.nextElementSibling;
+  }
+
+  const wholeNoteDir = detectTextBlockDirection(getTextWithoutArtifacts(editor));
+  if (wholeNoteDir === "rtl") return "right";
+  if (wholeNoteDir === "ltr") return "left";
+
+  if (typeof window !== "undefined" && editor.isConnected) {
+    const computedDir = window.getComputedStyle(editor).direction;
+    if (computedDir === "rtl") return "right";
+  }
+  return "left";
+}
+
+export function applyImageBlockAlignment(block: HTMLElement, align: "left" | "right"): boolean {
+  const dir = align === "right" ? "rtl" : "ltr";
+  const prevAlign = block.getAttribute(NOTE_IMAGE_ALIGN_ATTR);
+  const prevDir = block.getAttribute("dir");
+  if (prevAlign === align && prevDir === dir) return false;
+  block.setAttribute(NOTE_IMAGE_ALIGN_ATTR, align);
+  block.setAttribute("dir", dir);
+  return true;
+}
+
+export function syncImageBlockAlignments(editor: HTMLElement): boolean {
+  const blocks = editor.querySelectorAll(`[${NOTE_IMAGE_BLOCK_ATTR}="true"]`);
+  if (blocks.length === 0) return false;
+  let mutated = false;
+  blocks.forEach((node) => {
+    const block = node as HTMLElement;
+    const align = inferImageAlignmentFromContext(block, editor);
+    if (applyImageBlockAlignment(block, align)) {
+      mutated = true;
+    }
+  });
+  return mutated;
 }
 
 /**

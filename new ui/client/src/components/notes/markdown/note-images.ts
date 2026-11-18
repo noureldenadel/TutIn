@@ -3,6 +3,7 @@ import {
   INLINE_WRAPPER_TAGS,
   NOTE_IMAGE_BLOCK_ATTR,
   NOTE_IMAGE_TAIL_ATTR,
+  applyImageBlockAlignment,
   getClosestBlock,
   getCollapsedSelectionRange,
   getEditableScope,
@@ -10,6 +11,7 @@ import {
   getTopLevelBlock,
   hasVisibleContent,
   hasVisibleFragmentContent,
+  inferImageAlignmentFromContext,
   isCaretAtBlockBoundaryStart,
   isCaretAtEndOfScope,
   isCaretAtStartOfScope,
@@ -18,9 +20,12 @@ import {
   placeCaretAtEnd,
   placeCaretAtStart,
   resolveFocusTarget,
+  syncImageBlockAlignments,
 } from "./note-dom";
 import { createTaskListItem } from "./note-specs";
 import { expandHorizontalRuleAndFocus, syncLiveMarkdownSyntax } from "./note-live-preview";
+
+export { applyImageBlockAlignment, inferImageAlignmentFromContext, syncImageBlockAlignments };
 
 export function isImageBlockElement(node: Node | null): boolean {
   return (
@@ -30,10 +35,16 @@ export function isImageBlockElement(node: Node | null): boolean {
   );
 }
 
-export function createImageAtomBlock(img: HTMLImageElement): HTMLDivElement {
+export function createImageAtomBlock(
+  img: HTMLImageElement,
+  align?: "left" | "right",
+): HTMLDivElement {
   const block = document.createElement("div");
   block.setAttribute(NOTE_IMAGE_BLOCK_ATTR, "true");
   block.contentEditable = "false";
+  if (align) {
+    applyImageBlockAlignment(block, align);
+  }
   img.draggable = false;
   img.setAttribute("draggable", "false");
   block.appendChild(img);
@@ -265,6 +276,9 @@ export function normalizeEditorImageBlocks(editor: HTMLElement): boolean {
   flushInlineRun(null);
 
   syncImageTailParagraphs(editor);
+  if (syncImageBlockAlignments(editor)) {
+    mutated = true;
+  }
 
   const lastEl = editor.lastElementChild as HTMLElement | null;
   if (lastEl && isImageBlockElement(lastEl)) {

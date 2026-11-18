@@ -155,9 +155,9 @@ export function EditCourseModal({ open, onOpenChange, course, onSave }: EditCour
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex max-h-[88dvh] w-full max-w-2xl flex-col gap-0 overflow-hidden rounded-xl border-0 bg-card p-0 shadow-workspace sm:rounded-xl">
+      <DialogContent className="flex max-h-[88dvh] max-w-2xl flex-col gap-0 overflow-hidden rounded-xl border-0 bg-card p-0 shadow-workspace sm:rounded-xl">
         {/* Header (pr-12 ensures space for built-in X button) */}
-        <div className="flex items-center justify-between border-b border-border/50 px-6 py-4 pr-12">
+        <div className="flex items-center justify-between border-b border-border/50 px-4 py-3.5 pr-12 sm:px-6 sm:py-4">
           <DialogTitle className="truncate text-base font-semibold tracking-tight text-foreground">
             Edit course
           </DialogTitle>
@@ -167,7 +167,7 @@ export function EditCourseModal({ open, onOpenChange, course, onSave }: EditCour
         </div>
 
         {/* Content Body */}
-        <div className="flex-1 overflow-y-auto p-6 custom-scrollbar">
+        <div className="flex-1 overflow-y-auto p-4 custom-scrollbar sm:p-6">
           <div className="space-y-6">
             {/* Cover preview & actions */}
             <div className="flex flex-col gap-4 sm:flex-row sm:items-center">
@@ -414,7 +414,7 @@ export function EditCourseModal({ open, onOpenChange, course, onSave }: EditCour
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-end border-t border-border/50 bg-card px-6 py-4">
+        <div className="flex items-center justify-end border-t border-border/50 bg-card px-4 py-3.5 sm:px-6 sm:py-4">
           <div className="flex items-center gap-2">
             <Button
               type="button"

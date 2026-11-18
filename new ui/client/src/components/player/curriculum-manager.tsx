@@ -25,6 +25,11 @@ import {
 import { toast } from "sonner";
 
 import { apiUrl } from "@/lib/api";
+import {
+  COURSE_UI_PREFS_CHANGED_EVENT,
+  readCourseUiPrefs,
+  updateCourseUiPrefs,
+} from "@/lib/app-settings";
 import { formatTrackDisplayLabel, getLanguageLabel, getOriginLabel } from "@/lib/languages";
 import {
   TRANSCRIPT_UPDATED_EVENT,
@@ -150,7 +155,9 @@ export function CurriculumManager({ course: initialCourse }: { course: Course })
   const [course, setCourse] = useState<Course>(initialCourse);
   const [modules, setModules] = useState<ManagedModule[]>([]);
   const [loading, setLoading] = useState(true);
-  const [openMods, setOpenMods] = useState<Record<string, boolean>>({});
+  const [openMods, setOpenMods] = useState<Record<string, boolean>>(
+    () => readCourseUiPrefs(String(initialCourse.id)).openModules ?? {},
+  );
   const [dirtyOrder, setDirtyOrder] = useState(false);
   const [savingOrder, setSavingOrder] = useState(false);
 
@@ -219,7 +226,19 @@ export function CurriculumManager({ course: initialCourse }: { course: Course })
 
   useEffect(() => {
     setCourse(initialCourse);
+    setOpenMods(readCourseUiPrefs(String(initialCourse.id)).openModules ?? {});
   }, [initialCourse]);
+
+  useEffect(() => {
+    const onCoursePrefsChanged = (e: Event) => {
+      const detail = (e as CustomEvent<{ courseId?: string }>).detail;
+      if (!detail?.courseId || detail.courseId === String(course.id)) {
+        setOpenMods(readCourseUiPrefs(String(course.id)).openModules ?? {});
+      }
+    };
+    window.addEventListener(COURSE_UI_PREFS_CHANGED_EVENT, onCoursePrefsChanged);
+    return () => window.removeEventListener(COURSE_UI_PREFS_CHANGED_EVENT, onCoursePrefsChanged);
+  }, [course.id]);
 
   const applyCurriculum = useCallback(
     (nextModules: CourseModuleSpec[], nextLessons: CourseLessonItem[]) => {
@@ -231,15 +250,16 @@ export function CurriculumManager({ course: initialCourse }: { course: Course })
       }));
       setModules(grouped);
       setDirtyOrder(false);
+      const savedMap = readCourseUiPrefs(String(course.id)).openModules ?? {};
       setOpenMods((prev) => {
-        const next = { ...prev };
+        const next = { ...prev, ...savedMap };
         for (const m of grouped) {
           if (next[m.id] === undefined) next[m.id] = true;
         }
         return next;
       });
     },
-    [],
+    [course.id],
   );
 
   const loadCurriculum = useCallback(
@@ -648,7 +668,7 @@ export function CurriculumManager({ course: initialCourse }: { course: Course })
     >
       {/* Header */}
       <div className="flex flex-col gap-4 border-b border-border/60 pb-5 sm:flex-row sm:items-center sm:justify-between">
-        <div className="min-w-0">
+        <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
             <Link to="/" className="hover:text-foreground">
               Courses
@@ -691,7 +711,7 @@ export function CurriculumManager({ course: initialCourse }: { course: Course })
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2 sm:shrink-0 sm:flex-nowrap">
           {course.folderPath && (
             <Button
               type="button"
@@ -865,7 +885,13 @@ export function CurriculumManager({ course: initialCourse }: { course: Course })
                 <div className="flex items-center gap-2 border-b border-border/50 px-4 py-3">
                   <button
                     type="button"
-                    onClick={() => setOpenMods((prev) => ({ ...prev, [mod.id]: !isOpen }))}
+                    onClick={() => {
+                      const nextOpen = !isOpen;
+                      setOpenMods((prev) => ({ ...prev, [mod.id]: nextOpen }));
+                      updateCourseUiPrefs(String(course.id), {
+                        openModules: { [mod.id]: nextOpen },
+                      });
+                    }}
                     aria-expanded={isOpen}
                     className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
                   >
@@ -897,7 +923,8 @@ export function CurriculumManager({ course: initialCourse }: { course: Course })
                   </button>
 
                   <span className="shrink-0 font-mono text-xs tabular-nums text-muted-foreground">
-                    {modDone}/{mod.lessons.length} · {formatTimestamp(modSecs)}
+                    {modDone}/{mod.lessons.length}
+                    <span className="hidden sm:inline"> · {formatTimestamp(modSecs)}</span>
                   </span>
 
                   <div className="flex shrink-0 items-center gap-0.5">
@@ -909,7 +936,7 @@ export function CurriculumManager({ course: initialCourse }: { course: Course })
                       onClick={() => moveModule(modIdx, -1)}
                       title="Move module up"
                       aria-label="Move module up"
-                      className="size-7 text-muted-foreground"
+                      className="hidden size-7 text-muted-foreground sm:inline-flex"
                     >
                       <ArrowUp className="size-3.5" />
                     </Button>
@@ -921,7 +948,7 @@ export function CurriculumManager({ course: initialCourse }: { course: Course })
                       onClick={() => moveModule(modIdx, 1)}
                       title="Move module down"
                       aria-label="Move module down"
-                      className="size-7 text-muted-foreground"
+                      className="hidden size-7 text-muted-foreground sm:inline-flex"
                     >
                       <ArrowDown className="size-3.5" />
                     </Button>
@@ -1199,7 +1226,7 @@ export function CurriculumManager({ course: initialCourse }: { course: Course })
                                   onClick={() => moveLesson(mod.id, lessonIdx, -1)}
                                   title="Move up"
                                   aria-label="Move lesson up"
-                                  className="size-7 text-muted-foreground"
+                                  className="hidden size-7 text-muted-foreground sm:inline-flex"
                                 >
                                   <ArrowUp className="size-3.5" />
                                 </Button>
@@ -1211,7 +1238,7 @@ export function CurriculumManager({ course: initialCourse }: { course: Course })
                                   onClick={() => moveLesson(mod.id, lessonIdx, 1)}
                                   title="Move down"
                                   aria-label="Move lesson down"
-                                  className="size-7 text-muted-foreground"
+                                  className="hidden size-7 text-muted-foreground sm:inline-flex"
                                 >
                                   <ArrowDown className="size-3.5" />
                                 </Button>

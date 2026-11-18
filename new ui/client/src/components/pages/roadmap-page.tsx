@@ -178,7 +178,9 @@ export function RoadmapPage() {
   const [roadmaps, setRoadmaps] = useState<Roadmap[]>([]);
   const [currentId, setCurrentId] = useState<string>("");
   const [isLoading, setIsLoading] = useState(true);
-  const [drawerOpen, setDrawerOpen] = useState(true);
+  const [drawerOpen, setDrawerOpen] = useState(
+    () => typeof window === "undefined" || window.innerWidth >= 640,
+  );
   const [courseQuery, setCourseQuery] = useState("");
 
   const [createModalOpen, setCreateModalOpen] = useState(false);
@@ -719,8 +721,8 @@ export function RoadmapPage() {
   }
 
   return (
-    <div className="flex h-dvh flex-col p-4 sm:p-6 lg:p-8">
-      <header className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+    <div className="flex h-full flex-col p-3.5 sm:p-6 lg:p-8">
+      <header className="mb-3 flex items-center justify-between gap-2 sm:mb-4">
         <div className="flex items-center gap-1.5">
           {isEditingTitle ? (
             <input
@@ -827,7 +829,7 @@ export function RoadmapPage() {
 
       <div className="relative flex flex-1 overflow-hidden rounded-xl bg-shell/60 shadow-card">
         {drawerOpen && (
-          <aside className="z-10 flex w-72 shrink-0 flex-col border-r border-border/50 bg-card/95 shadow-workspace backdrop-blur-md sm:w-80">
+          <aside className="absolute inset-y-0 left-0 z-20 flex w-[min(18rem,82vw)] shrink-0 flex-col border-r border-border/50 bg-card/95 shadow-workspace backdrop-blur-md sm:static sm:z-10 sm:w-80">
             <div className="border-b border-border/50 p-3.5 pb-3">
               <div className="flex items-center gap-2 rounded-lg bg-secondary/75 px-2.5 py-1.5 transition-colors focus-within:bg-background focus-within:ring-1 focus-within:ring-ring/40">
                 <Search className="size-3.5 shrink-0 text-muted-foreground" />
@@ -883,7 +885,7 @@ export function RoadmapPage() {
                         Added
                       </span>
                     ) : (
-                      <Plus className="size-4 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
+                      <Plus className="size-4 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 [@media(hover:none)]:opacity-100" />
                     )}
                   </button>
                 );
@@ -1080,7 +1082,7 @@ export function RoadmapPage() {
                         e.stopPropagation();
                         handleRemoveNode(node.id);
                       }}
-                      className="absolute right-2 top-2 rounded-md bg-card/85 p-1 text-muted-foreground opacity-0 backdrop-blur-md transition-opacity hover:text-destructive group-hover/node:opacity-100"
+                      className="absolute right-2 top-2 rounded-md bg-card/85 p-1 text-muted-foreground opacity-0 backdrop-blur-md transition-opacity hover:text-destructive group-hover/node:opacity-100 [@media(hover:none)]:opacity-100"
                       title="Remove from roadmap"
                     >
                       <X className="size-3.5" />

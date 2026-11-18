@@ -6,8 +6,12 @@ export {
   MD_HR_SYNTAX_ATTR,
   MD_SYNTAX_ATTR,
   MD_URL_ATTR,
+  NOTE_IMAGE_ALIGN_ATTR,
   NOTE_IMAGE_BLOCK_ATTR,
+  NOTE_IMAGE_MAX_HEIGHT,
+  NOTE_IMAGE_MAX_WIDTH,
   NOTE_IMAGE_TAIL_ATTR,
+  detectTextBlockDirection,
   extractRangeClipboardPayload,
   getCaretBookmark,
   getClosestBlock,
@@ -65,7 +69,9 @@ export {
 } from "./markdown/note-live-preview";
 
 export {
+  applyImageBlockAlignment,
   createImageAtomBlock,
+  inferImageAlignmentFromContext,
   isImageBlockElement,
   moveCaretOutOfImageBlock,
   normalizeEditorImageBlocks,
@@ -73,6 +79,7 @@ export {
   resolveArrowIntoImageBlock,
   resolveImageBoundaryBeforeBackspace,
   resolveImageBoundaryBeforeDelete,
+  syncImageBlockAlignments,
   syncImageTailParagraphs,
 } from "./markdown/note-images";
 

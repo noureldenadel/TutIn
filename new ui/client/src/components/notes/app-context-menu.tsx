@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import {
+  ArrowRightLeft,
   BookPlus,
-  Check,
   ClipboardPaste,
   Copy,
   EyeOff,
@@ -137,7 +137,7 @@ export function EditorAndImageMenuSections({
             spellResult.suggestions.map((suggestion) => (
               <ContextMenuItem
                 key={suggestion}
-                icon={<Check />}
+                icon={<ArrowRightLeft />}
                 label={suggestion}
                 emphasis
                 onClick={() => {

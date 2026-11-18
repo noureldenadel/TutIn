@@ -1,4 +1,4 @@
-import { useMemo, useState, type ChangeEvent } from "react";
+import { useEffect, useMemo, useState, type ChangeEvent } from "react";
 import { ArrowLeft, Camera, Loader2, Search } from "lucide-react";
 import { toast } from "sonner";
 
@@ -9,6 +9,13 @@ import {
   saveInstructorAvatar,
 } from "@/components/layout/instructor-avatar";
 import { Button } from "@/components/ui/button";
+import {
+  readAppSettings,
+  readSessionFilters,
+  SETTINGS_CHANGED_EVENT,
+  updateSessionFilters,
+  writeAppSettings,
+} from "@/lib/app-settings";
 import { sortCourses, useCoursesList, type CourseSortOption } from "@/lib/courses";
 import { formatDurationLabel } from "@/lib/format";
 import { compressImageFileToBlob } from "@/lib/media-store";
@@ -52,8 +59,20 @@ export function InstructorsPage({
   };
 
   const { courses, isLoading } = useCoursesList();
-  const [query, setQuery] = useState("");
-  const [sort, setSort] = useState<CourseSortOption>("Recent");
+  const [query, setQuery] = useState(() => readSessionFilters().instructorsQuery ?? "");
+  const [sort, setSort] = useState<CourseSortOption>(() => readAppSettings().librarySort);
+
+  useEffect(() => {
+    const syncSort = () => {
+      setSort(readAppSettings().librarySort);
+    };
+    window.addEventListener(SETTINGS_CHANGED_EVENT, syncSort);
+    return () => window.removeEventListener(SETTINGS_CHANGED_EVENT, syncSort);
+  }, []);
+
+  useEffect(() => {
+    updateSessionFilters({ instructorsQuery: query });
+  }, [query]);
 
   const instructorsList = useMemo<Instructor[]>(() => {
     const map = new Map<
@@ -158,8 +177,8 @@ export function InstructorsPage({
 
   if (selectedInstructor) {
     return (
-      <div className="mx-auto w-full max-w-[1440px] px-5 pb-12 pt-6 sm:px-8 sm:pt-8 lg:px-10">
-        <nav className="mb-6">
+      <div className="mx-auto w-full max-w-[1440px] px-4 pb-8 pt-4 sm:px-8 sm:pb-12 sm:pt-8 lg:px-10">
+        <nav className="mb-4 sm:mb-6">
           <button
             type="button"
             onClick={() => selectInstructor(null)}
@@ -170,7 +189,7 @@ export function InstructorsPage({
           </button>
         </nav>
 
-        <header className="flex flex-col gap-5 border-b border-border/50 pb-6 sm:flex-row sm:items-center sm:gap-6">
+        <header className="flex flex-col gap-4 border-b border-border/50 pb-5 sm:flex-row sm:items-center sm:gap-6 sm:pb-6">
           <div className="group/avatar relative size-16 shrink-0 rounded-full">
             <InstructorAvatar
               name={selectedInstructor.name}
@@ -202,10 +221,16 @@ export function InstructorsPage({
           </div>
         </header>
 
-        <section className="mt-6" aria-label={`Courses by ${selectedInstructor.name}`}>
-          <div className="flex items-center justify-between pb-4">
+        <section className="mt-5 sm:mt-6" aria-label={`Courses by ${selectedInstructor.name}`}>
+          <div className="flex items-center justify-between pb-3 sm:pb-4">
             <h2 className="text-lg font-semibold tracking-tight text-foreground">Courses</h2>
-            <CourseSortDropdown sort={sort} onSortChange={setSort} />
+            <CourseSortDropdown
+              sort={sort}
+              onSortChange={(nextSort) => {
+                setSort(nextSort);
+                writeAppSettings({ ...readAppSettings(), librarySort: nextSort });
+              }}
+            />
           </div>
 
           {instructorCourses.length === 0 ? (
@@ -213,7 +238,7 @@ export function InstructorsPage({
               <p className="text-base font-semibold text-foreground">No courses found</p>
             </div>
           ) : (
-            <div className="mt-6 grid gap-5 md:grid-cols-2 xl:grid-cols-4">
+            <div className="mt-4 grid gap-4 sm:mt-6 sm:gap-5 md:grid-cols-2 xl:grid-cols-4">
               {instructorCourses.map((course) => (
                 <CourseCard key={course.id} course={course} />
               ))}
@@ -225,12 +250,12 @@ export function InstructorsPage({
   }
 
   return (
-    <div className="mx-auto w-full max-w-[1440px] px-5 pb-12 pt-6 sm:px-8 sm:pt-8 lg:px-10">
-      <header className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+    <div className="mx-auto w-full max-w-[1440px] px-4 pb-8 pt-4 sm:px-8 sm:pb-12 sm:pt-8 lg:px-10">
+      <header className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
         <h1 className="text-2xl font-bold tracking-tight text-foreground sm:text-3xl">
           Instructors
         </h1>
-        <label className="flex h-11 min-w-0 items-center gap-2 rounded-lg bg-secondary/75 px-3 transition-colors focus-within:bg-card focus-within:ring-2 focus-within:ring-ring/30 sm:w-80 lg:w-96">
+        <label className="flex h-10 min-w-0 items-center gap-2 rounded-lg bg-secondary/75 px-3 transition-colors focus-within:bg-card focus-within:ring-2 focus-within:ring-ring/30 sm:h-11 sm:w-80 lg:w-96">
           <Search className="size-4 shrink-0 text-muted-foreground" />
           <input
             value={query}

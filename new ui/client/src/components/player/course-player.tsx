@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -14,10 +15,10 @@ import { Link } from "@tanstack/react-router";
 import {
   ArrowDownWideNarrow,
   ArrowUpNarrowWide,
-  BookOpen,
   Camera,
   Check,
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
   Clock,
   Copy,
@@ -31,7 +32,6 @@ import {
   Minimize,
   Minus,
   MoreVertical,
-  NotebookPen,
   PanelRightClose,
   PanelRightOpen,
   Pencil,
@@ -107,11 +107,19 @@ import {
 import { VideoCaptionOverlay } from "@/components/player/video-caption-overlay";
 import {
   arePlayerShortcutsEnabled,
+  COURSE_UI_PREFS_CHANGED_EVENT,
   readAppSettings,
+  readCourseUiPrefs,
+  readSessionNoteDraft,
+  readSessionScroll,
   SETTINGS_CHANGED_EVENT,
+  updateCourseUiPrefs,
   writeAppSettings,
+  writeSessionNoteDraft,
+  writeSessionScroll,
   type CaptionFontSize,
   type CaptionPosition,
+  type NotesSortOrder,
 } from "@/lib/app-settings";
 import { formatTrackDisplayLabel, getLanguageLabel, getLanguageName } from "@/lib/languages";
 import {
@@ -326,6 +334,17 @@ type ShortcutHudIcon =
   | "sidebar-show"
   | "pip";
 
+type CenterFeedback =
+  | { type: "play"; id: number }
+  | { type: "pause"; id: number }
+  | { type: "captions"; state: "on" | "off" | "none"; label: string; id: number };
+
+type SideSeekState = {
+  direction: "left" | "right";
+  seconds: number;
+  id: number;
+};
+
 function isPlayerInteractiveChildTarget(target: EventTarget | null): boolean {
   if (!(target instanceof Element)) return false;
   return Boolean(
@@ -373,20 +392,27 @@ export function CoursePlayer({
       : 0,
   );
   const [duration, setDuration] = useState(0);
-  const [volume, setVolume] = useState(0.8);
-  const [muted, setMuted] = useState(false);
-  const [speed, setSpeed] = useState(1);
+  const [volume, setVolume] = useState(() => readAppSettings().playerVolume);
+  const [muted, setMuted] = useState(() => readAppSettings().playerMuted);
+  const [speed, setSpeed] = useState(() => readAppSettings().playbackSpeed);
   const [speedBoostActive, setSpeedBoostActive] = useState(false);
   const effectiveSpeed = speedBoostActive ? HOLD_SPEED_RATE : speed;
-  const [autoplay, setAutoplay] = useState(true);
-  const [remainingTime, setRemainingTime] = useState(false);
-  const [subtitleTrack, setSubtitleTrack] = useState<string>("off");
-  const captionsExplicitlyOffRef = useRef(false);
-  const [transcriptLang, setTranscriptLang] = useState<string | null>(null);
+  const [autoplay, setAutoplay] = useState(() => readAppSettings().autoPlay);
+  const [remainingTime, setRemainingTime] = useState(() => readAppSettings().playerRemainingTime);
+  const [subtitleTrack, setSubtitleTrack] = useState<string>(() => {
+    const pref = readCourseUiPrefs(String(course.id)).subtitleTrack;
+    return pref || "off";
+  });
+  const captionsExplicitlyOffRef = useRef<boolean>(
+    readCourseUiPrefs(String(course.id)).subtitleTrack === "off",
+  );
+  const [transcriptLang, setTranscriptLang] = useState<string | null>(
+    () => readCourseUiPrefs(String(course.id)).transcriptLang ?? null,
+  );
   const [availableTracks, setAvailableTracks] = useState<TranscriptTrack[]>([]);
   const pendingTrackSelectionRef = useRef<string | null>(null);
   const dubAudioRef = useRef<HTMLAudioElement>(null);
-  const lastDubLangRef = useRef<string>("original");
+  const lastDubLangRef = useRef<string>(readCourseUiPrefs(String(course.id)).dubLang || "original");
   const volumeRef = useRef(volume);
   const mutedRef = useRef(muted);
   const speedRef = useRef(speed);
@@ -404,7 +430,9 @@ export function CoursePlayer({
   const pointerBoostActiveRef = useRef(false);
   const suppressNextVideoClickUntilRef = useRef(0);
   const [dubLanguages, setDubLanguages] = useState<string[]>([]);
-  const [selectedDubLang, setSelectedDubLang] = useState<string>("original");
+  const [selectedDubLang, setSelectedDubLang] = useState<string>(
+    () => readCourseUiPrefs(String(course.id)).dubLang || "original",
+  );
   const [transcriptCues, setTranscriptCues] = useState<TranscriptCue[]>([]);
   const [cuesLoading, setCuesLoading] = useState(false);
   const [savedSummary, setSavedSummary] = useState("");
@@ -438,10 +466,19 @@ export function CoursePlayer({
     id: number;
   } | null>(null);
   const shortcutHudTimerRef = useRef<number | null>(null);
+  const [centerFeedback, setCenterFeedback] = useState<CenterFeedback | null>(null);
+  const centerFeedbackTimerRef = useRef<number | null>(null);
+  const [sideSeek, setSideSeek] = useState<SideSeekState | null>(null);
+  const sideSeekTimerRef = useRef<number | null>(null);
+  const accumulatedSeekRef = useRef<{ direction: "left" | "right"; seconds: number } | null>(null);
   const lastMenuDismissAtRef = useRef(0);
   const seekGuardRef = useRef<{ floorTime: number; expiresAt: number } | null>(null);
-  const [panelOpen, setPanelOpen] = useState(true);
-  const [tab, setTab] = useState<Tab>(initialTab ?? "playlist");
+  const [panelOpen, setPanelOpen] = useState(() =>
+    initialTab ? true : readAppSettings().playerSidebarOpen,
+  );
+  const [tab, setTab] = useState<Tab>(
+    () => initialTab ?? readCourseUiPrefs(String(course.id)).activeTab ?? "playlist",
+  );
   const [active, setActive] = useState(
     typeof initialLessonIdx === "number" &&
       Number.isFinite(initialLessonIdx) &&
@@ -450,6 +487,24 @@ export function CoursePlayer({
       : 0,
   );
   const [done, setDone] = useState<boolean[]>([]);
+
+  // Sync per-course persisted UI prefs when switching courses
+  useEffect(() => {
+    const prefs = readCourseUiPrefs(String(course.id));
+    setTab(initialTab ?? prefs.activeTab ?? "playlist");
+    if (initialTab) {
+      setPanelOpen(true);
+    }
+    captionsExplicitlyOffRef.current = prefs.subtitleTrack === "off";
+    if (prefs.subtitleTrack && prefs.subtitleTrack !== "off") {
+      lastSubtitleRef.current = prefs.subtitleTrack;
+    }
+    setTranscriptLang(prefs.transcriptLang ?? null);
+    setSubtitleTrack(prefs.subtitleTrack || "off");
+    const savedDub = prefs.dubLang || "original";
+    lastDubLangRef.current = savedDub;
+    setSelectedDubLang(savedDub);
+  }, [course.id, initialTab]);
 
   // Load real curriculum from SQLite and subscribe to live updates
   useEffect(() => {
@@ -476,8 +531,16 @@ export function CoursePlayer({
         } else if (typeof initialLessonIdx === "number" && Number.isFinite(initialLessonIdx)) {
           setActive(Math.max(0, Math.min(lessons.length - 1, Math.floor(initialLessonIdx))));
         } else {
-          const resumeIdx = lessons.findIndex((l) => !l.isCompleted);
-          setActive(resumeIdx >= 0 ? resumeIdx : 0);
+          const savedLastVideoId = readCourseUiPrefs(String(course.id)).lastVideoId;
+          const savedVideoIdx = savedLastVideoId
+            ? lessons.findIndex((l) => l.lessonId === savedLastVideoId)
+            : -1;
+          if (savedVideoIdx >= 0) {
+            setActive(savedVideoIdx);
+          } else {
+            const resumeIdx = lessons.findIndex((l) => !l.isCompleted);
+            setActive(resumeIdx >= 0 ? resumeIdx : 0);
+          }
         }
       }
     };
@@ -517,6 +580,7 @@ export function CoursePlayer({
     if (initialTab) {
       setTab(initialTab);
       setPanelOpen(true);
+      updateCourseUiPrefs(String(course.id), { activeTab: initialTab });
     }
     if (typeof initialTime === "number" && Number.isFinite(initialTime) && initialTime >= 0) {
       pendingSeekRef.current = initialTime;
@@ -533,6 +597,11 @@ export function CoursePlayer({
   }, [course.id, initialLessonIdx, initialVideoId, initialTime, initialTab, allLessons]);
 
   const currentLesson = allLessons[active] ?? allLessons[0] ?? null;
+
+  useEffect(() => {
+    if (!initialSelectionDoneRef.current || !currentLesson?.lessonId) return;
+    updateCourseUiPrefs(String(course.id), { lastVideoId: currentLesson.lessonId });
+  }, [course.id, currentLesson?.lessonId]);
   const lessonTitles = useMemo(() => allLessons.map((l) => l.title), [allLessons]);
   const effectiveDuration =
     duration || (currentLesson ? getLessonDurationSeconds(currentLesson) : 0);
@@ -904,11 +973,14 @@ export function CoursePlayer({
           if (resolvedPending) {
             pendingTrackSelectionRef.current = null;
           }
+          const coursePrefs = readCourseUiPrefs(String(course.id));
 
           setTranscriptLang((prev) => {
             if (resolvedPending) return resolvedPending;
             const kept = resolveBestTrackId(tracks, prev);
             if (kept) return kept;
+            const fromPref = resolveBestTrackId(tracks, coursePrefs.transcriptLang);
+            if (fromPref) return fromPref;
             const fromPrimary = resolveBestTrackId(tracks, currentLesson.primaryTranscript);
             if (fromPrimary) return fromPrimary;
             const fromSpoken = resolveBestTrackId(tracks, course.language || "en");
@@ -921,11 +993,14 @@ export function CoursePlayer({
               captionsExplicitlyOffRef.current = false;
               return resolvedPending;
             }
-            if (prev === "off") {
-              return captionsExplicitlyOffRef.current ? "off" : (tracks[0]?.id ?? "off");
+            if (captionsExplicitlyOffRef.current || coursePrefs.subtitleTrack === "off") {
+              captionsExplicitlyOffRef.current = true;
+              return "off";
             }
-            const kept = resolveBestTrackId(tracks, prev);
+            const kept = resolveBestTrackId(tracks, prev !== "off" ? prev : null);
             if (kept) return kept;
+            const fromPref = resolveBestTrackId(tracks, coursePrefs.subtitleTrack);
+            if (fromPref) return fromPref;
             const fromPrimary = resolveBestTrackId(tracks, currentLesson.primaryTranscript);
             if (fromPrimary) return fromPrimary;
             return tracks[0]?.id ?? "off";
@@ -952,6 +1027,7 @@ export function CoursePlayer({
       cancelled = true;
     };
   }, [
+    course.id,
     course.language,
     currentLesson?.lessonId,
     currentLesson?.primaryTranscript,
@@ -1202,7 +1278,82 @@ export function CoursePlayer({
     }, 900);
   }, []);
 
-  useEffect(() => () => clearShortcutHud(), [clearShortcutHud]);
+  const clearCenterFeedback = useCallback(() => {
+    if (centerFeedbackTimerRef.current !== null) {
+      window.clearTimeout(centerFeedbackTimerRef.current);
+      centerFeedbackTimerRef.current = null;
+    }
+    setCenterFeedback(null);
+  }, []);
+
+  const triggerCenterFeedback = useCallback((type: "play" | "pause") => {
+    if (centerFeedbackTimerRef.current !== null) {
+      window.clearTimeout(centerFeedbackTimerRef.current);
+    }
+    setCenterFeedback({ type, id: Date.now() });
+    centerFeedbackTimerRef.current = window.setTimeout(() => {
+      centerFeedbackTimerRef.current = null;
+      setCenterFeedback(null);
+    }, 500);
+  }, []);
+
+  const triggerCenterCaptionsFeedback = useCallback(
+    (state: "on" | "off" | "none", label?: string) => {
+      if (centerFeedbackTimerRef.current !== null) {
+        window.clearTimeout(centerFeedbackTimerRef.current);
+      }
+      const resolvedLabel =
+        state === "off"
+          ? "Subtitles off"
+          : state === "none"
+            ? "No subtitles"
+            : label
+              ? `Subtitles · ${label}`
+              : "Subtitles on";
+      setCenterFeedback({ type: "captions", state, label: resolvedLabel, id: Date.now() });
+      centerFeedbackTimerRef.current = window.setTimeout(() => {
+        centerFeedbackTimerRef.current = null;
+        setCenterFeedback(null);
+      }, 750);
+    },
+    [],
+  );
+
+  const clearSideSeek = useCallback(() => {
+    if (sideSeekTimerRef.current !== null) {
+      window.clearTimeout(sideSeekTimerRef.current);
+      sideSeekTimerRef.current = null;
+    }
+    accumulatedSeekRef.current = null;
+    setSideSeek(null);
+  }, []);
+
+  const triggerSideSeek = useCallback((direction: "left" | "right", deltaSeconds: number) => {
+    if (sideSeekTimerRef.current !== null) {
+      window.clearTimeout(sideSeekTimerRef.current);
+    }
+    const currentAcc = accumulatedSeekRef.current;
+    const nextSeconds =
+      currentAcc && currentAcc.direction === direction
+        ? currentAcc.seconds + deltaSeconds
+        : deltaSeconds;
+    accumulatedSeekRef.current = { direction, seconds: nextSeconds };
+    setSideSeek({ direction, seconds: nextSeconds, id: Date.now() });
+    sideSeekTimerRef.current = window.setTimeout(() => {
+      sideSeekTimerRef.current = null;
+      accumulatedSeekRef.current = null;
+      setSideSeek(null);
+    }, 650);
+  }, []);
+
+  useEffect(
+    () => () => {
+      clearShortcutHud();
+      clearCenterFeedback();
+      clearSideSeek();
+    },
+    [clearShortcutHud, clearCenterFeedback, clearSideSeek],
+  );
 
   const handleVideoStagePointerDown = useCallback(
     (e: ReactPointerEvent<HTMLDivElement>) => {
@@ -1262,7 +1413,7 @@ export function CoursePlayer({
     if (!v) return;
     const willPlay = v.paused;
     togglePlay();
-    showShortcutHud(willPlay ? "play" : "pause", willPlay ? "Play" : "Pause");
+    triggerCenterFeedback(willPlay ? "play" : "pause");
   };
   const handleVideoStageClick = () => {
     if (performance.now() < suppressNextVideoClickUntilRef.current) {
@@ -1272,13 +1423,18 @@ export function CoursePlayer({
     if (anyMenuOpenRef.current || performance.now() - lastMenuDismissAtRef.current < 220) {
       return;
     }
+    const v = videoRef.current;
+    if (!v) return;
+    const willPlay = v.paused;
     togglePlay();
+    triggerCenterFeedback(willPlay ? "play" : "pause");
   };
   const toggleCaptions = () => {
     if (subtitleTrack !== "off") {
       captionsExplicitlyOffRef.current = true;
       setSubtitleTrack("off");
-      showShortcutHud("captions-off", "Subtitles off");
+      updateCourseUiPrefs(String(course.id), { subtitleTrack: "off" });
+      triggerCenterCaptionsFeedback("off");
       return;
     }
     const candidate =
@@ -1287,18 +1443,23 @@ export function CoursePlayer({
       availableTracks.find((t) => t.is_master)?.id ??
       availableTracks[0]?.id;
     if (!candidate) {
-      showShortcutHud("captions-off", "No subtitles");
+      triggerCenterCaptionsFeedback("none");
       return;
     }
     captionsExplicitlyOffRef.current = false;
     setSubtitleTrack(candidate);
     setTranscriptLang(candidate);
+    updateCourseUiPrefs(String(course.id), {
+      subtitleTrack: candidate,
+      transcriptLang: candidate,
+    });
     const chosen = availableTracks.find((t) => t.id === candidate);
-    showShortcutHud("captions-on", chosen ? `Subtitles · ${chosen.short}` : "Subtitles on");
+    triggerCenterCaptionsFeedback("on", chosen ? chosen.label || chosen.short : undefined);
   };
   const toggleMute = () => {
     const nextMuted = !mutedRef.current;
     setMuted(nextMuted);
+    writeAppSettings({ ...readAppSettings(), playerMuted: nextMuted });
     showShortcutHud(
       nextMuted ? "mute" : "volume",
       nextMuted ? "Muted" : `${Math.round(volumeRef.current * 100)}%`,
@@ -1307,6 +1468,7 @@ export function CoursePlayer({
   const toggleSidebarPanel = () => {
     setPanelOpen((prev) => {
       const next = !prev;
+      writeAppSettings({ ...readAppSettings(), playerSidebarOpen: next });
       showShortcutHud(
         next ? "sidebar-show" : "sidebar-hide",
         next ? "Default view" : "Theater view",
@@ -1869,6 +2031,11 @@ export function CoursePlayer({
       setCaptionFontSize(next.captionFontSize);
       setCaptionBackground(next.captionBackground);
       setCaptionPosition(next.captionPosition);
+      setSpeed(next.playbackSpeed);
+      setAutoplay(next.autoPlay);
+      setVolume(next.playerVolume);
+      setMuted(next.playerMuted);
+      setRemainingTime(next.playerRemainingTime);
     };
     syncAppSettings();
     window.addEventListener(SETTINGS_CHANGED_EVENT, syncAppSettings);
@@ -1994,25 +2161,25 @@ export function CoursePlayer({
     if (!e.shiftKey && e.key === "ArrowLeft") {
       e.preventDefault();
       seek(currentSeconds - 5);
-      showShortcutHud("seek-back", "-5s");
+      triggerSideSeek("left", 5);
       return;
     }
     if (!e.shiftKey && e.key === "ArrowRight") {
       e.preventDefault();
       seek(currentSeconds + 5);
-      showShortcutHud("seek-forward", "+5s");
+      triggerSideSeek("right", 5);
       return;
     }
     if (!e.shiftKey && matchesShortcutKey(e, "j", "KeyJ")) {
       e.preventDefault();
       seek(currentSeconds - 10);
-      showShortcutHud("seek-back", "-10s");
+      triggerSideSeek("left", 10);
       return;
     }
     if (!e.shiftKey && matchesShortcutKey(e, "l", "KeyL")) {
       e.preventDefault();
       seek(currentSeconds + 10);
-      showShortcutHud("seek-forward", "+10s");
+      triggerSideSeek("right", 10);
       return;
     }
     if (!e.shiftKey && e.key === "ArrowUp") {
@@ -2020,6 +2187,7 @@ export function CoursePlayer({
       const nextVol = Math.min(1, Number((volumeRef.current + 0.05).toFixed(2)));
       setMuted(false);
       setVolume(nextVol);
+      writeAppSettings({ ...readAppSettings(), playerVolume: nextVol, playerMuted: false });
       showShortcutHud("volume", `${Math.round(nextVol * 100)}%`);
       return;
     }
@@ -2027,6 +2195,7 @@ export function CoursePlayer({
       e.preventDefault();
       const nextVol = Math.max(0, Number((volumeRef.current - 0.05).toFixed(2)));
       setVolume(nextVol);
+      writeAppSettings({ ...readAppSettings(), playerVolume: nextVol });
       showShortcutHud(nextVol === 0 ? "mute" : "volume", `${Math.round(nextVol * 100)}%`);
       return;
     }
@@ -2044,6 +2213,7 @@ export function CoursePlayer({
         : Math.max(0, currentIdx - 1);
       const nextSpeed = PLAYER_SPEED_OPTIONS[nextIdx]!;
       setSpeed(nextSpeed);
+      writeAppSettings({ ...readAppSettings(), playbackSpeed: nextSpeed });
       showShortcutHud("speed", `${nextSpeed}×`);
       return;
     }
@@ -2259,7 +2429,16 @@ export function CoursePlayer({
   useEffect(() => {
     clearAllSpeedBoosts();
     clearShortcutHud();
-  }, [currentLesson?.lessonId, canHoldBoostVideo, clearAllSpeedBoosts, clearShortcutHud]);
+    clearCenterFeedback();
+    clearSideSeek();
+  }, [
+    currentLesson?.lessonId,
+    canHoldBoostVideo,
+    clearAllSpeedBoosts,
+    clearShortcutHud,
+    clearCenterFeedback,
+    clearSideSeek,
+  ]);
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => shortcutHandlerRef.current(e);
@@ -2315,8 +2494,8 @@ export function CoursePlayer({
   }, [clearAllSpeedBoosts, endPointerHold, focusVideoViewport]);
 
   return (
-    <div className="relative flex flex-col gap-5 overflow-x-hidden p-4 sm:p-5 lg:h-dvh lg:flex-row lg:overflow-hidden">
-      <section className="flex min-h-0 min-w-0 flex-1 flex-col gap-4">
+    <div className="relative flex flex-col gap-4 overflow-x-hidden p-3.5 sm:gap-5 sm:p-5 lg:h-dvh lg:flex-row lg:overflow-hidden">
+      <section className="flex min-h-0 min-w-0 flex-1 flex-col gap-3.5 sm:gap-4">
         <div className="relative flex min-h-0 flex-1 flex-col">
           <div
             aria-hidden
@@ -2549,7 +2728,7 @@ export function CoursePlayer({
             {canHoldBoostVideo && speedBoostActive && (
               <div
                 aria-live="polite"
-                className="pointer-events-none absolute left-1/2 top-4 z-30 flex -translate-x-1/2 select-none items-center gap-1.5 rounded-full bg-black/80 px-3.5 py-1.5 text-xs font-semibold tabular-nums text-white shadow-workspace"
+                className="pointer-events-none absolute left-1/2 top-4 z-30 flex -translate-x-1/2 select-none items-center gap-1.5 rounded-full bg-black/80 px-3.5 py-1.5 text-xs font-semibold tabular-nums text-white"
               >
                 <span>2×</span>
                 <FastForwardIcon className="size-3.5" />
@@ -2560,7 +2739,7 @@ export function CoursePlayer({
               <div
                 key={shortcutHud.id}
                 aria-live="polite"
-                className="pointer-events-none absolute left-1/2 top-4 z-30 flex -translate-x-1/2 select-none items-center gap-1.5 rounded-full bg-black/80 px-3.5 py-1.5 text-xs font-semibold tabular-nums text-white shadow-workspace"
+                className="pointer-events-none absolute left-1/2 top-4 z-30 flex -translate-x-1/2 select-none items-center gap-1.5 rounded-full bg-black/80 px-3.5 py-1.5 text-xs font-semibold tabular-nums text-white"
               >
                 {renderShortcutHudIcon(shortcutHud.icon, volume)}
                 <span>{shortcutHud.label}</span>
@@ -2584,19 +2763,64 @@ export function CoursePlayer({
               />
             )}
 
-            {hasNativeVideoControls && !playing && (
-              <button
-                type="button"
-                data-stage-play-overlay="true"
-                onClick={() => {
-                  focusVideoViewport();
-                  handleVideoStageClick();
-                }}
-                aria-label="Play"
-                className="absolute left-1/2 top-1/2 z-20 flex size-14 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full bg-black/60 text-white transition-all duration-150 hover:scale-105 hover:bg-black/75 active:scale-95"
+            {/* YouTube-standard animated center play / pause / captions feedback overlay */}
+            {centerFeedback && !(canHoldBoostVideo && speedBoostActive) && (
+              <div
+                key={centerFeedback.id}
+                aria-live="polite"
+                className={cn(
+                  "pointer-events-none absolute left-1/2 top-1/2 z-30 select-none",
+                  centerFeedback.type === "captions"
+                    ? "animate-player-center-badge flex items-center gap-2.5 rounded-full bg-black/75 px-5 py-2.5 text-sm font-semibold tabular-nums text-white"
+                    : "animate-player-center-pulse flex size-18 sm:size-20 items-center justify-center rounded-full bg-black/60 text-white",
+                )}
               >
-                <PlayIcon className="size-6 translate-x-[1.5px]" />
-              </button>
+                {centerFeedback.type === "play" && (
+                  <PlayIcon className="size-8 sm:size-9 translate-x-[2px]" />
+                )}
+                {centerFeedback.type === "pause" && <PauseIcon className="size-8 sm:size-9" />}
+                {centerFeedback.type === "captions" && (
+                  <>
+                    <Subtitles
+                      className={cn(
+                        "size-5",
+                        centerFeedback.state === "off"
+                          ? "opacity-60"
+                          : centerFeedback.state === "none"
+                            ? "opacity-40"
+                            : "opacity-100",
+                      )}
+                    />
+                    <span>{centerFeedback.label}</span>
+                  </>
+                )}
+              </div>
+            )}
+
+            {/* Animated left/right side seek interval indicator (containerless, bold arrow + time) */}
+            {sideSeek && !(canHoldBoostVideo && speedBoostActive) && (
+              <div
+                key={sideSeek.id}
+                aria-live="polite"
+                className={cn(
+                  "animate-player-side-seek pointer-events-none absolute top-1/2 -translate-y-1/2 z-30 select-none",
+                  sideSeek.direction === "left"
+                    ? "left-6 sm:left-10 md:left-14"
+                    : "right-6 sm:right-10 md:right-14",
+                )}
+              >
+                {sideSeek.direction === "left" ? (
+                  <div className="flex items-center gap-1 text-lg sm:text-xl font-bold tracking-tight tabular-nums text-white">
+                    <ChevronLeft className="size-5 sm:size-6 stroke-[2.5] shrink-0" />
+                    <span>-{sideSeek.seconds}s</span>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-1 text-lg sm:text-xl font-bold tracking-tight tabular-nums text-white">
+                    <span>+{sideSeek.seconds}s</span>
+                    <ChevronRight className="size-5 sm:size-6 stroke-[2.5] shrink-0" />
+                  </div>
+                )}
+              </div>
             )}
             {hasNativeVideoControls && (
               <div
@@ -2613,13 +2837,13 @@ export function CoursePlayer({
                 }}
                 onFocusCapture={wakeControls}
                 className={cn(
-                  "absolute inset-x-0 bottom-0 z-20 flex flex-col justify-end bg-gradient-to-t from-black/80 via-black/40 to-transparent px-4 pt-12 text-white transition-opacity duration-200",
+                  "absolute inset-x-0 bottom-0 z-20 flex flex-col justify-end bg-gradient-to-t from-black/20 to-transparent px-2.5 pt-2 text-white transition-opacity duration-200 sm:px-4 sm:pt-3",
                   playerControlsVisible ? "opacity-100" : "pointer-events-none opacity-0",
                 )}
               >
-                <div ref={controlsContentRef} className="pb-4">
+                <div ref={controlsContentRef} className="pb-2.5 sm:pb-4">
                   {/* Timeline Progress Bar */}
-                  <div className="group/timeline mb-3">
+                  <div className="group/timeline mb-2 sm:mb-3">
                     <Slider
                       value={[time]}
                       max={effectiveDuration || 1}
@@ -2631,29 +2855,33 @@ export function CoursePlayer({
                   </div>
 
                   {/* Controls Bar */}
-                  <div className="flex min-w-0 items-center justify-between gap-2">
+                  <div className="flex min-w-0 items-center justify-between gap-1.5 sm:gap-2">
                     {/* Left Side Group */}
-                    <div className="flex min-w-0 items-center gap-2">
+                    <div className="flex min-w-0 items-center gap-1.5 sm:gap-2">
                       {/* Play / Pause Button */}
                       <button
                         type="button"
                         onClick={(e) => {
                           if (e.detail > 0) e.currentTarget.blur();
+                          const v = videoRef.current;
+                          if (!v) return;
+                          const willPlay = v.paused;
                           togglePlay();
+                          triggerCenterFeedback(willPlay ? "play" : "pause");
                         }}
                         aria-label={playing ? "Pause" : "Play"}
                         title={playing ? "Pause (Space)" : "Play (Space)"}
-                        className="flex size-10 shrink-0 items-center justify-center rounded-full bg-white/[0.08] text-white transition-all hover:bg-white/[0.15]"
+                        className="flex size-8 shrink-0 items-center justify-center rounded-full bg-white/[0.08] text-white transition-all hover:bg-white/[0.15] sm:size-10"
                       >
                         {playing ? (
-                          <PauseIcon className="size-5" />
+                          <PauseIcon className="size-4 sm:size-5" />
                         ) : (
-                          <PlayIcon className="size-5 translate-x-[0.5px]" />
+                          <PlayIcon className="size-4 translate-x-[0.5px] sm:size-5" />
                         )}
                       </button>
 
                       {/* Prev / Next Pill */}
-                      <div className="flex h-10 shrink-0 items-center gap-3 rounded-full bg-white/[0.08] px-3.5 text-white transition-all hover:bg-white/[0.12]">
+                      <div className="flex h-8 shrink-0 items-center gap-1.5 rounded-full bg-white/[0.08] px-2.5 text-white transition-all hover:bg-white/[0.12] sm:h-10 sm:gap-3 sm:px-3.5">
                         <button
                           type="button"
                           onClick={(e) => {
@@ -2663,9 +2891,9 @@ export function CoursePlayer({
                           disabled={active === 0}
                           aria-label="Previous lesson"
                           title="Previous lesson (Shift+P)"
-                          className="p-1 transition-opacity hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-35"
+                          className="p-0.5 transition-opacity hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-35 sm:p-1"
                         >
-                          <PrevIcon className="size-5" />
+                          <PrevIcon className="size-4 sm:size-5" />
                         </button>
                         <button
                           type="button"
@@ -2676,34 +2904,42 @@ export function CoursePlayer({
                           disabled={active === lessonTitles.length - 1}
                           aria-label="Next lesson"
                           title="Next lesson (Shift+N)"
-                          className="p-1 transition-opacity hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-35"
+                          className="p-0.5 transition-opacity hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-35 sm:p-1"
                         >
-                          <NextIcon className="size-5" />
+                          <NextIcon className="size-4 sm:size-5" />
                         </button>
                       </div>
 
                       {/* Volume Pill */}
-                      <div className="group/volume flex h-10 shrink-0 items-center rounded-full bg-white/[0.08] px-3 text-white transition-all hover:bg-white/[0.15] focus-within:bg-white/[0.15]">
+                      <div className="group/volume flex h-8 shrink-0 items-center rounded-full bg-white/[0.08] px-2 text-white transition-all hover:bg-white/[0.15] focus-within:bg-white/[0.15] sm:h-10 sm:px-3">
                         <button
                           type="button"
                           onClick={(e) => {
                             if (e.detail > 0) e.currentTarget.blur();
-                            setMuted(!muted);
+                            const nextMuted = !muted;
+                            setMuted(nextMuted);
+                            writeAppSettings({ ...readAppSettings(), playerMuted: nextMuted });
                           }}
                           aria-label={muted ? "Unmute" : "Mute"}
                           title={muted ? "Unmute (M)" : "Mute (M)"}
-                          className="p-1 transition-opacity hover:opacity-80"
+                          className="p-0.5 transition-opacity hover:opacity-80 sm:p-1"
                         >
                           <VolumeIcon volume={volume} muted={muted} />
                         </button>
-                        <div className="w-0 overflow-hidden opacity-0 transition-all duration-200 group-hover/volume:ml-1.5 group-hover/volume:w-20 group-hover/volume:pr-1 group-hover/volume:opacity-100 group-focus-within/volume:ml-1.5 group-focus-within/volume:w-20 group-focus-within/volume:pr-1 group-focus-within/volume:opacity-100">
+                        <div className="hidden w-0 overflow-hidden opacity-0 transition-all duration-200 group-hover/volume:ml-1.5 group-hover/volume:w-20 group-hover/volume:pr-1 group-hover/volume:opacity-100 group-focus-within/volume:ml-1.5 group-focus-within/volume:w-20 group-focus-within/volume:pr-1 group-focus-within/volume:opacity-100 sm:block">
                           <Slider
                             value={[muted ? 0 : volume]}
                             max={1}
                             step={0.01}
                             onValueChange={([v]) => {
-                              setVolume(v ?? 0);
+                              const nextVol = v ?? 0;
+                              setVolume(nextVol);
                               setMuted(false);
+                              writeAppSettings({
+                                ...readAppSettings(),
+                                playerVolume: nextVol,
+                                playerMuted: false,
+                              });
                             }}
                             aria-label="Volume"
                             className="w-[72px] cursor-pointer [&_[role=slider]]:size-3 [&_[role=slider]]:border-0 [&_[role=slider]]:bg-white [&>span:first-child]:h-1 [&>span:first-child]:bg-white/30 [&>span:first-child>span]:bg-white"
@@ -2716,11 +2952,16 @@ export function CoursePlayer({
                         type="button"
                         onClick={(e) => {
                           if (e.detail > 0) e.currentTarget.blur();
-                          setRemainingTime(!remainingTime);
+                          const nextRemaining = !remainingTime;
+                          setRemainingTime(nextRemaining);
+                          writeAppSettings({
+                            ...readAppSettings(),
+                            playerRemainingTime: nextRemaining,
+                          });
                         }}
                         aria-label={remainingTime ? "Show elapsed time" : "Show remaining time"}
                         title={remainingTime ? "Show elapsed time" : "Show remaining time"}
-                        className="flex h-10 shrink-0 select-none items-center rounded-full bg-white/[0.08] px-4 text-xs font-semibold tabular-nums text-white transition-all hover:bg-white/[0.15]"
+                        className="flex h-8 shrink-0 select-none items-center rounded-full bg-white/[0.08] px-2.5 text-[11px] font-semibold tabular-nums text-white transition-all hover:bg-white/[0.15] sm:h-10 sm:px-4 sm:text-xs"
                       >
                         {remainingTime
                           ? `−${fmtTime(Math.max(0, effectiveDuration - time))}`
@@ -2729,7 +2970,7 @@ export function CoursePlayer({
                     </div>
 
                     {/* Right Side Pill */}
-                    <div className="flex h-10 shrink-0 items-center gap-1 rounded-full bg-white/[0.08] px-3 py-1 text-white transition-all hover:bg-white/[0.12]">
+                    <div className="flex h-8 shrink-0 items-center gap-0.5 rounded-full bg-white/[0.08] px-2 py-1 text-white transition-all hover:bg-white/[0.12] sm:h-10 sm:gap-1 sm:px-3">
                       <Popover open={tracksMenuOpen} onOpenChange={setTracksMenuOpen}>
                         <PopoverTrigger asChild>
                           <button
@@ -2765,6 +3006,9 @@ export function CoursePlayer({
                                   onClick={() => {
                                     lastDubLangRef.current = "original";
                                     setSelectedDubLang("original");
+                                    updateCourseUiPrefs(String(course.id), {
+                                      dubLang: "original",
+                                    });
                                   }}
                                   className={cn(
                                     "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:text-accent-foreground focus-visible:outline-none",
@@ -2789,6 +3033,7 @@ export function CoursePlayer({
                                       onClick={() => {
                                         lastDubLangRef.current = lang;
                                         setSelectedDubLang(lang);
+                                        updateCourseUiPrefs(String(course.id), { dubLang: lang });
                                       }}
                                       className={cn(
                                         "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:text-accent-foreground focus-visible:outline-none",
@@ -2828,6 +3073,10 @@ export function CoursePlayer({
                                   onClick={() => {
                                     captionsExplicitlyOffRef.current = true;
                                     setSubtitleTrack("off");
+                                    updateCourseUiPrefs(String(course.id), {
+                                      subtitleTrack: "off",
+                                    });
+                                    triggerCenterCaptionsFeedback("off");
                                   }}
                                   className={cn(
                                     "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:text-accent-foreground focus-visible:outline-none",
@@ -2851,6 +3100,11 @@ export function CoursePlayer({
                                         captionsExplicitlyOffRef.current = false;
                                         setSubtitleTrack(tr.id);
                                         setTranscriptLang(tr.id);
+                                        updateCourseUiPrefs(String(course.id), {
+                                          subtitleTrack: tr.id,
+                                          transcriptLang: tr.id,
+                                        });
+                                        triggerCenterCaptionsFeedback("on", tr.label || tr.short);
                                       }}
                                       className={cn(
                                         "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:text-accent-foreground focus-visible:outline-none",
@@ -2987,7 +3241,10 @@ export function CoursePlayer({
                             <DropdownMenuItem
                               key={s}
                               className="rounded-md"
-                              onClick={() => setSpeed(s)}
+                              onClick={() => {
+                                setSpeed(s);
+                                writeAppSettings({ ...readAppSettings(), playbackSpeed: s });
+                              }}
                             >
                               <Gauge />
                               {s}×{speed === s && <Check className="ml-auto" />}
@@ -2998,7 +3255,9 @@ export function CoursePlayer({
                             className="rounded-md"
                             onSelect={(event) => {
                               event.preventDefault();
-                              setAutoplay(!autoplay);
+                              const nextAutoplay = !autoplay;
+                              setAutoplay(nextAutoplay);
+                              writeAppSettings({ ...readAppSettings(), autoPlay: nextAutoplay });
                             }}
                           >
                             Autoplay next{autoplay && <Check className="ml-auto" />}
@@ -3006,13 +3265,15 @@ export function CoursePlayer({
                         </DropdownMenuContent>
                       </DropdownMenu>
 
-                      <PlayerBtn
-                        label="Picture-in-Picture (P / I)"
-                        onClick={() => void togglePiP()}
-                        active={isPiP}
-                      >
-                        <PictureInPicture />
-                      </PlayerBtn>
+                      <div className="hidden sm:flex">
+                        <PlayerBtn
+                          label="Picture-in-Picture (P / I)"
+                          onClick={() => void togglePiP()}
+                          active={isPiP}
+                        >
+                          <PictureInPicture />
+                        </PlayerBtn>
+                      </div>
 
                       <PlayerBtn
                         label={isFullscreen ? "Exit fullscreen (F)" : "Fullscreen (F)"}
@@ -3021,12 +3282,20 @@ export function CoursePlayer({
                         {isFullscreen ? <Minimize /> : <Maximize />}
                       </PlayerBtn>
 
-                      <PlayerBtn
-                        label={panelOpen ? "Hide sidebar (T)" : "Show sidebar (T)"}
-                        onClick={() => setPanelOpen((prev) => !prev)}
-                      >
-                        {panelOpen ? <PanelRightClose /> : <PanelRightOpen />}
-                      </PlayerBtn>
+                      <div className="hidden lg:flex">
+                        <PlayerBtn
+                          label={panelOpen ? "Hide sidebar (T)" : "Show sidebar (T)"}
+                          onClick={() =>
+                            setPanelOpen((prev) => {
+                              const next = !prev;
+                              writeAppSettings({ ...readAppSettings(), playerSidebarOpen: next });
+                              return next;
+                            })
+                          }
+                        >
+                          {panelOpen ? <PanelRightClose /> : <PanelRightOpen />}
+                        </PlayerBtn>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -3044,19 +3313,17 @@ export function CoursePlayer({
               <Link to="/" className="truncate hover:text-foreground">
                 {course.title}
               </Link>
-              {currentLesson && (
+              {currentLesson?.moduleTitle && (
                 <>
                   <ChevronRight className="size-3 shrink-0" />
-                  <span className="truncate">{currentLesson.moduleTitle}</span>
-                  <ChevronRight className="size-3 shrink-0" />
-                  <span className="shrink-0 font-medium text-foreground">
-                    Lesson {String(active + 1).padStart(2, "0")}
+                  <span className="truncate font-medium text-foreground">
+                    {currentLesson.moduleTitle}
                   </span>
                 </>
               )}
             </nav>
             <h1
-              className="mt-1.5 truncate text-xl font-semibold sm:text-2xl"
+              className="mt-1 truncate text-lg font-semibold sm:mt-1.5 sm:text-2xl"
               title={currentLesson?.title ?? course.title}
             >
               {currentLesson?.title ?? course.title}
@@ -3078,132 +3345,179 @@ export function CoursePlayer({
         </div>
       </section>
 
-      {panelOpen && (
-        <aside className="relative z-10 flex h-[640px] w-full shrink-0 flex-col overflow-hidden rounded-xl bg-card shadow-card lg:h-full lg:w-[380px]">
-          <div className="border-b border-border/50 p-3">
-            <div role="tablist" className="grid grid-cols-3 gap-1 rounded-lg bg-secondary/75 p-1">
-              {(
-                [
-                  ["playlist", BookOpen, "Playlist"],
-                  ["notes", NotebookPen, "Notes"],
-                  ["transcript", Zap, "Transcript"],
-                ] as const
-              ).map(([id, Icon, label]) => (
-                <button
-                  key={id}
-                  role="tab"
-                  aria-selected={tab === id}
-                  onClick={() => setTab(id)}
-                  className={cn(
-                    "flex items-center justify-center gap-1.5 rounded-sm px-2 py-2 text-xs font-semibold text-muted-foreground transition-all",
-                    tab === id && "bg-card text-foreground shadow-card dark:bg-accent",
-                  )}
-                >
-                  <Icon className={cn("size-3.5", tab === id && "text-primary")} /> {label}
-                </button>
-              ))}
-            </div>
-          </div>
-          <div className="min-h-0 flex-1">
-            {tab === "playlist" && (
-              <PlaylistTab
-                courseId={String(course.id)}
-                courseModules={courseModules}
-                allLessons={allLessons}
-                active={active}
-                done={done}
-                setDone={setDone}
-                onToggleLessonDone={handleToggleLessonDone}
-                onCommitBulkDone={handleCommitBulkDone}
-                onSelect={goTo}
-              />
-            )}
-            {tab === "notes" && (
-              <NotesTab
-                courseId={String(course.id)}
-                lessonId={currentLesson?.lessonId}
-                lessonIdx={active}
-                lessonTitle={currentLesson?.title ?? course.title}
-                transcriptCues={transcriptCues}
-                time={time}
-                seek={seek}
-                onCaptureFrame={captureVideoFrame}
-                onPlay={playVideo}
-                onPause={pauseVideo}
-                getPlaybackState={getPlaybackState}
-              />
-            )}
-            {tab === "transcript" && (
-              <TranscriptTab
-                videoId={currentLesson?.lessonId}
-                youtubeId={youtubeId}
-                availableTracks={availableTracks}
-                selectedLang={transcriptLang}
-                onSelectLang={(nextTrackId) => {
-                  captionsExplicitlyOffRef.current = false;
-                  setTranscriptLang(nextTrackId);
-                  setSubtitleTrack(nextTrackId);
+      <aside
+        className={cn(
+          "relative z-10 flex h-[min(520px,68dvh)] w-full shrink-0 flex-col overflow-hidden rounded-xl bg-card shadow-card sm:h-[580px] lg:h-full lg:w-[380px]",
+          !panelOpen && "lg:hidden",
+        )}
+      >
+        <div className="border-b border-border/50 p-3">
+          <div
+            role="tablist"
+            className="relative grid grid-cols-3 rounded-lg bg-secondary/75 p-1 select-none"
+          >
+            <span
+              aria-hidden="true"
+              style={{
+                width: "calc((100% - 8px) / 3)",
+                transform: `translate3d(${(tab === "playlist" ? 0 : tab === "notes" ? 1 : 2) * 100}%, 0, 0)`,
+              }}
+              className="pointer-events-none absolute top-1 bottom-1 left-1 rounded-sm bg-card shadow-card transition-transform duration-250 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none dark:bg-accent"
+            />
+            {(
+              [
+                ["playlist", "Playlist"],
+                ["notes", "Notes"],
+                ["transcript", "Transcript"],
+              ] as const
+            ).map(([id, label]) => (
+              <button
+                key={id}
+                role="tab"
+                aria-selected={tab === id}
+                onClick={() => {
+                  setTab(id);
+                  updateCourseUiPrefs(String(course.id), { activeTab: id });
                 }}
-                dubLanguages={dubLanguages}
-                selectedDubLang={selectedDubLang}
-                onSelectDubLang={(nextDubLang) => {
-                  lastDubLangRef.current = nextDubLang;
-                  setSelectedDubLang(nextDubLang);
-                }}
-                onDeleteDubTrack={(lang) => void handleDeleteDubTrack(lang)}
-                cues={transcriptCues}
-                cuesLoading={cuesLoading}
-                time={time}
-                seek={seek}
-                onImportSubtitles={() => captionFileInputRef.current?.click()}
-                onOpenAiModal={(mode, targetLang) =>
-                  setTranscriptModalState({ open: true, mode, targetLang })
-                }
-                onSetMaster={(trackId) => void handleSetTrackMaster(trackId)}
-                onSetSource={(trackId) => void handleSetTrackSource(trackId)}
-                onDeleteTrack={(trackId) => void handleDeleteTrack(trackId)}
-                onTranscriptReload={() => setTranscriptRefreshTick((n) => n + 1)}
-                aiPanel={
-                  currentLesson ? (
-                    <TranscriptTranslateModal
-                      variant="inline"
-                      isOpen={transcriptModalState.open}
-                      onClose={() => setTranscriptModalState((prev) => ({ ...prev, open: false }))}
-                      courseId={String(course.id)}
-                      courseLanguage={spokenCourseLang}
-                      lessons={[
-                        {
-                          id: currentLesson.lessonId,
-                          title: currentLesson.title,
-                          youtubeId: youtubeId ?? undefined,
-                          subtitleSources: availableTracks.map((tr) => ({
-                            id: tr.id,
-                            lang: tr.lang,
-                            origin: tr.origin === "generated" ? "generated" : "uploaded",
-                            version: tr.version,
-                            label: tr.label,
-                            fileName: tr.fileName,
-                            is_master: tr.is_master,
-                            is_ai_source: tr.is_ai_source,
-                          })),
-                          hasTranscript: availableTracks.length > 0,
-                        },
-                      ]}
-                      defaultMode={transcriptModalState.mode}
-                      defaultTargetLang={transcriptModalState.targetLang}
-                      onCourseLanguageChanged={(nextLang) => setSpokenCourseLang(nextLang)}
-                      onJobQueued={(targetLang, mode) => {
-                        const nextId = `${targetLang}:${mode === "translate" || mode === "transcribe" ? "generated" : "uploaded"}`;
-                        pendingTrackSelectionRef.current = nextId;
-                      }}
-                    />
-                  ) : null
-                }
-              />
-            )}
+                className={cn(
+                  "relative z-10 flex items-center justify-center rounded-sm px-2 py-2 text-xs font-semibold transition-colors duration-150",
+                  tab === id ? "text-foreground" : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                {label}
+              </button>
+            ))}
           </div>
-        </aside>
-      )}
+        </div>
+        <div className="min-h-0 flex-1">
+          <div
+            role="tabpanel"
+            aria-hidden={tab !== "playlist"}
+            className={cn("h-full", tab !== "playlist" && "hidden")}
+          >
+            <PlaylistTab
+              courseId={String(course.id)}
+              courseModules={courseModules}
+              allLessons={allLessons}
+              active={active}
+              done={done}
+              setDone={setDone}
+              onToggleLessonDone={handleToggleLessonDone}
+              onCommitBulkDone={handleCommitBulkDone}
+              onSelect={goTo}
+              isVisible={
+                (panelOpen || (typeof window !== "undefined" && window.innerWidth < 1024)) &&
+                tab === "playlist"
+              }
+            />
+          </div>
+          <div
+            role="tabpanel"
+            aria-hidden={tab !== "notes"}
+            className={cn("h-full", tab !== "notes" && "hidden")}
+          >
+            <NotesTab
+              courseId={String(course.id)}
+              lessonId={currentLesson?.lessonId}
+              lessonIdx={active}
+              lessonTitle={currentLesson?.title ?? course.title}
+              transcriptCues={transcriptCues}
+              time={time}
+              seek={seek}
+              onCaptureFrame={captureVideoFrame}
+              onPlay={playVideo}
+              onPause={pauseVideo}
+              getPlaybackState={getPlaybackState}
+              isVisible={
+                (panelOpen || (typeof window !== "undefined" && window.innerWidth < 1024)) &&
+                tab === "notes"
+              }
+            />
+          </div>
+          <div
+            role="tabpanel"
+            aria-hidden={tab !== "transcript"}
+            className={cn("h-full", tab !== "transcript" && "hidden")}
+          >
+            <TranscriptTab
+              courseId={String(course.id)}
+              videoId={currentLesson?.lessonId}
+              youtubeId={youtubeId}
+              availableTracks={availableTracks}
+              selectedLang={transcriptLang}
+              onSelectLang={(nextTrackId) => {
+                captionsExplicitlyOffRef.current = false;
+                setTranscriptLang(nextTrackId);
+                setSubtitleTrack(nextTrackId);
+                updateCourseUiPrefs(String(course.id), {
+                  subtitleTrack: nextTrackId,
+                  transcriptLang: nextTrackId,
+                });
+              }}
+              dubLanguages={dubLanguages}
+              selectedDubLang={selectedDubLang}
+              onSelectDubLang={(nextDubLang) => {
+                lastDubLangRef.current = nextDubLang;
+                setSelectedDubLang(nextDubLang);
+                updateCourseUiPrefs(String(course.id), { dubLang: nextDubLang });
+              }}
+              onDeleteDubTrack={(lang) => void handleDeleteDubTrack(lang)}
+              cues={transcriptCues}
+              cuesLoading={cuesLoading}
+              time={time}
+              seek={seek}
+              onImportSubtitles={() => captionFileInputRef.current?.click()}
+              onOpenAiModal={(mode, targetLang) =>
+                setTranscriptModalState({ open: true, mode, targetLang })
+              }
+              onSetMaster={(trackId) => void handleSetTrackMaster(trackId)}
+              onSetSource={(trackId) => void handleSetTrackSource(trackId)}
+              onDeleteTrack={(trackId) => void handleDeleteTrack(trackId)}
+              onTranscriptReload={() => setTranscriptRefreshTick((n) => n + 1)}
+              isVisible={
+                (panelOpen || (typeof window !== "undefined" && window.innerWidth < 1024)) &&
+                tab === "transcript"
+              }
+              aiPanel={
+                currentLesson ? (
+                  <TranscriptTranslateModal
+                    variant="inline"
+                    isOpen={transcriptModalState.open}
+                    onClose={() => setTranscriptModalState((prev) => ({ ...prev, open: false }))}
+                    courseId={String(course.id)}
+                    courseLanguage={spokenCourseLang}
+                    lessons={[
+                      {
+                        id: currentLesson.lessonId,
+                        title: currentLesson.title,
+                        youtubeId: youtubeId ?? undefined,
+                        subtitleSources: availableTracks.map((tr) => ({
+                          id: tr.id,
+                          lang: tr.lang,
+                          origin: tr.origin === "generated" ? "generated" : "uploaded",
+                          version: tr.version,
+                          label: tr.label,
+                          fileName: tr.fileName,
+                          is_master: tr.is_master,
+                          is_ai_source: tr.is_ai_source,
+                        })),
+                        hasTranscript: availableTracks.length > 0,
+                      },
+                    ]}
+                    defaultMode={transcriptModalState.mode}
+                    defaultTargetLang={transcriptModalState.targetLang}
+                    onCourseLanguageChanged={(nextLang) => setSpokenCourseLang(nextLang)}
+                    onJobQueued={(targetLang, mode) => {
+                      const nextId = `${targetLang}:${mode === "translate" || mode === "transcribe" ? "generated" : "uploaded"}`;
+                      pendingTrackSelectionRef.current = nextId;
+                    }}
+                  />
+                ) : null
+              }
+            />
+          </div>
+        </div>
+      </aside>
 
       {!isEmbeddedPlayer && currentLesson && (
         <audio ref={dubAudioRef} preload="auto" className="hidden" />
@@ -3434,6 +3748,7 @@ function PlaylistTab({
   onToggleLessonDone,
   onCommitBulkDone,
   onSelect,
+  isVisible,
 }: {
   courseId: string;
   courseModules: CourseModuleSpec[];
@@ -3444,11 +3759,19 @@ function PlaylistTab({
   onToggleLessonDone: (idx: number, nextDone: boolean) => void;
   onCommitBulkDone: (updates: Array<{ idx: number; done: boolean }>) => void;
   onSelect: (i: number) => void;
+  isVisible: boolean;
 }) {
-  const [openMods, setOpenMods] = useState<boolean[]>([]);
+  const [openModulesMap, setOpenModulesMap] = useState<Record<string, boolean>>(
+    () => readCourseUiPrefs(courseId).openModules ?? {},
+  );
   const [dragState, setDragState] = useState<{ startIdx: number; targetValue: boolean } | null>(
     null,
   );
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const scrollKey = `playlist:${courseId}`;
+  const lastScrollTopRef = useRef<number | null>(readSessionScroll(scrollKey));
+  const initialScrollRestoredForCourseRef = useRef<string>("");
+  const prevActiveLessonKeyRef = useRef<string>("");
   const dragInitialDoneRef = useRef<boolean[]>([]);
   const doneRef = useRef(done);
   doneRef.current = done;
@@ -3457,6 +3780,22 @@ function PlaylistTab({
   const [progressMode, setProgressMode] = useState<"videos" | "duration">(
     () => readAppSettings().progressCalculationMode,
   );
+
+  useEffect(() => {
+    setOpenModulesMap(readCourseUiPrefs(courseId).openModules ?? {});
+    lastScrollTopRef.current = readSessionScroll(`playlist:${courseId}`);
+  }, [courseId]);
+
+  useEffect(() => {
+    const onCoursePrefsChanged = (e: Event) => {
+      const detail = (e as CustomEvent<{ courseId?: string }>).detail;
+      if (!detail?.courseId || detail.courseId === courseId) {
+        setOpenModulesMap(readCourseUiPrefs(courseId).openModules ?? {});
+      }
+    };
+    window.addEventListener(COURSE_UI_PREFS_CHANGED_EVENT, onCoursePrefsChanged);
+    return () => window.removeEventListener(COURSE_UI_PREFS_CHANGED_EVENT, onCoursePrefsChanged);
+  }, [courseId]);
 
   useEffect(() => {
     const syncProgressMode = () => {
@@ -3493,18 +3832,63 @@ function PlaylistTab({
     return { totalDurationSecs: total, remainingDurationSecs: remaining };
   }, [allLessons, done]);
 
-  useEffect(() => {
-    setOpenMods((prev) =>
-      courseModules.map((_, idx) => (prev[idx] !== undefined ? prev[idx]! : idx < 2)),
-    );
-  }, [courseModules]);
-
   const activeModIdx = allLessons[active]?.modIdx ?? 0;
+  const activeLesson = allLessons[active];
+  const activeModId = courseModules[activeModIdx]?.id ?? activeLesson?.moduleId ?? "";
+
+  const isModuleOpen = useCallback(
+    (modId: string, modIdx: number): boolean => {
+      if (openModulesMap[modId] !== undefined) {
+        return openModulesMap[modId]!;
+      }
+      return modIdx < 2 || modIdx === activeModIdx;
+    },
+    [openModulesMap, activeModIdx],
+  );
+
+  // Auto-open the active lesson's module only when the active lesson actually changes
   useEffect(() => {
-    setOpenMods((prev) =>
-      prev[activeModIdx] ? prev : prev.map((open, idx) => (idx === activeModIdx ? true : open)),
-    );
-  }, [activeModIdx]);
+    if (!activeLesson || !activeModId) return;
+    const lessonKey = `${courseId}:${activeLesson.lessonId}`;
+    const prevKey = prevActiveLessonKeyRef.current;
+    prevActiveLessonKeyRef.current = lessonKey;
+
+    if (prevKey && prevKey !== lessonKey && openModulesMap[activeModId] === false) {
+      setOpenModulesMap((prev) => ({ ...prev, [activeModId]: true }));
+      updateCourseUiPrefs(courseId, { openModules: { [activeModId]: true } });
+    }
+  }, [activeLesson, activeModId, courseId, openModulesMap]);
+
+  // Restore saved playlist scroll position (or center active lesson on first open in session)
+  useLayoutEffect(() => {
+    const container = scrollContainerRef.current;
+    if (!container || courseModules.length === 0 || !isVisible) return;
+
+    if (initialScrollRestoredForCourseRef.current !== courseId) {
+      initialScrollRestoredForCourseRef.current = courseId;
+      const saved = readSessionScroll(scrollKey);
+      if (saved !== null) {
+        container.scrollTop = saved;
+        lastScrollTopRef.current = saved;
+        return;
+      }
+      const activeRow = container.querySelector<HTMLElement>(`[data-lesson-idx="${active}"]`);
+      if (activeRow) {
+        const targetTop = Math.max(
+          0,
+          activeRow.offsetTop - container.clientHeight / 2 + activeRow.clientHeight / 2,
+        );
+        container.scrollTop = targetTop;
+        lastScrollTopRef.current = targetTop;
+        writeSessionScroll(scrollKey, targetTop);
+        return;
+      }
+    }
+
+    if (lastScrollTopRef.current !== null) {
+      container.scrollTop = lastScrollTopRef.current;
+    }
+  }, [active, courseId, courseModules.length, isVisible, scrollKey]);
 
   useEffect(() => {
     if (!dragState) return;
@@ -3556,8 +3940,11 @@ function PlaylistTab({
     };
   }, [dragState, onCommitBulkDone, setDone]);
 
-  const toggleMod = (modIdx: number) => {
-    setOpenMods((prev) => prev.map((open, idx) => (idx === modIdx ? !open : open)));
+  const toggleMod = (modId: string, modIdx: number) => {
+    const currentlyOpen = isModuleOpen(modId, modIdx);
+    const nextOpen = !currentlyOpen;
+    setOpenModulesMap((prev) => ({ ...prev, [modId]: nextOpen }));
+    updateCourseUiPrefs(courseId, { openModules: { [modId]: nextOpen } });
   };
 
   let globalLessonIdx = 0;
@@ -3602,7 +3989,16 @@ function PlaylistTab({
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 divide-y divide-border/50 overflow-y-auto px-3 pb-4 custom-scrollbar-sm">
+      <div
+        ref={scrollContainerRef}
+        onScroll={(e) => {
+          if (!isVisible) return;
+          const top = e.currentTarget.scrollTop;
+          lastScrollTopRef.current = top;
+          writeSessionScroll(scrollKey, top);
+        }}
+        className="min-h-0 flex-1 divide-y divide-border/50 overflow-y-auto px-3 pb-4 custom-scrollbar-sm"
+      >
         {courseModules.map((mod, modIdx) => {
           const startIdx = globalLessonIdx;
           globalLessonIdx += mod.lessons.length;
@@ -3615,13 +4011,13 @@ function PlaylistTab({
             (acc, l) => acc + (l.durationSec || parseTs(l.duration)),
             0,
           );
-          const isOpen = openMods[modIdx] ?? true;
+          const isOpen = isModuleOpen(mod.id, modIdx);
 
           return (
             <div key={mod.id} className="py-2 first:pt-0 last:pb-0">
               <button
                 type="button"
-                onClick={() => toggleMod(modIdx)}
+                onClick={() => toggleMod(mod.id, modIdx)}
                 aria-expanded={isOpen}
                 className="flex w-full items-start gap-3 rounded-lg px-3 py-2.5 text-left transition-colors hover:bg-secondary/60"
               >
@@ -3932,6 +4328,7 @@ function NotesTab({
   onPlay,
   onPause,
   getPlaybackState,
+  isVisible,
 }: {
   courseId: string;
   lessonId?: string | undefined;
@@ -3944,7 +4341,14 @@ function NotesTab({
   onPlay: () => void;
   onPause: () => void;
   getPlaybackState: () => { isPlaying: boolean; currentTime: number };
+  isVisible: boolean;
 }) {
+  const lessonKey = lessonId || `idx-${lessonIdx}`;
+  const scrollKey = `notes:${courseId}:${lessonKey}`;
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const lastScrollTopRef = useRef<number>(readSessionScroll(scrollKey) ?? 0);
+  const draftHydratedKeyRef = useRef<string>("");
+
   const [notes, setNotes] = useState<NoteItem[]>(() => getCourseNotes(courseId));
   const [showAddNote, setShowAddNote] = useState(false);
   const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
@@ -3957,7 +4361,9 @@ function NotesTab({
     videoTitle: string;
   } | null>(null);
 
-  const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
+  const [sortOrder, setSortOrder] = useState<NotesSortOrder>(
+    () => readAppSettings().notesSortOrder,
+  );
   const [autocompleteEnabled, setAutocompleteEnabled] = useState(
     () => readAppSettings().notesAutocompleteEnabled,
   );
@@ -3977,6 +4383,7 @@ function NotesTab({
   const updateNotesPreferences = useCallback(
     (
       patch: Partial<{
+        notesSortOrder: NotesSortOrder;
         notesAutocompleteEnabled: boolean;
         notesSmartPauseEnabled: boolean;
         notesSmartPauseDelay: number;
@@ -3985,6 +4392,7 @@ function NotesTab({
     ) => {
       writeAppSettings({ ...readAppSettings(), ...patch });
       const next = readAppSettings();
+      setSortOrder(next.notesSortOrder);
       setAutocompleteEnabled(next.notesAutocompleteEnabled);
       setSmartPauseEnabled(next.notesSmartPauseEnabled);
       setSmartPauseDelay(next.notesSmartPauseDelay);
@@ -3996,6 +4404,7 @@ function NotesTab({
   useEffect(() => {
     const syncNotesSettings = () => {
       const next = readAppSettings();
+      setSortOrder(next.notesSortOrder);
       setAutocompleteEnabled(next.notesAutocompleteEnabled);
       setSmartPauseEnabled(next.notesSmartPauseEnabled);
       setSmartPauseDelay(next.notesSmartPauseDelay);
@@ -4016,14 +4425,62 @@ function NotesTab({
     });
   }, [courseId]);
 
-  // Reset active editor when switching lessons
+  // Restore or reset active editor draft when switching lessons or courses
   useEffect(() => {
-    setShowAddNote(false);
-    setEditingNoteId(null);
-    setNoteContent("");
-    setNoteTimestamp(null);
+    const compositeKey = `${courseId}:${lessonKey}`;
+    draftHydratedKeyRef.current = compositeKey;
+    const savedDraft = readSessionNoteDraft(courseId, lessonKey);
+    if (savedDraft) {
+      setShowAddNote(savedDraft.mode === "add");
+      setEditingNoteId(savedDraft.mode === "edit" ? savedDraft.editingNoteId : null);
+      setNoteContent(savedDraft.content);
+      setNoteTimestamp(savedDraft.timestamp);
+    } else {
+      setShowAddNote(false);
+      setEditingNoteId(null);
+      setNoteContent("");
+      setNoteTimestamp(null);
+    }
     setEditorKey((k) => k + 1);
-  }, [lessonIdx]);
+  }, [courseId, lessonKey]);
+
+  // Sync active editor draft to sessionStorage so navigating away and returning preserves drafts
+  useEffect(() => {
+    const compositeKey = `${courseId}:${lessonKey}`;
+    if (draftHydratedKeyRef.current !== compositeKey) return;
+    if (showAddNote && !editingNoteId) {
+      writeSessionNoteDraft(courseId, lessonKey, {
+        mode: "add",
+        editingNoteId: null,
+        content: noteContent,
+        timestamp: noteTimestamp,
+      });
+    } else if (editingNoteId) {
+      writeSessionNoteDraft(courseId, lessonKey, {
+        mode: "edit",
+        editingNoteId,
+        content: noteContent,
+        timestamp: noteTimestamp,
+      });
+    } else {
+      writeSessionNoteDraft(courseId, lessonKey, null);
+    }
+  }, [courseId, lessonKey, showAddNote, editingNoteId, noteContent, noteTimestamp]);
+
+  // Restore scroll position on lesson switch or tab visibility restore
+  useEffect(() => {
+    const saved = readSessionScroll(scrollKey) ?? 0;
+    lastScrollTopRef.current = saved;
+    if (scrollContainerRef.current) {
+      scrollContainerRef.current.scrollTop = saved;
+    }
+  }, [scrollKey]);
+
+  useLayoutEffect(() => {
+    if (isVisible && scrollContainerRef.current) {
+      scrollContainerRef.current.scrollTop = lastScrollTopRef.current;
+    }
+  }, [isVisible, scrollKey]);
 
   // Close screenshot lightbox on Escape
   useEffect(() => {
@@ -4075,6 +4532,7 @@ function NotesTab({
       setShowAddNote(false);
       setNoteTimestamp(null);
       setEditorKey((k) => k + 1);
+      writeSessionNoteDraft(courseId, lessonKey, null);
     } catch {
       toast.error("Failed to save note");
     } finally {
@@ -4089,6 +4547,7 @@ function NotesTab({
     setEditingNoteId(null);
     setNoteContent("");
     setEditorKey((k) => k + 1);
+    writeSessionNoteDraft(courseId, lessonKey, null);
   };
 
   const handleDeleteNote = (id: string) => {
@@ -4108,6 +4567,7 @@ function NotesTab({
     setNoteContent("");
     setNoteTimestamp(null);
     setEditorKey((k) => k + 1);
+    writeSessionNoteDraft(courseId, lessonKey, null);
   };
 
   const exportNotes = () => {
@@ -4153,13 +4613,16 @@ function NotesTab({
             type="button"
             variant="ghost"
             size="icon"
-            onClick={() => setSortOrder((prev) => (prev === "asc" ? "desc" : "asc"))}
-            disabled={lessonNotes.length <= 1}
+            onClick={() =>
+              updateNotesPreferences({
+                notesSortOrder: sortOrder === "asc" ? "desc" : "asc",
+              })
+            }
             aria-label={sortOrder === "asc" ? "Oldest first" : "Latest first"}
             title={sortOrder === "asc" ? "Oldest first" : "Latest first"}
             className="size-9 shrink-0 rounded-md text-muted-foreground hover:text-foreground"
           >
-            {sortOrder === "asc" ? <ArrowUpNarrowWide /> : <ArrowDownWideNarrow />}
+            {sortOrder === "asc" ? <ArrowDownWideNarrow /> : <ArrowUpNarrowWide />}
           </Button>
 
           {/* 3. Borderless 3-Dots Options Menu */}
@@ -4324,7 +4787,16 @@ function NotesTab({
       </div>
 
       {/* Scrollable Note Composer + Note Cards List (aligned to 12px px-3) */}
-      <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-3 pt-1.5 pb-4 custom-scrollbar-sm">
+      <div
+        ref={scrollContainerRef}
+        onScroll={(e) => {
+          if (!isVisible) return;
+          const top = e.currentTarget.scrollTop;
+          lastScrollTopRef.current = top;
+          writeSessionScroll(scrollKey, top);
+        }}
+        className="min-h-0 flex-1 space-y-3 overflow-y-auto px-3 pt-1.5 pb-4 custom-scrollbar-sm"
+      >
         {/* New Note Composer Card */}
         {showAddNote && !editingNoteId && (
           <div className="overflow-hidden rounded-xl bg-background ring-1 ring-primary/35 shadow-card">
@@ -4467,7 +4939,7 @@ function NotesTab({
                         {fmt(note.timestamp)}
                       </button>
 
-                      <div className="flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+                      <div className="flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100 [@media(hover:none)]:opacity-100">
                         <button
                           type="button"
                           aria-label="Copy note"
@@ -4617,6 +5089,7 @@ function NoteEditorFooter({
 }
 
 function TranscriptTab({
+  courseId,
   videoId,
   youtubeId,
   availableTracks,
@@ -4636,8 +5109,10 @@ function TranscriptTab({
   onSetSource,
   onDeleteTrack,
   onTranscriptReload,
+  isVisible,
   aiPanel,
 }: {
+  courseId: string;
   videoId?: string | undefined;
   youtubeId?: string | null | undefined;
   availableTracks: TranscriptTrack[];
@@ -4657,10 +5132,15 @@ function TranscriptTab({
   onSetSource: (trackId: string) => void;
   onDeleteTrack: (trackId: string) => void;
   onTranscriptReload: () => void;
+  isVisible: boolean;
   aiPanel?: ReactNode;
 }) {
   const [fetchingYt, setFetchingYt] = useState(false);
   const listRef = useRef<HTMLOListElement>(null);
+  const scrollKey = `transcript:${courseId}:${videoId || "none"}`;
+  const lastScrollTopRef = useRef<number | null>(readSessionScroll(scrollKey));
+  const lastAutoScrolledIdxRef = useRef<number>(-1);
+  const restoredForScrollKeyRef = useRef<string>("");
   const activeJob = useVideoTranscriptJob(videoId);
 
   const resolvedSelectedId = resolveBestTrackId(availableTracks, selectedLang);
@@ -4690,17 +5170,45 @@ function TranscriptTab({
     return lastBefore;
   }, [cues, time]);
 
+  useLayoutEffect(() => {
+    if (cuesLoading || cues.length === 0 || !isVisible) return;
+    const list = listRef.current;
+    if (!list) return;
+
+    if (restoredForScrollKeyRef.current !== scrollKey) {
+      restoredForScrollKeyRef.current = scrollKey;
+      const saved = readSessionScroll(scrollKey);
+      if (saved !== null) {
+        list.scrollTop = saved;
+        lastScrollTopRef.current = saved;
+        lastAutoScrolledIdxRef.current = activeIdx;
+        return;
+      }
+      lastScrollTopRef.current = null;
+      lastAutoScrolledIdxRef.current = -1;
+    }
+
+    if (lastScrollTopRef.current !== null && activeIdx === lastAutoScrolledIdxRef.current) {
+      list.scrollTop = lastScrollTopRef.current;
+    }
+  }, [activeIdx, cues.length, cuesLoading, isVisible, scrollKey]);
+
   useEffect(() => {
-    if (activeIdx < 0) return;
+    if (!isVisible || activeIdx < 0 || cues.length === 0) return;
+    if (activeIdx === lastAutoScrolledIdxRef.current) return;
+    lastAutoScrolledIdxRef.current = activeIdx;
     const list = listRef.current;
     const el = list?.children[activeIdx] as HTMLElement | undefined;
     if (list && el) {
+      const targetTop = Math.max(0, el.offsetTop - list.clientHeight / 2 + el.clientHeight / 2);
       list.scrollTo({
-        top: el.offsetTop - list.clientHeight / 2 + el.clientHeight / 2,
+        top: targetTop,
         behavior: "smooth",
       });
+      lastScrollTopRef.current = targetTop;
+      writeSessionScroll(scrollKey, targetTop);
     }
-  }, [activeIdx]);
+  }, [activeIdx, cues.length, isVisible, scrollKey]);
 
   const handleFetchYoutubeTranscript = async () => {
     if (!youtubeId || !videoId) return;
@@ -4879,6 +5387,15 @@ function TranscriptTab({
               <DropdownMenuItem className="rounded-md" onClick={onImportSubtitles}>
                 <Upload /> Import subtitles…
               </DropdownMenuItem>
+              {youtubeId && (
+                <DropdownMenuItem
+                  className="rounded-md"
+                  disabled={fetchingYt}
+                  onClick={() => void handleFetchYoutubeTranscript()}
+                >
+                  <Subtitles /> {fetchingYt ? "Fetching YouTube…" : "Fetch YouTube"}
+                </DropdownMenuItem>
+              )}
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
@@ -4972,45 +5489,18 @@ function TranscriptTab({
           {isJobActive && activeJob ? (
             <AiJobTraceCard job={activeJob} className="w-full max-w-xs text-left" />
           ) : (
-            <>
-              <p className="text-sm text-muted-foreground">No subtitles yet.</p>
-              <div className="flex flex-wrap justify-center gap-2">
-                <Button
-                  type="button"
-                  size="sm"
-                  onClick={() => onOpenAiModal("transcribe")}
-                  className="rounded-md"
-                >
-                  <Sparkles className="size-3.5" /> Generate AI
-                </Button>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="secondary"
-                  onClick={onImportSubtitles}
-                  className="rounded-md"
-                >
-                  <Upload className="size-3.5" /> Import file
-                </Button>
-                {youtubeId && (
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="ghost"
-                    disabled={fetchingYt}
-                    onClick={() => void handleFetchYoutubeTranscript()}
-                    className="rounded-md"
-                  >
-                    {fetchingYt ? "Fetching…" : "Fetch YouTube"}
-                  </Button>
-                )}
-              </div>
-            </>
+            <p className="text-sm text-muted-foreground">No subtitles yet.</p>
           )}
         </div>
       ) : (
         <ol
           ref={listRef}
+          onScroll={(e) => {
+            if (!isVisible) return;
+            const top = e.currentTarget.scrollTop;
+            lastScrollTopRef.current = top;
+            writeSessionScroll(scrollKey, top);
+          }}
           dir={currentTrack?.rtl ? "rtl" : "ltr"}
           className="relative min-h-0 flex-1 space-y-1 overflow-y-auto px-3 pb-4 custom-scrollbar-sm"
         >

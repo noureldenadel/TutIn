@@ -615,6 +615,14 @@ export function syncLiveMarkdownSyntax(
     onNodeReplaced: (oldNode, newNode) => replacements.set(oldNode, newNode),
   });
 
+  // Ensure a trailing `<hr>` in the live editor always has an editable paragraph after it
+  // so the user can click or arrow below the divider cleanly.
+  if (!options?.clearAll && editor.lastElementChild?.tagName.toLowerCase() === "hr") {
+    const pAfter = document.createElement("p");
+    pAfter.appendChild(document.createElement("br"));
+    editor.appendChild(pAfter);
+  }
+
   if (nonCollapsedSnap && sel) {
     const resolveEndpoint = (node: Node, offset: number): { node: Node; offset: number } => {
       if (node.isConnected && editor.contains(node)) {
@@ -1391,7 +1399,6 @@ function reconcileInlineElement(inlineEl: HTMLElement): void {
 
   const rule = INLINE_LIVE_RULES[tag];
   if (!rule) return;
-  const expected = rule.delimiter;
   const openSpan = getDirectSyntaxChild(inlineEl, "open");
   const closeSpan = getDirectSyntaxChild(inlineEl, "close");
   if (!openSpan || !closeSpan) {
@@ -1402,9 +1409,34 @@ function reconcileInlineElement(inlineEl: HTMLElement): void {
   const sel = window.getSelection();
   const range = sel && sel.rangeCount > 0 ? sel.getRangeAt(0) : null;
 
+  let openVal = (openSpan.textContent || "").replace(/\u200B/g, "");
+  let closeVal = (closeSpan.textContent || "").replace(/\u200B/g, "");
+
+  // Seamlessly convert between `<em>` (`*`/`_`) and `<strong>` (`**`/`__`) when delimiters are edited
+  if (
+    (tag === "em" || tag === "i") &&
+    ((openVal === "**" && closeVal === "**") || (openVal === "__" && closeVal === "__"))
+  ) {
+    replaceBlockTagPreservingCaret(inlineEl, "strong", inlineEl.parentElement ?? inlineEl);
+    return;
+  }
+  if (
+    (tag === "strong" || tag === "b") &&
+    ((openVal === "*" && closeVal === "*") || (openVal === "_" && closeVal === "_"))
+  ) {
+    replaceBlockTagPreservingCaret(inlineEl, "em", inlineEl.parentElement ?? inlineEl);
+    return;
+  }
+
+  const expected =
+    (tag === "em" || tag === "i") && openVal.startsWith("_")
+      ? "_"
+      : (tag === "strong" || tag === "b") && openVal.startsWith("__")
+        ? "__"
+        : rule.delimiter;
+
   // Handle typing spilling inside openSpan (e.g. "`foo" -> openSpan="`", push "foo" inside el;
   // or "bar`" -> push "bar" before el).
-  let openVal = (openSpan.textContent || "").replace(/\u200B/g, "");
   if (openVal.length > expected.length) {
     const inOpen = Boolean(range && openSpan.contains(range.startContainer));
     const caretOff =
@@ -1442,7 +1474,7 @@ function reconcileInlineElement(inlineEl: HTMLElement): void {
 
   // Handle typing spilling inside/after closeSpan ("` hello" -> push " hello" outside inlineEl;
   // "hello`" -> push "hello" inside inlineEl before closeSpan).
-  let closeVal = (closeSpan.textContent || "").replace(/\u200B/g, "");
+  closeVal = (closeSpan.textContent || "").replace(/\u200B/g, "");
   if (closeVal.length > expected.length) {
     const inClose = Boolean(range && closeSpan.contains(range.startContainer));
     const caretOff =
