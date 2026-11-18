@@ -10,7 +10,7 @@
  *     ├── notes/
  *     │   ├── notes.json
  *     │   └── screenshots/
- *     ├── captions/<relModPath>/<base>.<lang>.vtt
+ *     ├── subtitles/<relModPath>/<base>.<lang>.vtt
  *     └── dubs/<relModPath>/<base>.<lang>.mp3
  *
  * Pre-existing subtitle files (next to videos) are NEVER modified.
@@ -46,12 +46,20 @@ export function getVaultDir(courseFolder) {
 }
 
 /**
- * Returns (and creates) the captions directory inside .tutin/captions.
+ * Returns (and creates) the subtitles directory inside .tutin/subtitles.
  */
-export function getCaptionsDir(courseFolder, relModulePath = '') {
+export function getSubtitlesDir(courseFolder, relModulePath = '') {
     if (!courseFolder) return null
     const vaultDir = getVaultDir(courseFolder)
-    return ensureDir(path.join(vaultDir || courseFolder, 'captions', relModulePath), 'captions')
+    return ensureDir(path.join(vaultDir || courseFolder, 'subtitles', relModulePath), 'subtitles')
+}
+
+/**
+ * Rewrites legacy `.tutin/captions/` file paths to `.tutin/subtitles/` while keeping separator style.
+ */
+export function remapVaultSubtitlePath(filePath) {
+    if (typeof filePath !== 'string' || !filePath) return filePath
+    return filePath.replace(/([/\\])\.tutin([/\\])captions([/\\]|$)/i, '$1.tutin$2subtitles$3')
 }
 
 /**
@@ -79,47 +87,66 @@ export function getCourseVoiceProfileDir(courseFolder = null, courseId = 'defaul
     return ensureDir(path.join(getDataDir(), 'dubs', '_voice_profiles', safeCourseId), 'voice_profile')
 }
 
-/**
- * One-time migration helper: if a course folder still has a legacy `Dubs/` folder
- * or legacy `.tts.json` files from an earlier version, relocates dub MP3s into `.tutin/dubs/`
- * and removes the legacy artifacts so zero old-version leftovers remain.
- */
-export function migrateLegacyCourseAssets(courseFolder) {
-    if (!courseFolder || !fs.existsSync(courseFolder)) return
-    const legacyDubsRoot = path.join(courseFolder, 'Dubs')
-    if (fs.existsSync(legacyDubsRoot)) {
-        const vaultDubsRoot = path.join(courseFolder, '.tutin', 'dubs')
-        const moveRecursive = (srcDir, rel = '') => {
-            try {
-                for (const entry of fs.readdirSync(srcDir, { withFileTypes: true })) {
-                    const srcPath = path.join(srcDir, entry.name)
-                    const nextRel = rel ? path.join(rel, entry.name) : entry.name
-                    if (entry.isDirectory()) {
-                        moveRecursive(srcPath, nextRel)
-                        try { fs.rmdirSync(srcPath) } catch { }
-                    } else if (entry.isFile() && entry.name.endsWith('.mp3')) {
-                        const targetDir = ensureDir(path.join(vaultDubsRoot, rel), 'dubs')
-                        if (targetDir) {
-                            const destPath = path.join(targetDir, entry.name)
-                            if (!fs.existsSync(destPath)) {
+function moveDirectoryTree(srcRoot, destRoot, fileFilter = null) {
+    if (!srcRoot || !fs.existsSync(srcRoot)) return
+    const moveRecursive = (srcDir, rel = '') => {
+        try {
+            for (const entry of fs.readdirSync(srcDir, { withFileTypes: true })) {
+                const srcPath = path.join(srcDir, entry.name)
+                const nextRel = rel ? path.join(rel, entry.name) : entry.name
+                if (entry.isDirectory()) {
+                    moveRecursive(srcPath, nextRel)
+                    try { fs.rmdirSync(srcPath) } catch { }
+                } else if (entry.isFile() && (!fileFilter || fileFilter(entry.name))) {
+                    const targetDir = ensureDir(path.join(destRoot, rel), 'vault_migration')
+                    if (targetDir) {
+                        const destPath = path.join(targetDir, entry.name)
+                        if (!fs.existsSync(destPath)) {
+                            try {
+                                fs.renameSync(srcPath, destPath)
+                            } catch {
                                 try {
-                                    fs.renameSync(srcPath, destPath)
-                                } catch {
-                                    try {
-                                        fs.copyFileSync(srcPath, destPath)
-                                        fs.unlinkSync(srcPath)
-                                    } catch { }
-                                }
-                            } else {
-                                try { fs.unlinkSync(srcPath) } catch { }
+                                    fs.copyFileSync(srcPath, destPath)
+                                    fs.unlinkSync(srcPath)
+                                } catch { }
                             }
+                        } else {
+                            try { fs.unlinkSync(srcPath) } catch { }
                         }
                     }
                 }
-            } catch { }
+            }
+        } catch { }
+    }
+    moveRecursive(srcRoot)
+    try { fs.rmdirSync(srcRoot) } catch { }
+}
+
+/**
+ * One-time migration helper:
+ * - Relocates legacy `<courseFolder>/Dubs/` MP3s into `<courseFolder>/.tutin/dubs/`
+ * - Renames/merges legacy `<courseFolder>/.tutin/captions/` into `<courseFolder>/.tutin/subtitles/`
+ */
+export function migrateLegacyCourseAssets(courseFolder) {
+    if (!courseFolder || !fs.existsSync(courseFolder)) return
+
+    const legacyDubsRoot = path.join(courseFolder, 'Dubs')
+    if (fs.existsSync(legacyDubsRoot)) {
+        moveDirectoryTree(legacyDubsRoot, path.join(courseFolder, '.tutin', 'dubs'), name => name.endsWith('.mp3'))
+    }
+
+    const legacyCaptionsDir = path.join(courseFolder, '.tutin', 'captions')
+    const vaultSubtitlesDir = path.join(courseFolder, '.tutin', 'subtitles')
+    if (fs.existsSync(legacyCaptionsDir)) {
+        if (!fs.existsSync(vaultSubtitlesDir)) {
+            try {
+                fs.renameSync(legacyCaptionsDir, vaultSubtitlesDir)
+                return
+            } catch {
+                // Fall back to recursive merge below if cross-device or directory lock occurs
+            }
         }
-        moveRecursive(legacyDubsRoot)
-        try { fs.rmdirSync(legacyDubsRoot) } catch { }
+        moveDirectoryTree(legacyCaptionsDir, vaultSubtitlesDir)
     }
 }
 
@@ -151,14 +178,15 @@ export function getSummariesVaultDir(courseFolder, relModulePath = '') {
 }
 
 /**
- * Full path for a managed caption file.
+ * Full path for a managed subtitle file.
  * e.g.
- *   uploaded v1: /Course/.tutin/captions/Module 1/01 - Intro.ar.vtt
- *   uploaded v2: /Course/.tutin/captions/Module 1/01 - Intro-u2.ar.vtt
- *   generated:   /Course/.tutin/captions/Module 1/01 - Intro-generated.ar.vtt
+ *   uploaded v1: /Course/.tutin/subtitles/Module 1/01 - Intro.ar.vtt
+ *   uploaded v2: /Course/.tutin/subtitles/Module 1/01 - Intro-u2.ar.vtt
+ *   generated:   /Course/.tutin/subtitles/Module 1/01 - Intro-generated.ar.vtt
  */
 export function getCaptionFilePath(courseFolder, relModulePath, videoBaseName, lang, origin = 'uploaded', version = 1) {
-    const dir = getCaptionsDir(courseFolder, relModulePath)
+    migrateLegacyCourseAssets(courseFolder)
+    const dir = getSubtitlesDir(courseFolder, relModulePath)
     if (!dir) return null
 
     const isGenerated = origin === 'generated'
@@ -331,8 +359,8 @@ export function getCacheFilePath(videoId, lang, origin = 'uploaded', version = 1
 // ── Caption Save & Load ─────────────────────────────────────────
 
 /**
- * Save caption chunks.
- * For local courses: writes exclusively to `<courseFolder>/.tutin/captions/` and removes any stale AppData cache.
+ * Save subtitle chunks.
+ * For local courses: writes exclusively to `<courseFolder>/.tutin/subtitles/` and removes any stale AppData cache.
  * For cloud courses: writes to AppData cache.
  */
 export function saveCaptionFile(videoMeta, lang, chunks, origin = 'uploaded', version = 1) {
@@ -466,17 +494,18 @@ export function loadCaptionChunks(videoId, lang, subtitleSources = [], courseFol
     }
 
     if (isLocalCourse && videoBaseName) {
-        const captionsDir = path.join(courseFolder, '.tutin', 'captions', relModulePath)
-        if (fs.existsSync(captionsDir) && targetLang) {
+        migrateLegacyCourseAssets(courseFolder)
+        const subtitlesDir = path.join(courseFolder, '.tutin', 'subtitles', relModulePath)
+        if (fs.existsSync(subtitlesDir) && targetLang) {
             const candidates = []
             if (targetOrigin === 'generated') {
-                candidates.push(path.join(captionsDir, `${videoBaseName}-generated.${targetLang}.vtt`))
+                candidates.push(path.join(subtitlesDir, `${videoBaseName}-generated.${targetLang}.vtt`))
             } else if (targetOrigin === 'uploaded' && targetVersion > 1) {
-                candidates.push(path.join(captionsDir, `${videoBaseName}-u${targetVersion}.${targetLang}.vtt`))
+                candidates.push(path.join(subtitlesDir, `${videoBaseName}-u${targetVersion}.${targetLang}.vtt`))
             } else {
                 candidates.push(
-                    path.join(captionsDir, `${videoBaseName}.${targetLang}.vtt`),
-                    path.join(captionsDir, `${videoBaseName}-generated.${targetLang}.vtt`)
+                    path.join(subtitlesDir, `${videoBaseName}.${targetLang}.vtt`),
+                    path.join(subtitlesDir, `${videoBaseName}-generated.${targetLang}.vtt`)
                 )
             }
 
@@ -555,7 +584,8 @@ export function listCourseLanguages(courseFolder) {
         walk(dir)
     }
 
-    checkDir(path.join(courseFolder, '.tutin', 'captions'))
+    migrateLegacyCourseAssets(courseFolder)
+    checkDir(path.join(courseFolder, '.tutin', 'subtitles'))
 
     return { langs: [...langs] }
 }
@@ -642,7 +672,7 @@ export function getDubCachePath(videoId, lang) {
 }
 
 /**
- * Save dub track metadata sidecar (engine, bgMode, voiceGender, speechIntervals, generatedAt)
+ * Save dub track metadata sidecar (engine, bgMode, voiceGender, generatedAt)
  * in `.tutin/dubs/` for local courses or `%APPDATA%/TutIn/dubs/` for cloud courses.
  */
 export function saveDubTrackMeta(videoMeta, lang, metaPayload) {
@@ -970,12 +1000,12 @@ export function scanVaultSummary(courseFolder) {
     }
     scanDubsDir(path.join(courseFolder, '.tutin', 'dubs'))
 
-    // 2. Transcripts (.tutin/captions and sibling subtitle files)
+    // 2. Subtitles (.tutin/subtitles)
     const captionFiles = []
     const captionLangs = new Set()
     let generatedCaptionsCount = 0
     let uploadedCaptionsCount = 0
-    const scanCaptionsDir = (baseDir) => {
+    const scanSubtitlesDir = (baseDir) => {
         if (!fs.existsSync(baseDir)) return
         function walk(dir) {
             try {
@@ -999,12 +1029,12 @@ export function scanVaultSummary(courseFolder) {
                     }
                 }
             } catch (err) {
-                console.warn(`[CourseAssets] Failed to scan captions vault (${dir}):`, err.message)
+                console.warn(`[CourseAssets] Failed to scan subtitles vault (${dir}):`, err.message)
             }
         }
         walk(baseDir)
     }
-    scanCaptionsDir(path.join(courseFolder, '.tutin', 'captions'))
+    scanSubtitlesDir(path.join(courseFolder, '.tutin', 'subtitles'))
 
     // 3. Summaries (.tutin/summaries/)
     const summaryFiles = []

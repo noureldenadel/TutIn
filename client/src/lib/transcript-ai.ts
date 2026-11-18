@@ -35,7 +35,6 @@ export interface DubTrackMeta {
   engine?: DubVoiceEngine | undefined;
   bgMode?: DubBackgroundMode | undefined;
   voiceGender?: DubVoiceGender | undefined;
-  speechIntervals?: Array<[number, number]> | undefined;
   generatedAt?: string | null | undefined;
 }
 

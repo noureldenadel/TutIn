@@ -124,7 +124,7 @@ export async function submitDubJob({
     targetLang,
     engine = 'neural',
     voiceGender = 'male',
-    bgMode = 'ducking',
+    bgMode = 'none',
     voiceReferencePath = null,
     voiceProfileDir = null,
     device = null,

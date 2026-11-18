@@ -3,7 +3,7 @@
 Local-first desktop web workstation for organizing, studying, and annotating local video courses, YouTube playlists, Google Drive collections, and external course links.
 
 > [!NOTE]
-> AI speech-to-text transcription (Python `faster-whisper` + Silero VAD with automatic WebGPU/WASM browser fallback), 29-language subtitle translation (offline `Xenova/nllb-200-distilled-600M` worker + OpenRouter dialect translation for Egyptian & Saudi Arabic), clause-level cue normalization, dual-engine AI voice dubbing (fast `edge-tts` neural voices + local Coqui `XTTS-v2` instructor voice cloning with course-level voice profiles and selectable `Auto-duck` / `Separate music` background modes), and two-origin (`Uploaded` vs `AI`) multi-track subtitle management (`Master` & `Source` selection) are active across the Video Player, Curriculum Manager, and Settings (`AI & APIs` / `Voice` tabs). AI lecture summarization remains deferred to a future phase.
+> AI speech-to-text transcription (Python `faster-whisper` + Silero VAD with automatic WebGPU/WASM browser fallback), 29-language subtitle translation (offline `Xenova/nllb-200-distilled-600M` worker + OpenRouter dialect translation for Egyptian & Saudi Arabic), clause-level cue normalization, dual-engine AI voice dubbing (fast `edge-tts` neural voices + local Coqui `XTTS-v2` instructor voice cloning with course-level voice profiles and selectable `Off` / `Music & SFX` background audio modes), and two-origin (`Uploaded` vs `AI`) multi-track subtitle management (`Master` & `Source` selection) are active across the Video Player, Curriculum Manager, and Settings (`AI & APIs` / `Voice` tabs). AI lecture summarization remains deferred to a future phase.
 
 ## Quick Start
 

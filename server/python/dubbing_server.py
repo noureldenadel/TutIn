@@ -14,8 +14,9 @@ import subprocess
 import importlib
 from typing import List, Optional, Dict, Any
 
-# Auto-agree to Coqui Terms of Service for non-interactive server mode
+# Auto-agree to Coqui Terms of Service and silence Windows HF symlink warning
 os.environ["COQUI_TOS_AGREED"] = "1"
+os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
 os.environ["PYTHONUNBUFFERED"] = "1"
 os.environ["PYTHONIOENCODING"] = "utf-8"
 
@@ -257,7 +258,7 @@ class DubRequest(BaseModel):
     target_lang: Optional[str] = None
     engine: Optional[str] = "neural"  # "neural" (Fast Edge-TTS) | "clone" (XTTS-v2)
     voiceGender: Optional[str] = "male"  # "male" | "female"
-    bgMode: Optional[str] = "ducking"  # "ducking" (Pure voice + Live player ducking) | "demucs" (Separate music stems)
+    bgMode: Optional[str] = "none"  # "none" (Voice only) | "demucs" (Separated Music & SFX stems)
     preserveBackgroundAudio: Optional[bool] = False
     voiceReferencePath: Optional[str] = None
     voiceProfileDir: Optional[str] = None
@@ -282,7 +283,7 @@ class DubRequest(BaseModel):
             return "demucs"
         if self.preserveBackgroundAudio:
             return "demucs"
-        return "ducking"
+        return "none"
 
 
 # ==========================================
@@ -452,6 +453,30 @@ def trim_internal_silence(audio_segment: AudioSegment, max_reduction_ms: int = 3
     except Exception:
         pass
     return audio_segment
+
+
+def decode_audio_bytes_to_segment(
+    audio_bytes: bytes,
+    input_format: str = "mp3",
+    sample_rate: int = 24000,
+    channels: int = 1,
+) -> AudioSegment:
+    """
+    Decode encoded audio bytes into an AudioSegment via FFmpeg pipe + AudioSegment.from_wav
+    so Windows environments without ffprobe (e.g. imageio_ffmpeg) never hit FileNotFoundError.
+    """
+    ffmpeg_bin = get_ffmpeg_bin()
+    cmd = [
+        ffmpeg_bin, "-y",
+        "-f", input_format,
+        "-i", "pipe:0",
+        "-f", "wav",
+        "-ar", str(sample_rate),
+        "-ac", str(channels),
+        "pipe:1",
+    ]
+    proc = subprocess.run(cmd, input=audio_bytes, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+    return AudioSegment.from_wav(io.BytesIO(proc.stdout))
 
 
 def apply_tempo_filter_bytes(input_wav_bytes: bytes, speed_factor: float) -> bytes:
@@ -700,6 +725,10 @@ def sanitize_dub_text(text: str) -> str:
     return t
 
 
+def has_speakable_chars(text: str) -> bool:
+    return any(ch.isalnum() for ch in text)
+
+
 def estimate_speech_duration_sec(text: str, target_lang: str) -> float:
     clean = re.sub(r'[\s.,?!؟،;:—\-"()\[\]\']+', "", text)
     char_count = max(1, len(clean))
@@ -716,17 +745,28 @@ def estimate_speech_duration_sec(text: str, target_lang: str) -> float:
 # Concurrent Edge Neural TTS Synthesis
 # ==========================================
 
+async def _synthesize_edge_segment_bytes(text: str, voice_id: str, rate_str: str) -> bytes:
+    import edge_tts
+    comm = edge_tts.Communicate(text=text, voice=voice_id, rate=rate_str)
+    buf = bytearray()
+    async for chunk in comm.stream():
+        if chunk.get("type") == "audio":
+            data = chunk.get("data")
+            if data:
+                buf.extend(data)
+    return bytes(buf)
+
+
 async def _synthesize_edge_batch_async(
     tasks_spec: List[Dict[str, Any]],
     voice_id: str,
-    temp_dir: str,
     job: dict,
     base_prog: int,
     avail_prog: int,
-) -> Dict[int, AudioSegment]:
-    import edge_tts
-    sem = asyncio.Semaphore(6)
+) -> tuple[Dict[int, AudioSegment], List[str]]:
+    sem = asyncio.Semaphore(4)
     results: Dict[int, AudioSegment] = {}
+    errors: List[str] = []
     total = max(1, len(tasks_spec))
     completed = 0
 
@@ -738,32 +778,40 @@ async def _synthesize_edge_batch_async(
         text = item["text"]
         rate_pct = item["rate_pct"]
         rate_str = f"+{rate_pct}%" if rate_pct >= 0 else f"{rate_pct}%"
-        out_mp3 = os.path.join(temp_dir, f"edge_seg_{idx}.mp3")
 
         async with sem:
             if job.get("status") == "cancelled":
                 return
-            last_err = None
-            for attempt in range(2):
+            last_err: Optional[Exception] = None
+            for attempt in range(3):
                 try:
-                    comm = edge_tts.Communicate(text=text, voice=voice_id, rate=rate_str)
-                    await comm.save(out_mp3)
-                    if os.path.exists(out_mp3) and os.path.getsize(out_mp3) > 100:
-                        seg_audio = AudioSegment.from_file(out_mp3).set_frame_rate(24000).set_channels(1)
-                        results[idx] = strip_leading_trailing_silence(seg_audio)
-                        break
+                    mp3_bytes = await _synthesize_edge_segment_bytes(text, voice_id, rate_str)
+                    if len(mp3_bytes) <= 100:
+                        raise RuntimeError(f"Empty audio stream ({len(mp3_bytes)} bytes)")
+                    seg_audio = await asyncio.to_thread(
+                        decode_audio_bytes_to_segment,
+                        mp3_bytes,
+                        "mp3",
+                        24000,
+                        1,
+                    )
+                    results[idx] = strip_leading_trailing_silence(seg_audio)
+                    break
                 except Exception as e:
                     last_err = e
-                    await asyncio.sleep(0.25 * (attempt + 1))
+                    await asyncio.sleep(0.3 * (attempt + 1))
             else:
-                print(f"[TutIn Dubbing] Edge-TTS segment {idx + 1} warning: {last_err}")
+                err_text = str(last_err) or repr(last_err) or "Unknown Edge-TTS failure"
+                print(f"[TutIn Dubbing] Edge-TTS segment {idx + 1} warning: {err_text}")
+                if len(errors) < 5:
+                    errors.append(err_text)
 
             completed += 1
             job["step"] = f"Synthesizing neural voice ({completed}/{total})…"
             job["progress"] = base_prog + int((completed / total) * avail_prog)
 
     await asyncio.gather(*[_worker(item) for item in tasks_spec])
-    return results
+    return results, errors
 
 
 # ==========================================
@@ -828,7 +876,7 @@ def process_dubbing_job(job_id: str, req: DubRequest):
             prepared_items = []
             for i, seg in enumerate(segments):
                 text = sanitize_dub_text(seg.text)
-                if not text:
+                if not text or not has_speakable_chars(text):
                     continue
                 start_sec = max(0.0, seg.get_start())
                 end_sec = max(start_sec + 0.25, seg.get_end())
@@ -869,17 +917,17 @@ def process_dubbing_job(job_id: str, req: DubRequest):
             base_progress = 20 if bg_mode == "demucs" else 10
             avail_progress = 68 if bg_mode == "demucs" else 78
             synthesized_clips: Dict[int, AudioSegment] = {}
+            synthesis_errors: List[str] = []
 
             # 3A. Fast Neural Voice Engine (Edge-TTS)
             if engine == "neural":
                 voice_id = resolve_edge_voice(target_lang, voice_gender)
                 job["step"] = f"Synthesizing neural voice ({voice_id})…"
                 job["progress"] = base_progress
-                synthesized_clips = asyncio.run(
+                synthesized_clips, synthesis_errors = asyncio.run(
                     _synthesize_edge_batch_async(
                         prepared_items,
                         voice_id,
-                        temp_dir,
                         job,
                         base_progress,
                         avail_progress,
@@ -954,10 +1002,14 @@ def process_dubbing_job(job_id: str, req: DubRequest):
                         seg_audio = AudioSegment(data=pcm16, sample_width=2, frame_rate=24000, channels=1)
                         synthesized_clips[idx] = strip_leading_trailing_silence(seg_audio)
                     except Exception as seg_err:
-                        print(f"[TutIn Dubbing] XTTS segment {idx + 1} warning: {seg_err}")
+                        err_text = str(seg_err) or repr(seg_err) or "XTTS synthesis failure"
+                        print(f"[TutIn Dubbing] XTTS segment {idx + 1} warning: {err_text}")
+                        if len(synthesis_errors) < 5:
+                            synthesis_errors.append(err_text)
 
             if not synthesized_clips:
-                raise Exception("Voice synthesis produced 0 audio segments.")
+                detail = synthesis_errors[0] if synthesis_errors else "No audio segments returned by TTS engine."
+                raise Exception(f"Voice synthesis produced 0 audio segments ({detail}).")
 
             # 4. Elastic Timeline Assembly & Gentle Tempo Alignment (<= 1.28x)
             job["step"] = "Aligning timeline & mastering audio…"
@@ -970,7 +1022,6 @@ def process_dubbing_job(job_id: str, req: DubRequest):
             master_canvas = np.zeros(total_canvas_samples, dtype=np.float32)
             last_end_sample = 0
             min_gap_samples = int(0.035 * SAMPLE_RATE)  # 35ms clean breathing gap between utterances
-            speech_intervals: List[List[float]] = []
 
             # Compute median clip loudness for gentle leveling (avoids per-cue +10dB volume pumping)
             valid_dbfs = [
@@ -1020,7 +1071,7 @@ def process_dubbing_job(job_id: str, req: DubRequest):
                             buf = io.BytesIO()
                             clip.export(buf, format="wav")
                             stretched = apply_tempo_filter_bytes(buf.getvalue(), speed_factor)
-                            clip = AudioSegment.from_file(io.BytesIO(stretched), format="wav")
+                            clip = AudioSegment.from_wav(io.BytesIO(stretched))
                         except Exception as t_err:
                             print(f"[TutIn Dubbing] Tempo alignment warning on segment {idx + 1}: {t_err}")
 
@@ -1039,13 +1090,6 @@ def process_dubbing_job(job_id: str, req: DubRequest):
 
                 master_canvas[start_sample:end_sample] += seg_samples
                 last_end_sample = end_sample
-
-                actual_end_sec = end_sample / float(SAMPLE_RATE)
-                # Merge contiguous or near-contiguous speech intervals (< 380ms gap) for smooth player auto-ducking
-                if speech_intervals and (actual_start_sec - speech_intervals[-1][1]) <= 0.38:
-                    speech_intervals[-1][1] = round(actual_end_sec, 2)
-                else:
-                    speech_intervals.append([round(actual_start_sec, 2), round(actual_end_sec, 2)])
 
             # 5. Master Export & Optional Background Mixdown
             job["step"] = "Exporting dubbed audio track…"
@@ -1089,7 +1133,6 @@ def process_dubbing_job(job_id: str, req: DubRequest):
             job["engine"] = engine
             job["bg_mode"] = bg_mode
             job["voice_gender"] = voice_gender
-            job["speech_intervals"] = speech_intervals
             job["timings"] = {"total_seconds": total_sec, "segments_synthesized": len(synthesized_clips)}
 
         except Exception as e:
@@ -1202,7 +1245,6 @@ def submit_dub(req: DubRequest, background_tasks: BackgroundTasks):
         "engine": engine,
         "bg_mode": req.resolved_bg_mode(),
         "voice_gender": req.voiceGender or "male",
-        "speech_intervals": [],
     }
     background_tasks.add_task(process_dubbing_job, job_id, req)
     return {"job_id": job_id, "status": "queued"}

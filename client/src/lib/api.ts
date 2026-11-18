@@ -12,13 +12,37 @@ export function apiUrl(path: string): string {
 export async function apiRequest<T = unknown>(
   path: string,
   options?: RequestInit,
-): Promise<{ ok: boolean; status: number; data: T | null; error?: string | undefined }> {
-  const res = await fetch(apiUrl(path), options);
+): Promise<{
+  ok: boolean;
+  status: number;
+  data: T | null;
+  error?: string | undefined;
+  aborted?: boolean | undefined;
+}> {
+  let res: Response;
+  try {
+    res = await fetch(apiUrl(path), options);
+  } catch (err) {
+    const isAborted =
+      options?.signal?.aborted === true ||
+      (err instanceof DOMException && err.name === "AbortError") ||
+      (err instanceof Error && err.name === "AbortError");
+    return {
+      ok: false,
+      status: 0,
+      data: null,
+      error: isAborted ? "Aborted" : err instanceof Error ? err.message : "Network request failed",
+      aborted: isAborted,
+    };
+  }
   let data: T | null = null;
   try {
     data = (await res.json()) as T;
   } catch {
     data = null;
+  }
+  if (options?.signal?.aborted) {
+    return { ok: false, status: res.status, data: null, error: "Aborted", aborted: true };
   }
   const errorMessage = !res.ok
     ? data &&

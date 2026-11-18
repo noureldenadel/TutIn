@@ -256,6 +256,7 @@ function runMigrations() {
         { name: '006_primary_transcript', fn: migration006 },
         { name: '007_canvas_v2_schema', fn: migration007 },
         { name: '008_cleanup_orphaned_video_nodes', fn: migration008 },
+        { name: '009_vault_subtitles_folder_paths', fn: migration009 },
     ]
 
     for (const migration of migrations) {
@@ -651,4 +652,33 @@ function migration008() {
         WHERE from_node_id NOT IN (SELECT id FROM canvas_nodes)
            OR to_node_id NOT IN (SELECT id FROM canvas_nodes)
     `)
+}
+
+/**
+ * Migration 009: Remap stored `.tutin/captions/` paths inside `videos.subtitle_sources` to `.tutin/subtitles/`
+ */
+function migration009() {
+    const rows = getAll("SELECT id, subtitle_sources FROM videos WHERE subtitle_sources LIKE '%captions%'")
+    for (const row of rows) {
+        let parsed
+        try {
+            parsed = JSON.parse(row.subtitle_sources || '[]')
+        } catch {
+            continue
+        }
+        if (!Array.isArray(parsed)) continue
+        let changed = false
+        const updated = parsed.map((src) => {
+            if (!src || typeof src !== 'object' || typeof src.filePath !== 'string') return src
+            const nextPath = src.filePath.replace(/([/\\])\.tutin([/\\])captions([/\\]|$)/i, '$1.tutin$2subtitles$3')
+            if (nextPath !== src.filePath) {
+                changed = true
+                return { ...src, filePath: nextPath }
+            }
+            return src
+        })
+        if (changed) {
+            run('UPDATE videos SET subtitle_sources = ? WHERE id = ?', [JSON.stringify(updated), row.id])
+        }
+    }
 }

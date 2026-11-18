@@ -150,7 +150,7 @@ export function HistoryPage() {
       "/api/analytics/history?limit=100",
       signal ? { signal } : undefined,
     );
-    if (signal?.aborted) return;
+    if (signal?.aborted || res.aborted) return;
     if (res.ok && Array.isArray(res.data)) {
       setEntries(res.data.map(mapHistoryItem));
     }

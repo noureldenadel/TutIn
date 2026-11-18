@@ -256,7 +256,7 @@ export function RoadmapPage() {
     void apiRequest<RawRoadmapRow[]>("/api/roadmaps", {
       signal: controller.signal,
     }).then((res) => {
-      if (controller.signal.aborted) return;
+      if (controller.signal.aborted || res.aborted) return;
       if (res.ok && Array.isArray(res.data)) {
         const loaded = res.data.map(normalizeRoadmapRow);
         setRoadmaps(loaded);

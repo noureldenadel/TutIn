@@ -23,7 +23,6 @@ import {
   Home,
   Library,
   Link2,
-  Moon,
   MoreVertical,
   Pencil,
   Play,
@@ -31,7 +30,6 @@ import {
   RefreshCw,
   Search,
   Settings,
-  Sun,
   Trash2,
   UploadCloud,
   UsersRound,
@@ -181,17 +179,7 @@ function DockButton({
   );
 }
 
-function IconDock({
-  activeIndex,
-  dark,
-  onThemeToggle,
-  onSettings,
-}: {
-  activeIndex: number;
-  dark: boolean;
-  onThemeToggle: () => void;
-  onSettings: () => void;
-}) {
+function IconDock({ activeIndex, onSettings }: { activeIndex: number; onSettings: () => void }) {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const jobsMap = useTranscriptJobs();
   const activeJobs = useMemo(
@@ -357,24 +345,6 @@ function IconDock({
         })}
       </nav>
       <div className="contents md:mt-auto md:flex md:shrink-0 md:flex-col md:items-center md:gap-2 md:pt-4">
-        <div className="hidden md:flex">
-          <DockButton label={dark ? "Light theme" : "Dark theme"} onClick={onThemeToggle}>
-            <span className="relative flex size-4 items-center justify-center">
-              <Sun
-                className={cn(
-                  "size-4 transition-all duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none",
-                  dark ? "rotate-0 scale-100 opacity-100" : "-rotate-90 scale-0 opacity-0",
-                )}
-              />
-              <Moon
-                className={cn(
-                  "absolute size-4 transition-all duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none",
-                  dark ? "rotate-90 scale-0 opacity-0" : "rotate-0 scale-100 opacity-100",
-                )}
-              />
-            </span>
-          </DockButton>
-        </div>
         <DockButton label="Settings" onClick={onSettings}>
           <Settings />
         </DockButton>
@@ -984,17 +954,10 @@ export function AppShell({ children }: { children: ReactNode }) {
     writeAppSettings({ ...readAppSettings(), themePreset: next });
   };
 
-  const toggleTheme = () => applyMode(dark ? "light" : "dark");
-
   return (
     <TooltipProvider delayDuration={250}>
       <div className="flex h-dvh flex-col overflow-hidden bg-shell text-foreground md:flex-row">
-        <IconDock
-          activeIndex={activeNavIndex}
-          dark={dark}
-          onThemeToggle={toggleTheme}
-          onSettings={() => setSettingsOpen(true)}
-        />
+        <IconDock activeIndex={activeNavIndex} onSettings={() => setSettingsOpen(true)} />
         <SettingsModal
           open={settingsOpen}
           onOpenChange={setSettingsOpen}

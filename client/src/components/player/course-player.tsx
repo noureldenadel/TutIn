@@ -442,8 +442,13 @@ export function CoursePlayer({
   const activePointerTypeRef = useRef<string>("");
   const pointerBoostActiveRef = useRef(false);
   const suppressNextVideoClickUntilRef = useRef(0);
-  const [dubLanguages, setDubLanguages] = useState<string[]>([]);
-  const [dubTracksMeta, setDubTracksMeta] = useState<DubTrackMeta[]>([]);
+  const [dubState, setDubState] = useState<{
+    lessonId: string | null;
+    languages: string[];
+    tracks: DubTrackMeta[];
+  }>({ lessonId: null, languages: [], tracks: [] });
+  const dubLanguages = dubState.languages;
+  const dubTracksMeta = dubState.tracks;
   const [dubRefreshTick, setDubRefreshTick] = useState(0);
   const [selectedDubLang, setSelectedDubLang] = useState<string>(
     () => readCourseUiPrefs(String(course.id)).dubLang || "original",
@@ -833,7 +838,7 @@ export function CoursePlayer({
             startPosition: Math.round(sess.startPosition),
             endPosition: Math.round(endPos),
           }),
-        }).catch(() => {});
+        }).catch(() => { });
       }
     },
     [course.id],
@@ -1219,7 +1224,12 @@ export function CoursePlayer({
         floorTime !== undefined ? { floorTime, expiresAt: performance.now() + 500 } : null;
       v.currentTime = target;
       const dubEl = dubAudioRef.current;
-      if (dubEl && selectedDubLang !== "original" && target < (dubEl.duration || Infinity)) {
+      if (
+        dubEl &&
+        selectedDubLang !== "original" &&
+        dubEl.readyState >= 1 &&
+        target < (dubEl.duration || Infinity)
+      ) {
         dubEl.currentTime = target;
       }
       const displayTime = floorTime !== undefined ? Math.max(target, floorTime) : target;
@@ -1536,7 +1546,7 @@ export function CoursePlayer({
     seek((v.currentTime || time) + direction * (1 / 30));
   };
   const playVideo = useCallback(() => {
-    videoRef.current?.play().catch(() => {});
+    videoRef.current?.play().catch(() => { });
   }, []);
   const pauseVideo = useCallback(() => {
     videoRef.current?.pause();
@@ -1652,60 +1662,23 @@ export function CoursePlayer({
     };
   }, [curriculumLoading, isEmbeddedPlayer, isExternalResourceOnly, currentLesson?.lessonId]);
 
-  const activeDubTrackMeta = useMemo(
-    () =>
-      selectedDubLang === "original"
-        ? null
-        : (dubTracksMeta.find((t) => t.language.toLowerCase() === selectedDubLang.toLowerCase()) ??
-          null),
-    [dubTracksMeta, selectedDubLang],
+  const hasVerifiedDubTrack = Boolean(
+    currentLesson?.lessonId &&
+    !isEmbeddedPlayer &&
+    selectedDubLang !== "original" &&
+    dubState.lessonId === currentLesson.lessonId &&
+    dubState.languages.includes(selectedDubLang.toLowerCase()),
   );
-  const activeDubTrackMetaRef = useRef<DubTrackMeta | null>(null);
-  activeDubTrackMetaRef.current = activeDubTrackMeta;
-
-  const applyVideoDubVolumeAndDucking = useCallback((v: HTMLVideoElement, isDubActive: boolean) => {
-    if (!isDubActive) {
-      v.muted = mutedRef.current;
-      v.volume = volumeRef.current;
-      return;
-    }
-    if (mutedRef.current) {
-      v.muted = true;
-      return;
-    }
-    const meta = activeDubTrackMetaRef.current;
-    const intervals = meta?.speechIntervals;
-    // If Demucs music separation was baked into the MP3, or no speech intervals exist, mute original video completely
-    if (meta?.bgMode === "demucs" || !Array.isArray(intervals) || intervals.length === 0) {
-      v.muted = true;
-      return;
-    }
-    // Smart Live Auto-Ducking: mute original video while dubbed voice speaks so voices never overlap;
-    // un-duck softly during non-speech tutorial pauses so demos, clicks, and music breaks remain audible
-    const t = v.currentTime || 0;
-    let isSpeaking = false;
-    for (let i = 0; i < intervals.length; i++) {
-      const pair = intervals[i];
-      if (!pair) continue;
-      if (t >= pair[0] - 0.12 && t <= pair[1] + 0.22) {
-        isSpeaking = true;
-        break;
-      }
-      if (pair[0] - 0.12 > t) break;
-    }
-    if (isSpeaking) {
-      v.muted = true;
-    } else {
-      v.muted = false;
-      v.volume = Math.max(0, Math.min(1, volumeRef.current * 0.45));
-    }
-  }, []);
 
   useEffect(() => {
-    const isDubActive = !isEmbeddedPlayer && selectedDubLang !== "original";
     const v = videoRef.current;
     if (v) {
-      applyVideoDubVolumeAndDucking(v, isDubActive);
+      if (hasVerifiedDubTrack) {
+        v.muted = true;
+      } else {
+        v.muted = mutedRef.current;
+        v.volume = volumeRef.current;
+      }
     }
     const a = dubAudioRef.current;
     if (a) {
@@ -1715,13 +1688,10 @@ export function CoursePlayer({
   }, [
     volume,
     muted,
-    selectedDubLang,
-    activeDubTrackMeta,
-    isEmbeddedPlayer,
+    hasVerifiedDubTrack,
     isExternalResourceOnly,
     curriculumLoading,
     currentLesson?.lessonId,
-    applyVideoDubVolumeAndDucking,
   ]);
   useEffect(() => {
     syncMediaPlaybackRate(effectiveSpeed);
@@ -1731,10 +1701,13 @@ export function CoursePlayer({
     const lessonId = currentLesson?.lessonId;
     if (!lessonId || isEmbeddedPlayer) {
       setSelectedDubLang("original");
-      setDubLanguages([]);
-      setDubTracksMeta([]);
+      setDubState({ lessonId: null, languages: [], tracks: [] });
       return;
     }
+
+    setDubState((prev) =>
+      prev.lessonId === lessonId ? prev : { lessonId: null, languages: [], tracks: [] },
+    );
 
     let cancelled = false;
     fetch(apiUrl(`/api/dub/video/${encodeURIComponent(lessonId)}/languages`))
@@ -1744,8 +1717,11 @@ export function CoursePlayer({
         const list = Array.isArray(data.languages)
           ? data.languages.map((l) => String(l).trim().toLowerCase()).filter(Boolean)
           : [];
-        setDubLanguages(list);
-        setDubTracksMeta(Array.isArray(data.tracks) ? data.tracks : []);
+        setDubState({
+          lessonId,
+          languages: list,
+          tracks: Array.isArray(data.tracks) ? data.tracks : [],
+        });
         if (lastDubLangRef.current !== "original" && list.includes(lastDubLangRef.current)) {
           setSelectedDubLang(lastDubLangRef.current);
         } else {
@@ -1754,8 +1730,8 @@ export function CoursePlayer({
       })
       .catch(() => {
         if (!cancelled) {
-          setDubLanguages([]);
-          setDubTracksMeta([]);
+          setDubState({ lessonId, languages: [], tracks: [] });
+          setSelectedDubLang("original");
         }
       });
 
@@ -1769,7 +1745,7 @@ export function CoursePlayer({
     const v = videoRef.current;
     const a = dubAudioRef.current;
 
-    if (!lessonId || isEmbeddedPlayer || selectedDubLang === "original" || !v || !a) {
+    if (!lessonId || !hasVerifiedDubTrack || !v || !a) {
       if (a) {
         a.pause();
         if (a.getAttribute("src")) {
@@ -1787,7 +1763,7 @@ export function CoursePlayer({
     const srcUrl = apiUrl(
       `/api/dub/audio/${encodeURIComponent(lessonId)}?lang=${encodeURIComponent(selectedDubLang)}`,
     );
-    applyVideoDubVolumeAndDucking(v, true);
+    v.muted = true;
     a.volume = volumeRef.current;
     a.muted = mutedRef.current;
     a.playbackRate = v.playbackRate || effectiveSpeedRef.current;
@@ -1807,11 +1783,11 @@ export function CoursePlayer({
     };
 
     const handlePlay = () => {
-      applyVideoDubVolumeAndDucking(v, true);
+      v.muted = true;
       a.playbackRate = v.playbackRate || effectiveSpeedRef.current;
       syncTimeFromVideo();
       if (a.readyState >= 1 && (v.currentTime || 0) < (a.duration || Infinity) - 0.15) {
-        void a.play().catch(() => {});
+        void a.play().catch(() => { });
       }
     };
 
@@ -1821,7 +1797,6 @@ export function CoursePlayer({
     };
 
     const handleSeek = () => {
-      applyVideoDubVolumeAndDucking(v, true);
       syncTimeFromVideo();
     };
 
@@ -1830,12 +1805,11 @@ export function CoursePlayer({
     };
 
     const handleTimeUpdate = () => {
-      applyVideoDubVolumeAndDucking(v, true);
       if (v.paused || v.ended || a.readyState < 2) return;
       const limit = Number.isFinite(a.duration) && a.duration > 0 ? a.duration : Infinity;
       if (v.currentTime >= limit - 0.15) return;
       if (a.paused) {
-        void a.play().catch(() => {});
+        void a.play().catch(() => { });
       }
       if (Math.abs(a.currentTime - v.currentTime) > 0.45) {
         try {
@@ -1852,12 +1826,12 @@ export function CoursePlayer({
       a.playbackRate = v.playbackRate || effectiveSpeedRef.current;
       syncTimeFromVideo();
       if (!v.paused && !v.ended && v.currentTime < (a.duration || Infinity) - 0.15) {
-        void a.play().catch(() => {});
+        void a.play().catch(() => { });
       }
     };
 
     const handleVideoLoadedMetadata = () => {
-      applyVideoDubVolumeAndDucking(v, true);
+      v.muted = true;
       syncTimeFromVideo();
     };
 
@@ -1896,7 +1870,7 @@ export function CoursePlayer({
       a.removeEventListener("loadedmetadata", handleAudioReady);
       a.removeEventListener("error", handleAudioError);
     };
-  }, [currentLesson?.lessonId, isEmbeddedPlayer, selectedDubLang, applyVideoDubVolumeAndDucking]);
+  }, [currentLesson?.lessonId, hasVerifiedDubTrack, selectedDubLang]);
 
   const clearLessonTransitionTimers = useCallback(() => {
     if (transitionOutTimerRef.current !== null) {
@@ -1932,7 +1906,7 @@ export function CoursePlayer({
       pendingAutoStartLessonIdRef.current = null;
       syncMediaPlaybackRate(effectiveSpeedRef.current);
       if (media.paused && !media.ended) {
-        void media.play().catch(() => {});
+        void media.play().catch(() => { });
       }
     },
     [syncMediaPlaybackRate],
@@ -1984,7 +1958,7 @@ export function CoursePlayer({
         if (autoStart) {
           const v = videoRef.current;
           if (v && v.paused) {
-            void v.play().catch(() => {});
+            void v.play().catch(() => { });
           }
         }
         return;
@@ -2350,8 +2324,8 @@ export function CoursePlayer({
     return () => observer.disconnect();
   }, [hasNativeVideoControls]);
 
-  const shortcutHandlerRef = useRef<(e: KeyboardEvent) => void>(() => {});
-  const shortcutKeyUpHandlerRef = useRef<(e: KeyboardEvent) => void>(() => {});
+  const shortcutHandlerRef = useRef<(e: KeyboardEvent) => void>(() => { });
+  const shortcutKeyUpHandlerRef = useRef<(e: KeyboardEvent) => void>(() => { });
   shortcutHandlerRef.current = (e: KeyboardEvent) => {
     if (!shortcutsEnabled || e.defaultPrevented) return;
     if (e.ctrlKey || e.metaKey || e.altKey) return;
@@ -2429,7 +2403,7 @@ export function CoursePlayer({
         }
         updateBoostState("space", true);
         if (v.paused && !v.ended) {
-          void v.play().catch(() => {});
+          void v.play().catch(() => { });
         }
       }, SPACE_HOLD_DELAY_MS);
       return;
@@ -2694,8 +2668,11 @@ export function CoursePlayer({
           setSelectedDubLang("original");
           updateCourseUiPrefs(String(course.id), { dubLang: "original" });
         }
-        setDubLanguages((prev) => prev.filter((l) => l !== lang));
-        setDubTracksMeta((prev) => prev.filter((t) => t.language !== lang));
+        setDubState((prev) => ({
+          ...prev,
+          languages: prev.languages.filter((l) => l !== lang),
+          tracks: prev.tracks.filter((t) => t.language !== lang),
+        }));
         toast.success("Dub track removed");
       } catch (err) {
         toast.error(err instanceof Error ? err.message : "Failed to remove dub track");
@@ -5346,7 +5323,7 @@ function NotesTab({
                 className={cn(
                   "group overflow-hidden rounded-lg bg-secondary/55 transition-colors hover:bg-secondary/75",
                   isEditing &&
-                    "rounded-xl bg-background ring-1 ring-primary/35 shadow-card hover:bg-background",
+                  "rounded-xl bg-background ring-1 ring-primary/35 shadow-card hover:bg-background",
                 )}
               >
                 {isEditing ? (
@@ -5531,7 +5508,7 @@ function NoteEditorFooter({
                       0,
                       ((smartPauseState.countdownSecs ?? smartPauseDelay) /
                         (smartPauseState.smartPauseDelay || smartPauseDelay)) *
-                        100,
+                      100,
                     ),
                   )}%`,
                 }}

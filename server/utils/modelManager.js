@@ -139,7 +139,11 @@ export function relocateAndCleanModelsDir() {
         const whisperDir = path.join(root, 'whisper')
         if (fs.existsSync(hfHubDir)) {
             for (const entry of fs.readdirSync(hfHubDir, { withFileTypes: true })) {
-                if (entry.isDirectory() && entry.name.startsWith('models--Systran--faster-whisper-')) {
+                if (
+                    entry.isDirectory() &&
+                    (entry.name.startsWith('models--Systran--faster-whisper-') ||
+                        entry.name.startsWith('models--mobiuslabsgmbh--faster-whisper-'))
+                ) {
                     const srcModelDir = path.join(hfHubDir, entry.name)
                     const destModelDir = path.join(whisperDir, entry.name)
                     moveDirectoryContents(srcModelDir, destModelDir)
@@ -233,6 +237,7 @@ export function getPythonEnv() {
     return {
         ...process.env,
         COQUI_TOS_AGREED: '1',
+        HF_HUB_DISABLE_SYMLINKS_WARNING: '1',
         PYTHONUNBUFFERED: '1',
         PYTHONIOENCODING: 'utf-8',
         TUTIN_MODELS_DIR: modelsRoot,

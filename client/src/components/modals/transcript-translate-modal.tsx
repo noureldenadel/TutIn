@@ -627,21 +627,21 @@ export function TranscriptTranslateModal({
               </div>
             )}
 
-            {/* Background Audio Mode (2 options: Auto-duck vs Separate music) */}
+            {/* Background Audio Mode (Off vs Music & SFX via Demucs) */}
             <div className="space-y-1.5">
               <label className="text-xs font-medium text-muted-foreground">Background audio</label>
               <div className="grid grid-cols-2 gap-1 rounded-lg bg-secondary/75 p-1">
                 <button
                   type="button"
-                  onClick={() => updateDubPreference({ dubBgMode: "ducking" })}
+                  onClick={() => updateDubPreference({ dubBgMode: "none" })}
                   className={cn(
                     "rounded-sm px-2.5 py-1.5 text-xs font-medium transition-colors",
-                    dubBgMode === "ducking"
+                    dubBgMode === "none"
                       ? "bg-card text-foreground shadow-card dark:bg-accent"
                       : "text-muted-foreground hover:text-foreground",
                   )}
                 >
-                  Auto-duck
+                  Off
                 </button>
                 <button
                   type="button"
@@ -653,7 +653,7 @@ export function TranscriptTranslateModal({
                       : "text-muted-foreground hover:text-foreground",
                   )}
                 >
-                  Separate music
+                  Music &amp; SFX
                 </button>
               </div>
             </div>

@@ -191,11 +191,8 @@ function reconcileVideoDubbedTracks(meta) {
             filePath: audioPath,
             status: 'ready',
             engine: sidecarMeta?.engine || existingEntry?.engine || 'neural',
-            bgMode: sidecarMeta?.bgMode || existingEntry?.bgMode || 'ducking',
+            bgMode: (sidecarMeta?.bgMode || existingEntry?.bgMode) === 'demucs' ? 'demucs' : 'none',
             voiceGender: sidecarMeta?.voiceGender || existingEntry?.voiceGender || 'male',
-            speechIntervals: Array.isArray(sidecarMeta?.speechIntervals)
-                ? sidecarMeta.speechIntervals
-                : (Array.isArray(existingEntry?.speechIntervals) ? existingEntry.speechIntervals : []),
             generatedAt: sidecarMeta?.generatedAt || existingEntry?.generatedAt || null
         })
     }
@@ -253,7 +250,7 @@ router.post('/video/:videoId/generate', async (req, res) => {
         sourceTrackId,
         engine: rawEngine = 'neural',
         voiceGender: rawGender = 'male',
-        bgMode: rawBgMode = 'ducking',
+        bgMode: rawBgMode = 'none',
         device: rawDevice = null,
         unloadIdleModel = true,
         openRouterApiKey: bodyApiKey = null,
@@ -267,7 +264,7 @@ router.post('/video/:videoId/generate', async (req, res) => {
 
     const engine = String(rawEngine || 'neural').toLowerCase().trim() === 'clone' ? 'clone' : 'neural'
     const voiceGender = String(rawGender || 'male').toLowerCase().trim() === 'female' ? 'female' : 'male'
-    const bgMode = String(rawBgMode || 'ducking').toLowerCase().trim() === 'demucs' ? 'demucs' : 'ducking'
+    const bgMode = String(rawBgMode || 'none').toLowerCase().trim() === 'demucs' ? 'demucs' : 'none'
 
     if (engine === 'clone' && !isDubbingLanguageSupported(targetLang)) {
         return res.status(400).json({
@@ -548,9 +545,8 @@ router.post('/video/:videoId/generate', async (req, res) => {
                     filePath: finalPath,
                     status: 'ready',
                     engine: live.engine || engine,
-                    bgMode: live.bg_mode || bgMode,
+                    bgMode: live.bg_mode === 'demucs' ? 'demucs' : 'none',
                     voiceGender: live.voice_gender || voiceGender,
-                    speechIntervals: Array.isArray(live.speech_intervals) ? live.speech_intervals : [],
                     generatedAt: completedAt
                 }
 

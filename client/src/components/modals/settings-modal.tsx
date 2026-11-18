@@ -245,7 +245,7 @@ export function SettingsModal({
       "/api/dub/gpu-info",
       signal ? { signal } : undefined,
     );
-    if (signal?.aborted) return;
+    if (signal?.aborted || res.aborted) return;
     if (res.ok && res.data) {
       setDubHardwareInfo(res.data);
     }
@@ -257,7 +257,7 @@ export function SettingsModal({
         "/api/notes/stats",
         signal ? { signal } : undefined,
       );
-      if (signal?.aborted) return;
+      if (signal?.aborted || res.aborted) return;
       setDataStats({
         coursesCount: courses.length,
         notesCount: res.ok && typeof res.data?.totalNotes === "number" ? res.data.totalNotes : null,
@@ -864,15 +864,15 @@ export function SettingsModal({
                     <div className="space-y-0.5">
                       <Label className="text-sm font-medium">Background audio</Label>
                       <p className="text-xs text-muted-foreground">
-                        Auto-duck original track during speech or separate music stems
+                        Mute original track or preserve music &amp; SFX
                       </p>
                     </div>
                     <SegmentedControl<DubBackgroundMode>
                       value={settings.dubBgMode}
                       onChange={(v) => updateSetting("dubBgMode", v)}
                       options={[
-                        { value: "ducking", label: "Auto-duck" },
-                        { value: "demucs", label: "Separate music" },
+                        { value: "none", label: "Off" },
+                        { value: "demucs", label: "Music & SFX" },
                       ]}
                     />
                   </div>

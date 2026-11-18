@@ -13,7 +13,9 @@ import {
     buildTrackId,
     buildTrackOriginLabel,
     getCacheFilePath,
-    readCaptionFile
+    readCaptionFile,
+    migrateLegacyCourseAssets,
+    remapVaultSubtitlePath
 } from '../utils/courseAssets.js'
 import {
     translateChunks,
@@ -80,8 +82,8 @@ function getVideoMeta(videoId) {
 }
 
 /**
- * Reconciles `subtitle_sources` in SQLite with managed caption files in
- * `<courseFolder>/.tutin/captions/` (local courses) or `%APPDATA%/TutIn/transcripts/` (cloud courses).
+ * Reconciles `subtitle_sources` in SQLite with managed subtitle files in
+ * `<courseFolder>/.tutin/subtitles/` (local courses) or `%APPDATA%/TutIn/transcripts/` (cloud courses).
  */
 function reconcileVideoSubtitleSources(videoMeta) {
     const { id, courseFolder, courseLanguage, relModulePath, videoBaseName } = videoMeta
@@ -89,38 +91,49 @@ function reconcileVideoSubtitleSources(videoMeta) {
     let changed = false
 
     const isLocalCourse = Boolean(courseFolder && fs.existsSync(courseFolder))
-    const vaultCaptionsDir = isLocalCourse ? path.join(courseFolder, '.tutin', 'captions', relModulePath) : null
+    if (isLocalCourse) {
+        migrateLegacyCourseAssets(courseFolder)
+    }
+    const vaultSubtitlesDir = isLocalCourse ? path.join(courseFolder, '.tutin', 'subtitles', relModulePath) : null
 
-    // 1. Validate existing DB entries and remove missing files or un-migrated outside paths
+    // 1. Validate existing DB entries, remap any legacy .tutin/captions paths, and remove missing files
     const validated = []
     for (const src of rawSources) {
         if (!src || typeof src !== 'object') {
             changed = true
             continue
         }
-        if (src.filePath && !fs.existsSync(src.filePath)) {
-            changed = true
-            continue
+        let nextSrc = src
+        if (src.filePath) {
+            const remapped = isLocalCourse ? remapVaultSubtitlePath(src.filePath) : src.filePath
+            if (remapped !== src.filePath) {
+                nextSrc = { ...src, filePath: remapped }
+                changed = true
+            }
+            if (!fs.existsSync(nextSrc.filePath)) {
+                changed = true
+                continue
+            }
         }
-        if (src.lang === 'source' || !src.lang) {
+        if (nextSrc.lang === 'source' || !nextSrc.lang) {
             changed = true
-            validated.push({ ...src, lang: courseLanguage || 'en' })
+            validated.push({ ...nextSrc, lang: courseLanguage || 'en' })
         } else {
-            validated.push(src)
+            validated.push(nextSrc)
         }
     }
 
     rawSources = validated
 
-    // 2. Auto-discover .vtt files in .tutin/captions/ for local courses
-    if (isLocalCourse && vaultCaptionsDir && fs.existsSync(vaultCaptionsDir) && videoBaseName) {
+    // 2. Auto-discover .vtt files in .tutin/subtitles/ for local courses
+    if (isLocalCourse && vaultSubtitlesDir && fs.existsSync(vaultSubtitlesDir) && videoBaseName) {
         try {
-            const files = fs.readdirSync(vaultCaptionsDir)
+            const files = fs.readdirSync(vaultSubtitlesDir)
             for (const f of files) {
                 if (!f.startsWith(videoBaseName) || !f.endsWith('.vtt')) continue
                 const suffix = f.slice(videoBaseName.length)
                 if (!/^(?:\.|-(?:generated|u\d+)\.)/i.test(suffix)) continue
-                const fullPath = path.join(vaultCaptionsDir, f)
+                const fullPath = path.join(vaultSubtitlesDir, f)
                 if (rawSources.some(s => s.filePath && path.resolve(s.filePath) === path.resolve(fullPath))) {
                     continue
                 }

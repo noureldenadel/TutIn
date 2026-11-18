@@ -6,7 +6,7 @@ export type ComputeDevice = "auto" | "gpu" | "cpu";
 export type WhisperModelPreset = "whisper-base" | "whisper-small" | "faster-whisper-large-v3-turbo";
 export type DubVoiceEngine = "neural" | "clone";
 export type DubVoiceGender = "male" | "female";
-export type DubBackgroundMode = "ducking" | "demucs";
+export type DubBackgroundMode = "none" | "demucs";
 export type CaptionFontSize = "small" | "medium" | "large";
 export type NotesSortOrder = "asc" | "desc";
 export type LibrarySortPreference = "Recent" | "Progress" | "A–Z";
@@ -190,7 +190,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   whisperModel: "whisper-base",
   dubVoiceEngine: "neural",
   dubVoiceGender: "male",
-  dubBgMode: "ducking",
+  dubBgMode: "none",
   dubComputingDevice: "auto",
   dubUnloadIdleModel: true,
   captionFontSize: "medium",
@@ -370,7 +370,7 @@ function sanitizeSettings(raw: Partial<AppSettings> | null | undefined): AppSett
         ? raw.dubVoiceGender
         : DEFAULT_APP_SETTINGS.dubVoiceGender,
     dubBgMode:
-      raw.dubBgMode === "demucs" || raw.dubBgMode === "ducking"
+      raw.dubBgMode === "demucs" || raw.dubBgMode === "none"
         ? raw.dubBgMode
         : DEFAULT_APP_SETTINGS.dubBgMode,
     dubComputingDevice:
@@ -753,9 +753,11 @@ export async function hydrateAppSettingsFromServer(force = false): Promise<AppSe
         ...(serverData["dubVoiceGender"] === "male" || serverData["dubVoiceGender"] === "female"
           ? { dubVoiceGender: serverData["dubVoiceGender"] as DubVoiceGender }
           : {}),
-        ...(serverData["dubBgMode"] === "ducking" || serverData["dubBgMode"] === "demucs"
+        ...(serverData["dubBgMode"] === "none" || serverData["dubBgMode"] === "demucs"
           ? { dubBgMode: serverData["dubBgMode"] as DubBackgroundMode }
-          : {}),
+          : serverData["dubBgMode"] === "ducking"
+            ? { dubBgMode: "none" as DubBackgroundMode }
+            : {}),
         ...(serverData["dubComputingDevice"] === "auto" ||
         serverData["dubComputingDevice"] === "gpu" ||
         serverData["dubComputingDevice"] === "cpu"
