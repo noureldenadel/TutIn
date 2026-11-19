@@ -12,6 +12,8 @@ export type NotesSortOrder = "asc" | "desc";
 export type LibrarySortPreference = "Recent" | "Progress" | "A–Z";
 export type AnalyticsRangePreference = "1y" | "3m";
 export type CourseSidebarTab = "playlist" | "notes" | "transcript";
+export type CanvasBoardLayoutMode = "module-rows" | "wrapped-rows" | "masonry";
+export type CanvasArtboardCardLayout = "columns" | "grid" | "single";
 
 export interface CaptionPosition {
   x: number;
@@ -103,7 +105,6 @@ export interface AppSettings {
   notesSmartPauseEnabled: boolean;
   notesSmartPauseDelay: number;
   notesSmartPauseRewind: boolean;
-  notesAutocompleteEnabled: boolean;
   playerShortcutsEnabled: boolean;
   librarySort: LibrarySortPreference;
   analyticsRange: AnalyticsRangePreference;
@@ -120,6 +121,9 @@ export interface AppSettings {
   captionFontSize: CaptionFontSize;
   captionBackground: boolean;
   captionPosition: CaptionPosition | null;
+  canvasBoardLayout: CanvasBoardLayoutMode;
+  canvasCardLayout: CanvasArtboardCardLayout;
+  canvasColorByModule: boolean;
 }
 
 export interface CourseUiPrefs {
@@ -179,7 +183,6 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   notesSmartPauseEnabled: true,
   notesSmartPauseDelay: 2.5,
   notesSmartPauseRewind: true,
-  notesAutocompleteEnabled: true,
   playerShortcutsEnabled: true,
   librarySort: "Recent",
   analyticsRange: "1y",
@@ -196,6 +199,9 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   captionFontSize: "medium",
   captionBackground: true,
   captionPosition: null,
+  canvasBoardLayout: "module-rows",
+  canvasCardLayout: "columns",
+  canvasColorByModule: true,
 };
 
 function sanitizeCaptionPosition(raw: unknown): CaptionPosition | null {
@@ -330,10 +336,6 @@ function sanitizeSettings(raw: Partial<AppSettings> | null | undefined): AppSett
       typeof raw.notesSmartPauseRewind === "boolean"
         ? raw.notesSmartPauseRewind
         : DEFAULT_APP_SETTINGS.notesSmartPauseRewind,
-    notesAutocompleteEnabled:
-      typeof raw.notesAutocompleteEnabled === "boolean"
-        ? raw.notesAutocompleteEnabled
-        : DEFAULT_APP_SETTINGS.notesAutocompleteEnabled,
     playerShortcutsEnabled:
       typeof raw.playerShortcutsEnabled === "boolean"
         ? raw.playerShortcutsEnabled
@@ -394,6 +396,22 @@ function sanitizeSettings(raw: Partial<AppSettings> | null | undefined): AppSett
         ? raw.captionBackground
         : DEFAULT_APP_SETTINGS.captionBackground,
     captionPosition: sanitizeCaptionPosition(raw.captionPosition),
+    canvasBoardLayout:
+      raw.canvasBoardLayout === "module-rows" ||
+      raw.canvasBoardLayout === "wrapped-rows" ||
+      raw.canvasBoardLayout === "masonry"
+        ? raw.canvasBoardLayout
+        : DEFAULT_APP_SETTINGS.canvasBoardLayout,
+    canvasCardLayout:
+      raw.canvasCardLayout === "columns" ||
+      raw.canvasCardLayout === "grid" ||
+      raw.canvasCardLayout === "single"
+        ? raw.canvasCardLayout
+        : DEFAULT_APP_SETTINGS.canvasCardLayout,
+    canvasColorByModule:
+      typeof raw.canvasColorByModule === "boolean"
+        ? raw.canvasColorByModule
+        : DEFAULT_APP_SETTINGS.canvasColorByModule,
   };
 }
 
@@ -727,9 +745,6 @@ export async function hydrateAppSettingsFromServer(force = false): Promise<AppSe
           : {}),
         ...(typeof serverData["notesSmartPauseRewind"] === "boolean"
           ? { notesSmartPauseRewind: serverData["notesSmartPauseRewind"] }
-          : {}),
-        ...(typeof serverData["notesAutocompleteEnabled"] === "boolean"
-          ? { notesAutocompleteEnabled: serverData["notesAutocompleteEnabled"] }
           : {}),
         ...(typeof serverData["playerShortcutsEnabled"] === "boolean"
           ? { playerShortcutsEnabled: serverData["playerShortcutsEnabled"] }

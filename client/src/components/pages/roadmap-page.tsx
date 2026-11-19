@@ -5,7 +5,6 @@ import {
   Check,
   ChevronDown,
   Compass,
-  Loader2,
   Maximize2,
   PanelLeftClose,
   PanelLeftOpen,
@@ -22,8 +21,15 @@ import { toast } from "sonner";
 
 import { apiRequest } from "@/lib/api";
 import { generateId, useCoursesList, type Course } from "@/lib/courses";
+import { CanvasDotGrid } from "@/components/canvas/canvas-dot-grid";
+import {
+  computeCanvasEdgeOpacity,
+  computeCanvasEdgeScale,
+  computeEdgeHitStrokeWidth,
+} from "@/components/canvas/canvas-tokens";
 import { CourseThumbnail } from "@/components/layout/course-thumbnail";
 import { Button } from "@/components/ui/button";
+import { RoadmapSkeleton } from "@/components/ui/skeleton";
 import {
   Dialog,
   DialogContent,
@@ -699,12 +705,7 @@ export function RoadmapPage() {
   );
 
   if (isLoading) {
-    return (
-      <div className="flex min-h-[60vh] items-center justify-center p-8 text-sm text-muted-foreground">
-        <Loader2 className="mr-2 size-4 animate-spin" />
-        Loading roadmaps…
-      </div>
-    );
+    return <RoadmapSkeleton />;
   }
 
   if (!currentRoadmap) {
@@ -898,12 +899,13 @@ export function RoadmapPage() {
           ref={containerRef}
           onMouseDown={handleCanvasMouseDown}
           className="relative flex-1 cursor-grab select-none overflow-hidden active:cursor-grabbing"
-          style={{
-            backgroundImage: "radial-gradient(circle, var(--border) 1px, transparent 1px)",
-            backgroundSize: `${22 * currentRoadmap.zoom}px ${22 * currentRoadmap.zoom}px`,
-            backgroundPosition: `${currentRoadmap.pan.x}px ${currentRoadmap.pan.y}px`,
-          }}
         >
+          <CanvasDotGrid
+            x={currentRoadmap.pan.x}
+            y={currentRoadmap.pan.y}
+            zoom={currentRoadmap.zoom}
+            baseStep={22}
+          />
           <div className="absolute right-4 top-4 z-30 flex flex-col items-center gap-1.5 rounded-lg bg-card/90 p-1 shadow-workspace backdrop-blur-md">
             <Button
               variant="ghost"
@@ -980,28 +982,43 @@ export function RoadmapPage() {
               const { cp1, cp2 } = getBezierControlPoints(points.from, points.to);
               const midX = (points.from.x + points.to.x) / 2;
               const midY = (points.from.y + points.to.y) / 2;
+              const edgeScale = computeCanvasEdgeScale(currentRoadmap.zoom);
+              const hitStrokeWidth = computeEdgeHitStrokeWidth(currentRoadmap.zoom, 24);
+              const edgeOpacity = Math.max(
+                0.42,
+                computeCanvasEdgeOpacity(currentRoadmap.zoom, false, false) - 0.18,
+              );
 
               return (
                 <g key={conn.id} className="group pointer-events-auto cursor-pointer">
                   <path
                     d={`M ${points.from.x} ${points.from.y} C ${cp1.x} ${cp1.y}, ${cp2.x} ${cp2.y}, ${points.to.x} ${points.to.y}`}
                     fill="none"
+                    stroke="var(--foreground)"
+                    strokeWidth={18 * edgeScale}
+                    strokeLinecap="round"
+                    className="pointer-events-none opacity-0 transition-opacity duration-150 ease-out group-hover:opacity-10"
+                  />
+                  <path
+                    d={`M ${points.from.x} ${points.from.y} C ${cp1.x} ${cp1.y}, ${cp2.x} ${cp2.y}, ${points.to.x} ${points.to.y}`}
+                    fill="none"
                     stroke="transparent"
-                    strokeWidth="24"
+                    strokeWidth={hitStrokeWidth}
+                    strokeLinecap="round"
                     onClick={() => handleRemoveConnection(conn.id)}
                   />
                   <path
                     d={`M ${points.from.x} ${points.from.y} C ${cp1.x} ${cp1.y}, ${cp2.x} ${cp2.y}, ${points.to.x} ${points.to.y}`}
                     fill="none"
                     stroke="var(--foreground)"
-                    strokeOpacity="0.4"
-                    strokeWidth="2"
+                    strokeOpacity={edgeOpacity}
+                    strokeWidth={2 * edgeScale}
                     strokeLinecap="round"
                     markerEnd="url(#roadmap-arrow)"
-                    className="transition-colors group-hover:stroke-destructive group-hover:stroke-opacity-90"
+                    className="transition-[stroke,stroke-opacity,stroke-width] duration-150 ease-out group-hover:stroke-destructive group-hover:stroke-opacity-90"
                   />
                   <g
-                    transform={`translate(${midX}, ${midY})`}
+                    transform={`translate(${midX}, ${midY}) scale(${Math.min(3, edgeScale)})`}
                     className="opacity-0 transition-opacity group-hover:opacity-100"
                     onClick={(e) => {
                       e.stopPropagation();

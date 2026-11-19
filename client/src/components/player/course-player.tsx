@@ -1,4 +1,6 @@
 import {
+  lazy,
+  Suspense,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -48,12 +50,17 @@ import {
   Zap,
 } from "lucide-react";
 import { toast } from "sonner";
-import mpegts from "mpegts.js";
+import type MpegtsNamespace from "mpegts.js";
 
-import { ImageLightboxModal } from "@/components/notes/image-lightbox-modal";
 import { noteHtmlToMarkdown } from "@/components/notes/note-markdown";
 import { RichNoteHtmlContent, RichNoteSurface } from "@/components/notes/rich-note-surface";
 import { Button } from "@/components/ui/button";
+import {
+  NotesListSkeleton,
+  PlaylistRowsSkeleton,
+  Skeleton,
+  TranscriptCuesSkeleton,
+} from "@/components/ui/skeleton";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
@@ -107,6 +114,7 @@ import {
   type SmartCaptionMatch,
 } from "@/components/modals/smart-captions-modal";
 import { VideoCaptionOverlay } from "@/components/player/video-caption-overlay";
+import { useTranscriptCopy } from "@/components/player/use-transcript-copy";
 import {
   arePlayerShortcutsEnabled,
   COURSE_UI_PREFS_CHANGED_EVENT,
@@ -142,6 +150,12 @@ import {
   sendYoutubeListeningHandshake,
   trackExternalCourseOpen,
 } from "@/lib/watch-history";
+
+const LazyImageLightboxModal = lazy(() =>
+  import("@/components/notes/image-lightbox-modal").then((m) => ({
+    default: m.ImageLightboxModal,
+  })),
+);
 
 interface StudySessionState {
   videoId: string;
@@ -395,7 +409,7 @@ export function CoursePlayer({
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const frameRef = useRef<HTMLDivElement>(null);
-  const mpegtsPlayerRef = useRef<ReturnType<typeof mpegts.createPlayer> | null>(null);
+  const mpegtsPlayerRef = useRef<ReturnType<typeof MpegtsNamespace.createPlayer> | null>(null);
   const pendingSeekRef = useRef<number | null>(
     typeof initialTime === "number" && Number.isFinite(initialTime) && initialTime >= 0
       ? initialTime
@@ -669,9 +683,10 @@ export function CoursePlayer({
     return lower.endsWith(".ts") || lower.includes(".ts?");
   }, [currentLesson?.filePath, resolvedVideoSrc]);
 
-  // Attach mpegts.js MSE player for MPEG-TS (.ts) streams
+  // Lazily load and attach mpegts.js MSE player only for MPEG-TS (.ts) streams
   useEffect(() => {
-    if (mpegtsPlayerRef.current) {
+    const destroyPlayer = () => {
+      if (!mpegtsPlayerRef.current) return;
       try {
         mpegtsPlayerRef.current.unload();
         mpegtsPlayerRef.current.detachMediaElement();
@@ -680,51 +695,54 @@ export function CoursePlayer({
         console.error("Failed to cleanup mpegts player:", err);
       }
       mpegtsPlayerRef.current = null;
-    }
+    };
+
+    destroyPlayer();
 
     let disposed = false;
 
-    if (isTsVideo && resolvedVideoSrc && videoRef.current && mpegts.isSupported()) {
-      if (mpegts.LoggingControl) {
-        mpegts.LoggingControl.applyConfig({
-          enableAll: false,
-          enableDebug: false,
-          enableVerbose: false,
-          enableInfo: false,
-          enableWarn: false,
+    if (isTsVideo && resolvedVideoSrc && videoRef.current) {
+      const videoEl = videoRef.current;
+      void import("mpegts.js")
+        .then(({ default: mpegts }) => {
+          if (disposed || !videoEl.isConnected || !mpegts.isSupported()) return;
+          if (mpegts.LoggingControl) {
+            mpegts.LoggingControl.applyConfig({
+              enableAll: false,
+              enableDebug: false,
+              enableVerbose: false,
+              enableInfo: false,
+              enableWarn: false,
+            });
+          }
+          // Blob WebWorkers cannot resolve root-relative URLs without an explicit origin.
+          const mpegtsUrl =
+            typeof window !== "undefined"
+              ? new URL(resolvedVideoSrc, window.location.href).href
+              : resolvedVideoSrc;
+          const player = mpegts.createPlayer(
+            { type: "mpegts", url: mpegtsUrl, isLive: false },
+            { enableWorker: true, lazyLoadMaxDuration: 180, seekType: "range" },
+          );
+          player.on(mpegts.Events.ERROR, (errorType, errorDetail) => {
+            if (disposed) return;
+            console.error("mpegts playback error:", errorType, errorDetail);
+            toast.error("Failed to load video stream.");
+          });
+          player.attachMediaElement(videoEl);
+          player.load();
+          mpegtsPlayerRef.current = player;
+        })
+        .catch((err) => {
+          if (!disposed) {
+            console.error("Failed to load mpegts.js:", err);
+          }
         });
-      }
-      // Blob WebWorkers cannot resolve root-relative URLs without an explicit origin.
-      const mpegtsUrl =
-        typeof window !== "undefined"
-          ? new URL(resolvedVideoSrc, window.location.href).href
-          : resolvedVideoSrc;
-      const player = mpegts.createPlayer(
-        { type: "mpegts", url: mpegtsUrl, isLive: false },
-        { enableWorker: true, lazyLoadMaxDuration: 180, seekType: "range" },
-      );
-      player.on(mpegts.Events.ERROR, (errorType, errorDetail) => {
-        if (disposed) return;
-        console.error("mpegts playback error:", errorType, errorDetail);
-        toast.error("Failed to load video stream.");
-      });
-      player.attachMediaElement(videoRef.current);
-      player.load();
-      mpegtsPlayerRef.current = player;
     }
 
     return () => {
       disposed = true;
-      if (mpegtsPlayerRef.current) {
-        try {
-          mpegtsPlayerRef.current.unload();
-          mpegtsPlayerRef.current.detachMediaElement();
-          mpegtsPlayerRef.current.destroy();
-        } catch {
-          // Ignore teardown noise
-        }
-        mpegtsPlayerRef.current = null;
-      }
+      destroyPlayer();
     };
   }, [isTsVideo, resolvedVideoSrc, currentLesson?.lessonId]);
 
@@ -2820,9 +2838,7 @@ export function CoursePlayer({
             className="group relative z-10 min-h-0 w-full flex-1 select-none overflow-hidden rounded-xl bg-player shadow-workspace outline-none focus:outline-none max-lg:aspect-video"
           >
             {curriculumLoading ? (
-              <div className="flex size-full items-center justify-center text-sm text-white/70">
-                Loading lesson…
-              </div>
+              <Skeleton tone="player" className="size-full rounded-none" />
             ) : !currentLesson ? (
               <div className="flex size-full flex-col items-center justify-center gap-3 p-6 text-center text-white/80">
                 <p className="text-sm">No lessons in this course yet.</p>
@@ -3727,6 +3743,7 @@ export function CoursePlayer({
               courseId={String(course.id)}
               courseModules={courseModules}
               allLessons={allLessons}
+              loading={curriculumLoading}
               active={active}
               done={done}
               setDone={setDone}
@@ -3749,7 +3766,7 @@ export function CoursePlayer({
               lessonId={currentLesson?.lessonId}
               lessonIdx={active}
               lessonTitle={currentLesson?.title ?? course.title}
-              transcriptCues={transcriptCues}
+              loading={curriculumLoading}
               time={time}
               seek={seek}
               onCaptureFrame={captureVideoFrame}
@@ -4201,6 +4218,7 @@ function PlaylistTab({
   courseId,
   courseModules,
   allLessons,
+  loading = false,
   active,
   done,
   setDone,
@@ -4212,6 +4230,7 @@ function PlaylistTab({
   courseId: string;
   courseModules: CourseModuleSpec[];
   allLessons: CourseLessonItem[];
+  loading?: boolean;
   active: number;
   done: boolean[];
   setDone: Dispatch<SetStateAction<boolean[]>>;
@@ -4408,6 +4427,10 @@ function PlaylistTab({
 
   let globalLessonIdx = 0;
 
+  if (loading && courseModules.length === 0) {
+    return <PlaylistRowsSkeleton count={7} />;
+  }
+
   return (
     <div className={cn("flex h-full flex-col", dragState && "select-none")}>
       <div className="px-3 pb-4 pt-1">
@@ -4578,30 +4601,6 @@ type SmartPauseStatus = {
   resumePlaybackNow: (shouldRewind?: boolean) => void;
 };
 
-function getTranscriptSuggestion(
-  textBefore: string,
-  cues: TranscriptCue[],
-): { completion: string; fullPhrase: string } | null {
-  if (cues.length === 0) return null;
-  const match = /(\S+(?:\s+\S+){0,2})$/.exec(textBefore);
-  if (!match) return null;
-  const prefix = match[1]!.toLowerCase();
-  if (prefix.length < 3) return null;
-
-  for (const cue of cues) {
-    const line = cue.text;
-    const lower = line.toLowerCase();
-    const idx = lower.indexOf(prefix);
-    if (idx !== -1 && (idx === 0 || /\s/.test(lower[idx - 1]!))) {
-      const rest = line.slice(idx + prefix.length).replace(/[.,;!?]+$/, "");
-      if (rest.trim().length >= 2) {
-        return { completion: rest, fullPhrase: line };
-      }
-    }
-  }
-  return null;
-}
-
 function RichNoteEditor({
   courseId,
   content,
@@ -4614,8 +4613,6 @@ function RichNoteEditor({
   onPause,
   getPlaybackState,
   onSeek,
-  transcriptCues,
-  autocompleteEnabled,
   smartPauseEnabled,
   smartPauseDelay,
   smartPauseRewind,
@@ -4633,8 +4630,6 @@ function RichNoteEditor({
   onPause: () => void;
   getPlaybackState: () => { isPlaying: boolean; currentTime: number };
   onSeek: (t: number) => void;
-  transcriptCues: TranscriptCue[];
-  autocompleteEnabled: boolean;
   smartPauseEnabled: boolean;
   smartPauseDelay: number;
   smartPauseRewind: boolean;
@@ -4749,11 +4744,6 @@ function RichNoteEditor({
     };
   }, [onSmartPauseChange]);
 
-  const getSuggestionFn = useCallback(
-    (textBefore: string) => getTranscriptSuggestion(textBefore, transcriptCues),
-    [transcriptCues],
-  );
-
   return (
     <RichNoteSurface
       courseId={courseId}
@@ -4763,7 +4753,6 @@ function RichNoteEditor({
       onCancel={onCancel}
       onCaptureScreenshot={onCaptureScreenshot}
       onOpenImage={onOpenImage}
-      getSuggestion={autocompleteEnabled ? getSuggestionFn : undefined}
       onWritingActivity={triggerWritingActivity}
       onSuspendSmartTimers={cleanupSmartTimers}
       wrapperPaddingClassName="px-4 pt-3.5 pb-5"
@@ -4780,7 +4769,7 @@ function NotesTab({
   lessonId,
   lessonIdx,
   lessonTitle,
-  transcriptCues,
+  loading = false,
   time,
   seek,
   onCaptureFrame,
@@ -4793,7 +4782,7 @@ function NotesTab({
   lessonId?: string | undefined;
   lessonIdx: number;
   lessonTitle: string;
-  transcriptCues: TranscriptCue[];
+  loading?: boolean;
   time: number;
   seek: (t: number) => void;
   onCaptureFrame: () => Promise<string>;
@@ -4823,9 +4812,6 @@ function NotesTab({
   const [sortOrder, setSortOrder] = useState<NotesSortOrder>(
     () => readAppSettings().notesSortOrder,
   );
-  const [autocompleteEnabled, setAutocompleteEnabled] = useState(
-    () => readAppSettings().notesAutocompleteEnabled,
-  );
   const [smartPauseEnabled, setSmartPauseEnabled] = useState(
     () => readAppSettings().notesSmartPauseEnabled,
   );
@@ -4843,7 +4829,6 @@ function NotesTab({
     (
       patch: Partial<{
         notesSortOrder: NotesSortOrder;
-        notesAutocompleteEnabled: boolean;
         notesSmartPauseEnabled: boolean;
         notesSmartPauseDelay: number;
         notesSmartPauseRewind: boolean;
@@ -4852,7 +4837,6 @@ function NotesTab({
       writeAppSettings({ ...readAppSettings(), ...patch });
       const next = readAppSettings();
       setSortOrder(next.notesSortOrder);
-      setAutocompleteEnabled(next.notesAutocompleteEnabled);
       setSmartPauseEnabled(next.notesSmartPauseEnabled);
       setSmartPauseDelay(next.notesSmartPauseDelay);
       setSmartPauseRewind(next.notesSmartPauseRewind);
@@ -4864,7 +4848,6 @@ function NotesTab({
     const syncNotesSettings = () => {
       const next = readAppSettings();
       setSortOrder(next.notesSortOrder);
-      setAutocompleteEnabled(next.notesAutocompleteEnabled);
       setSmartPauseEnabled(next.notesSmartPauseEnabled);
       setSmartPauseDelay(next.notesSmartPauseDelay);
       setSmartPauseRewind(next.notesSmartPauseRewind);
@@ -5221,25 +5204,6 @@ function NotesTab({
                   </div>
                 </div>
               </div>
-
-              <div className="my-1 border-t border-border" />
-
-              {/* Autocomplete toggle */}
-              <div className="flex items-center justify-between gap-3 px-2.5 py-2">
-                <label
-                  htmlFor="notes-autocomplete"
-                  className="cursor-pointer select-none text-xs font-medium text-foreground"
-                >
-                  Autocomplete
-                </label>
-                <Switch
-                  id="notes-autocomplete"
-                  checked={autocompleteEnabled}
-                  onCheckedChange={(checked) =>
-                    updateNotesPreferences({ notesAutocompleteEnabled: checked })
-                  }
-                />
-              </div>
             </PopoverContent>
           </Popover>
         </div>
@@ -5277,7 +5241,6 @@ function NotesTab({
             <RichNoteEditor
               key={`add-${editorKey}`}
               courseId={courseId}
-              transcriptCues={transcriptCues}
               content={noteContent}
               onChange={setNoteContent}
               onSubmit={() => void handleSaveNewNote()}
@@ -5294,7 +5257,6 @@ function NotesTab({
               onPause={onPause}
               getPlaybackState={getPlaybackState}
               onSeek={seek}
-              autocompleteEnabled={autocompleteEnabled}
               smartPauseEnabled={smartPauseEnabled}
               smartPauseDelay={smartPauseDelay}
               smartPauseRewind={smartPauseRewind}
@@ -5314,7 +5276,9 @@ function NotesTab({
         )}
 
         {/* Saved Note Cards */}
-        {lessonNotes.length === 0 && !showAddNote ? (
+        {loading && lessonNotes.length === 0 && !showAddNote ? (
+          <NotesListSkeleton count={3} />
+        ) : lessonNotes.length === 0 && !showAddNote ? (
           <div className="flex flex-col items-center justify-center py-10 text-center">
             <p className="text-sm text-muted-foreground">No notes yet.</p>
           </div>
@@ -5349,7 +5313,6 @@ function NotesTab({
                     <RichNoteEditor
                       key={`edit-${note.id}-${editorKey}`}
                       courseId={courseId}
-                      transcriptCues={transcriptCues}
                       content={noteContent}
                       onChange={setNoteContent}
                       onSubmit={handleUpdateNote}
@@ -5366,7 +5329,6 @@ function NotesTab({
                       onPause={onPause}
                       getPlaybackState={getPlaybackState}
                       onSeek={seek}
-                      autocompleteEnabled={autocompleteEnabled}
                       smartPauseEnabled={smartPauseEnabled}
                       smartPauseDelay={smartPauseDelay}
                       smartPauseRewind={smartPauseRewind}
@@ -5463,12 +5425,14 @@ function NotesTab({
 
       {/* Fullscreen Screenshot Lightbox */}
       {previewImage && (
-        <ImageLightboxModal
-          src={previewImage.src}
-          alt="Note screenshot preview"
-          downloadName={`screenshot-${fmt(previewImage.timestamp).replace(":", "-")}.png`}
-          onClose={() => setPreviewImage(null)}
-        />
+        <Suspense fallback={null}>
+          <LazyImageLightboxModal
+            src={previewImage.src}
+            alt="Note screenshot preview"
+            downloadName={`screenshot-${fmt(previewImage.timestamp).replace(":", "-")}.png`}
+            onClose={() => setPreviewImage(null)}
+          />
+        </Suspense>
       )}
     </div>
   );
@@ -5745,6 +5709,15 @@ function TranscriptTab({
   const lastAutoScrolledIdxRef = useRef<number>(-1);
   const restoredForScrollKeyRef = useRef<string>("");
   const activeJob = useVideoTranscriptJob(videoId);
+  const {
+    activeCopyRange,
+    activeCopyEndIdx,
+    copiedIdx,
+    isCopyDragging,
+    isCopyDraggingRef,
+    startCopyDrag,
+    copySingleCue,
+  } = useTranscriptCopy(cues, listRef, isVisible);
 
   const resolvedSelectedId = resolveBestTrackId(availableTracks, selectedLang);
   const currentTrack =
@@ -5798,6 +5771,7 @@ function TranscriptTab({
 
   useEffect(() => {
     if (!isVisible || activeIdx < 0 || cues.length === 0) return;
+    if (isCopyDraggingRef.current) return;
     if (activeIdx === lastAutoScrolledIdxRef.current) return;
     lastAutoScrolledIdxRef.current = activeIdx;
     const list = listRef.current;
@@ -5811,7 +5785,7 @@ function TranscriptTab({
       lastScrollTopRef.current = targetTop;
       writeSessionScroll(scrollKey, targetTop);
     }
-  }, [activeIdx, cues.length, isVisible, scrollKey]);
+  }, [activeIdx, cues.length, isCopyDraggingRef, isVisible, scrollKey]);
 
   const handleFetchYoutubeTranscript = async () => {
     if (!youtubeId || !videoId) return;
@@ -6136,9 +6110,7 @@ function TranscriptTab({
       </div>
 
       {cuesLoading ? (
-        <div className="flex flex-1 items-center justify-center text-xs text-muted-foreground">
-          Loading subtitles…
-        </div>
+        <TranscriptCuesSkeleton count={8} />
       ) : cues.length === 0 ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
           {isJobActive && activeJob ? (
@@ -6157,42 +6129,100 @@ function TranscriptTab({
             writeSessionScroll(scrollKey, top);
           }}
           dir={currentTrack?.rtl ? "rtl" : "ltr"}
-          className="relative min-h-0 flex-1 space-y-1 overflow-y-auto px-3 pb-4 select-text custom-scrollbar-sm"
+          className={cn(
+            "relative min-h-0 flex-1 overflow-y-auto px-3 pb-4 custom-scrollbar-sm",
+            isCopyDragging ? "select-none" : "select-text",
+          )}
         >
-          {cues.map((cue, i) => (
-            <li key={`${cue.start}-${i}`}>
-              <div
-                onClick={() => {
-                  if (window.getSelection()?.toString()) return;
-                  const span = Math.max(0, cue.end - cue.start);
-                  const nudge = span > 0 ? Math.min(0.035, span * 0.2) : 0.025;
-                  seek(cue.start + nudge, { minLockTime: cue.start });
-                }}
-                className={cn(
-                  "flex w-full cursor-pointer gap-3 rounded-lg px-3 py-2.5 text-start transition-colors duration-300 hover:bg-secondary/60",
-                  i === activeIdx && "bg-primary-soft hover:bg-primary-soft",
-                )}
-              >
+          {cues.map((cue, i) => {
+            const isInCopyRange =
+              activeCopyRange !== null && i >= activeCopyRange.start && i <= activeCopyRange.end;
+            const isRangeStart = activeCopyRange !== null && i === activeCopyRange.start;
+            const isRangeEnd = activeCopyRange !== null && i === activeCopyRange.end;
+            const isCopyHead = activeCopyEndIdx === i;
+            const isJustCopied = !isCopyDragging && copiedIdx === i;
+
+            return (
+              <li key={`${cue.start}-${i}`} data-cue-idx={i} className="group relative py-0.5">
                 <span
-                  dir="ltr"
+                  aria-hidden="true"
                   className={cn(
-                    "mt-0.5 h-fit shrink-0 rounded bg-secondary px-2 py-0.5 font-mono text-[11px] font-semibold tabular-nums text-muted-foreground",
-                    i === activeIdx && "bg-primary text-primary-foreground",
+                    "pointer-events-none absolute inset-x-0 transition-colors duration-200",
+                    isInCopyRange
+                      ? cn(
+                          "bg-primary/15 border-primary/30",
+                          isRangeStart && isRangeEnd && "inset-y-0.5 rounded-lg border",
+                          isRangeStart &&
+                            !isRangeEnd &&
+                            "top-0.5 bottom-0 rounded-t-lg border-x border-t",
+                          !isRangeStart &&
+                            isRangeEnd &&
+                            "top-0 bottom-0.5 rounded-b-lg border-x border-b",
+                          !isRangeStart && !isRangeEnd && "inset-y-0 rounded-none border-x",
+                        )
+                      : i === activeIdx
+                        ? "inset-y-0.5 rounded-lg bg-primary-soft"
+                        : cn(
+                            "inset-y-0.5 rounded-lg",
+                            !isCopyDragging && "group-hover:bg-secondary/60",
+                          ),
+                  )}
+                />
+                <div
+                  onClick={() => {
+                    if (window.getSelection()?.toString()) return;
+                    const span = Math.max(0, cue.end - cue.start);
+                    const nudge = span > 0 ? Math.min(0.035, span * 0.2) : 0.025;
+                    seek(cue.start + nudge, { minLockTime: cue.start });
+                  }}
+                  className="relative flex w-full cursor-pointer gap-3 ps-3 pe-7 py-2.5 text-start"
+                >
+                  <span
+                    dir="ltr"
+                    className={cn(
+                      "mt-0.5 h-fit shrink-0 rounded bg-secondary px-2 py-0.5 font-mono text-[11px] font-semibold tabular-nums text-muted-foreground",
+                      i === activeIdx && "bg-primary text-primary-foreground",
+                    )}
+                  >
+                    {fmt(cue.start)}
+                  </span>
+                  <span
+                    className={cn(
+                      "text-sm leading-6 text-muted-foreground",
+                      (i === activeIdx || isInCopyRange) && "text-foreground",
+                    )}
+                  >
+                    {cue.text}
+                  </span>
+                </div>
+
+                <button
+                  type="button"
+                  aria-label="Copy transcript line"
+                  title="Copy or drag to select"
+                  onPointerDown={(e) => startCopyDrag(i, e)}
+                  onKeyDown={(e) => {
+                    if (e.key === " " || e.key === "Enter") {
+                      e.preventDefault();
+                      copySingleCue(i);
+                    }
+                  }}
+                  className={cn(
+                    "absolute bottom-2 end-2 z-10 flex size-5 cursor-pointer touch-none items-center justify-center rounded-sm transition-opacity duration-150 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                    isCopyDragging
+                      ? isCopyHead
+                        ? "text-primary opacity-100"
+                        : "pointer-events-none opacity-0"
+                      : isJustCopied
+                        ? "text-chart-4 opacity-100"
+                        : "text-muted-foreground opacity-0 hover:text-foreground group-hover:opacity-100 [@media(hover:none)]:opacity-100",
                   )}
                 >
-                  {fmt(cue.start)}
-                </span>
-                <span
-                  className={cn(
-                    "text-sm leading-6 text-muted-foreground",
-                    i === activeIdx && "text-foreground",
-                  )}
-                >
-                  {cue.text}
-                </span>
-              </div>
-            </li>
-          ))}
+                  {isJustCopied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
+                </button>
+              </li>
+            );
+          })}
         </ol>
       )}
     </div>

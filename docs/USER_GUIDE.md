@@ -43,15 +43,15 @@
 ### Rich Notes Tab (`Playlist | Notes | Transcript`)
 - **Timestamped Cards:** Click `Add note · {time}` to capture a note anchored to the current playback time; click any note's timestamp chip to seek immediately.
 - **Formatting & Media:** Supports Bold, Italic, Strikethrough, bullet lists, Markdown triggers (`#`, `-`, `>`, `---` with Obsidian-style Live Preview), video frame capture, file upload, clipboard paste, drag-and-drop images, inline cropping, and block reordering (`Alt + ArrowUp`/`ArrowDown` or toolbar arrows). Screenshots save into `<courseFolder>/.tutin/notes/screenshots/`.
-- **Writing Options (`...` popover):** Export markdown notes, open Canvas, configure **While writing** (auto-pause video, `Resume after {delay}s`, rewind on resume), and toggle transcript autocomplete (`Tab` / `ArrowRight`). Settings persist globally across all lessons and courses.
+- **Writing Options (`...` popover):** Export markdown notes, open Canvas, and configure **While writing** (auto-pause video, `Resume after {delay}s`, rewind on resume). Settings persist globally across all lessons and courses.
 
 ### Whiteboard Canvas (`/canvas/$courseId`)
-- **Video Artboards & Chronological Links:** Player notes organize into per-lesson columns (`M{m}L{l} · Title`) linked chronologically by dashed `auto-chrono` arrows. Dragging a note outside detaches it (`Detached` badge + 1-click `Return`) while bridging remaining sibling links.
+- **2D Video Artboards & Chronological Links:** Player notes organize into per-lesson artboards (`M{m}L{l} · Title`) laid out in 2D (auto-wrapping long note-heavy lectures into 2–4 height-balanced columns) and linked chronologically by dashed `auto-chrono` arrows. Dragging a note outside detaches it (`Detached` badge + 1-click `Return`) while bridging remaining sibling links.
 - **Whiteboard Tools:**
-  - `V` Select, `H` / `Space+Drag` Pan, `N` Canvas Note, `T` Text card, `A` Connect solid Bezier edges, `P` Pen / `M` Highlighter / `E` Eraser vector ink (`perfect-freehand`), `I` Image upload, `G` Custom Frame artboard.
-  - `Ctrl+Z` / `Ctrl+Shift+Z` Undo/Redo, `Del` / `Backspace` dismiss or remove selection, `Esc` cancel edit or reset tool.
+  - `V` Select, `H` / `Space+Drag` Pan, `Alt+Scroll` / `Alt+Middle-Drag` Zoom (`10%–300%`), `0` Fit entire board to view, `N` Canvas Note, `T` Text card, `A` Connect solid Bezier edges, `P` Pen / `M` Highlighter / `E` Eraser vector ink (`perfect-freehand`), `I` Image upload, `G` Custom Frame artboard.
+  - `Ctrl+C` / `Ctrl+V` Copy/Paste selected cards & artboards, `Alt+Drag` Duplicate items, right-click `Add to artboard` to group selected cards, `Ctrl+Z` / `Ctrl+Shift+Z` Undo/Redo, `Del` / `Backspace` dismiss or remove selection, `Esc` cancel edit or reset tool.
   - Drag a card's right edge, bottom edge, or bottom-right corner to resize freely, or **double-click** the right edge, bottom edge, or corner to shrink empty space and fit width, height, or both to its content cleanly.
-  - Use the right `Notes` drawer (`All`, `Detached`, `Off canvas`) to locate cards or restore dismissed Video Notes, `Tidy` to align artboards, the Reset button (`Reset arrangement`) to return all course video cards to their lesson artboards in chronological order, and click the zoom `%` readout to reset view.
+  - Open the top-right **Arrange** menu (`LayoutGrid`) to switch **Artboards** (`Modules` | `Rows` | `Masonry`), **Cards** (`Columns` | `Grid` | `Single`), toggle **Color by module**, **Tidy layout** in place, or **Reset to lectures** (returns moved video notes back into their lesson artboards); click `{zoom}%` to reset to `100%` or `<Maximize />` (`0`) to frame the entire board; and use the right `Notes` drawer (`All`, `Detached`, `Off canvas`) to locate cards or restore dismissed Video Notes.
 
 ---
 

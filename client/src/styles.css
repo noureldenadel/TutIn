@@ -788,6 +788,12 @@ html.theme-transitioning *::after {
   box-shadow: 0 0 0 4px color-mix(in oklch, var(--color-primary) 20%, transparent);
 }
 
+.note-content[data-selectable="false"],
+.note-content[data-selectable="false"] * {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
 .note-content img {
   cursor: zoom-in;
 }
@@ -1373,9 +1379,118 @@ html.theme-transitioning *::after {
   animation: tutin-player-side-seek 650ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
 
+/* YouTube-style flat GPU-composited shimmer skeletons */
+:root {
+  --skeleton-base: color-mix(in oklab, var(--secondary) 92%, var(--background));
+  --skeleton-sheen: color-mix(in oklab, var(--card) 74%, transparent);
+  --skeleton-player-base: oklch(0.2 0.006 275);
+  --skeleton-player-sheen: oklch(1 0 0 / 0.06);
+}
+
+.dark {
+  --skeleton-base: color-mix(in oklab, var(--secondary) 86%, var(--background));
+  --skeleton-sheen: oklch(1 0 0 / 0.055);
+}
+
+@keyframes tutin-skeleton-shimmer {
+  0% {
+    transform: translate3d(-100%, 0, 0);
+  }
+  100% {
+    transform: translate3d(100%, 0, 0);
+  }
+}
+
+@keyframes tutin-skeleton-reveal {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.skeleton-shimmer {
+  position: relative;
+  overflow: hidden;
+  background-color: var(--skeleton-base);
+}
+
+.skeleton-shimmer::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translate3d(-100%, 0, 0);
+  background-image: linear-gradient(
+    90deg,
+    transparent 0%,
+    var(--skeleton-sheen) 50%,
+    transparent 100%
+  );
+  animation: tutin-skeleton-shimmer 1.6s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  will-change: transform;
+  pointer-events: none;
+}
+
+.skeleton-shimmer-player {
+  background-color: var(--skeleton-player-base);
+}
+
+.skeleton-shimmer-player::after {
+  background-image: linear-gradient(
+    90deg,
+    transparent 0%,
+    var(--skeleton-player-sheen) 50%,
+    transparent 100%
+  );
+}
+
+/* Anti-flash reveal: prevents 1-frame skeleton flicker on fast (< 90ms) local SQLite reads */
+.skeleton-reveal {
+  animation: tutin-skeleton-reveal 180ms ease-out 90ms both;
+}
+
+@keyframes tutin-img-shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+/* Read-only note screenshots shimmer subtly while lazy-loading/decoding */
+.note-content img[data-img-loading="true"] {
+  min-width: 180px;
+  min-height: 112px;
+  background-color: var(--skeleton-base);
+  background-image: linear-gradient(
+    90deg,
+    transparent 0%,
+    var(--skeleton-sheen) 50%,
+    transparent 100%
+  );
+  background-size: 200% 100%;
+  animation: tutin-img-shimmer 1.6s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .t-resize {
     transition: none !important;
+  }
+
+  .skeleton-shimmer::after {
+    animation: none !important;
+    display: none !important;
+  }
+
+  .skeleton-reveal {
+    animation: none !important;
+  }
+
+  .note-content img[data-img-loading="true"] {
+    animation: none !important;
+    background-image: none !important;
   }
 
   .ai-shimmer-text {

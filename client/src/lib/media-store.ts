@@ -571,7 +571,6 @@ export async function hydrateContainerMedia(container: HTMLElement): Promise<voi
 export function serializeContainerMediaHtml(container: HTMLElement): string {
   const liveInputs = Array.from(container.querySelectorAll('input[type="checkbox"]'));
   const clone = container.cloneNode(true) as HTMLElement;
-  clone.querySelectorAll("[data-ghost]").forEach((el) => el.remove());
   stripLiveSyntaxArtifacts(clone);
   stripChromiumInlineArtifacts(clone, false);
   clone.querySelectorAll("img.is-selected, img.is-range-selected").forEach((img) => {
@@ -637,6 +636,9 @@ export function serializeContainerMediaHtml(container: HTMLElement): string {
   });
 
   clone.querySelectorAll("img").forEach((img) => {
+    img.removeAttribute("loading");
+    img.removeAttribute("decoding");
+    img.removeAttribute("data-img-loading");
     const uri = img.getAttribute("data-media-uri");
     if (uri) {
       img.setAttribute("src", normalizeMediaSrcForStorage(uri));

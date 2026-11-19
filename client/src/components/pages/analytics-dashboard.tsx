@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { BookOpen, CheckCircle2, Clock, Flame, Loader2 } from "lucide-react";
+import { BookOpen, CheckCircle2, Clock, Flame } from "lucide-react";
 
+import { AnalyticsSkeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { apiJson } from "@/lib/api";
 import {
@@ -527,58 +528,57 @@ export function AnalyticsDashboard() {
         <h1 className="text-2xl font-bold tracking-tight text-foreground sm:text-3xl">
           Statistics
         </h1>
-        {(coursesLoading || dataLoading) && (
-          <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
-            <Loader2 className="size-3.5 animate-spin" /> Syncing…
-          </span>
-        )}
       </header>
 
-      <div className="space-y-4 sm:space-y-6">
-        <div className="grid grid-cols-2 gap-3 sm:gap-5 xl:grid-cols-4">
-          <Metric
-            icon={<Clock className="size-5 text-chart-2" />}
-            label="Watch time"
-            value={formatDurationLabel(computed.totalWatchSeconds)}
-          >
-            <span className="rounded bg-chart-4/10 px-2 py-1 font-semibold text-chart-4">
-              +{Number((computed.weekWatchSeconds / 3600).toFixed(1))}h this week
-            </span>
-          </Metric>
-          <Metric
-            warm
-            icon={<Flame className="size-5" />}
-            label="Streak"
-            value={`${computed.currentStreak} ${computed.currentStreak === 1 ? "day" : "days"}`}
-          >
-            Personal best: {computed.bestStreak} {computed.bestStreak === 1 ? "day" : "days"}
-          </Metric>
-          <Metric
-            icon={<CheckCircle2 className="size-5 text-chart-4" />}
-            label="Completed courses"
-            value={`${computed.completedCourses} / ${courses.length}`}
-          >
-            <div className="h-1.5 overflow-hidden rounded-full bg-secondary">
-              <div
-                className="h-full rounded-full bg-chart-4"
-                style={{ width: `${computed.completionPct}%` }}
-              />
-            </div>
-          </Metric>
-          <Metric
-            icon={<BookOpen className="size-5 text-chart-1" />}
-            label="Notes"
-            value={String(totalNotes)}
-          >
-            Across {courses.length} {courses.length === 1 ? "course" : "courses"}
-          </Metric>
+      {coursesLoading || dataLoading ? (
+        <AnalyticsSkeleton />
+      ) : (
+        <div className="space-y-4 sm:space-y-6">
+          <div className="grid grid-cols-2 gap-3 sm:gap-5 xl:grid-cols-4">
+            <Metric
+              icon={<Clock className="size-5 text-chart-2" />}
+              label="Watch time"
+              value={formatDurationLabel(computed.totalWatchSeconds)}
+            >
+              <span className="rounded bg-chart-4/10 px-2 py-1 font-semibold text-chart-4">
+                +{Number((computed.weekWatchSeconds / 3600).toFixed(1))}h this week
+              </span>
+            </Metric>
+            <Metric
+              warm
+              icon={<Flame className="size-5" />}
+              label="Streak"
+              value={`${computed.currentStreak} ${computed.currentStreak === 1 ? "day" : "days"}`}
+            >
+              Personal best: {computed.bestStreak} {computed.bestStreak === 1 ? "day" : "days"}
+            </Metric>
+            <Metric
+              icon={<CheckCircle2 className="size-5 text-chart-4" />}
+              label="Completed courses"
+              value={`${computed.completedCourses} / ${courses.length}`}
+            >
+              <div className="h-1.5 overflow-hidden rounded-full bg-secondary">
+                <div
+                  className="h-full rounded-full bg-chart-4"
+                  style={{ width: `${computed.completionPct}%` }}
+                />
+              </div>
+            </Metric>
+            <Metric
+              icon={<BookOpen className="size-5 text-chart-1" />}
+              label="Notes"
+              value={String(totalNotes)}
+            >
+              Across {courses.length} {courses.length === 1 ? "course" : "courses"}
+            </Metric>
+          </div>
+          <Heatmap byDate={computed.byDate} />
+          <div className="grid gap-6 lg:grid-cols-2">
+            <Velocity weekdaySeconds={computed.weekdaySeconds} />
+            <LearningFocus courses={courses} />
+          </div>
         </div>
-        <Heatmap byDate={computed.byDate} />
-        <div className="grid gap-6 lg:grid-cols-2">
-          <Velocity weekdaySeconds={computed.weekdaySeconds} />
-          <LearningFocus courses={courses} />
-        </div>
-      </div>
+      )}
     </div>
   );
 }

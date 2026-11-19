@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
+import { Skeleton } from "@/components/ui/skeleton";
 import { apiJson, apiRequest } from "@/lib/api";
 import type { Course } from "@/lib/courses";
 import { DEFAULT_GENERATOR_SETTINGS, getInstructorPalette } from "@/lib/thumbnail-generator";
@@ -184,6 +185,20 @@ export function InstructorAvatar({
   }, [name]);
 
   const effectiveImageUrl = imageUrl || storedAvatar;
+  const imgRef = useRef<HTMLImageElement>(null);
+  const [loadedUrl, setLoadedUrl] = useState<string | null>(null);
+  const [erroredUrl, setErroredUrl] = useState<string | null>(null);
+
+  const isImgLoaded = Boolean(effectiveImageUrl && loadedUrl === effectiveImageUrl);
+  const isImgErrored = Boolean(effectiveImageUrl && erroredUrl === effectiveImageUrl);
+
+  useLayoutEffect(() => {
+    if (!effectiveImageUrl) return;
+    const img = imgRef.current;
+    if (img && img.complete && img.naturalWidth > 0) {
+      setLoadedUrl(effectiveImageUrl);
+    }
+  }, [effectiveImageUrl]);
 
   const fontFamily = "var(--font-sans), 'Plus Jakarta Sans', system-ui, sans-serif";
   const fontWeight = DEFAULT_GENERATOR_SETTINGS.avatarFontWeight;
@@ -198,14 +213,25 @@ export function InstructorAvatar({
         className,
       )}
     >
-      <div className="size-full overflow-hidden rounded-full">
-        {effectiveImageUrl ? (
-          <img
-            src={effectiveImageUrl}
-            alt={name}
-            draggable={false}
-            className="size-full select-none rounded-full object-cover"
-          />
+      <div className="relative size-full overflow-hidden rounded-full">
+        {effectiveImageUrl && !isImgErrored ? (
+          <>
+            {!isImgLoaded && <Skeleton className="absolute inset-0 rounded-full" />}
+            <img
+              ref={imgRef}
+              src={effectiveImageUrl}
+              alt={name}
+              draggable={false}
+              loading="lazy"
+              decoding="async"
+              onLoad={() => setLoadedUrl(effectiveImageUrl)}
+              onError={() => setErroredUrl(effectiveImageUrl)}
+              className={cn(
+                "size-full select-none rounded-full object-cover transition-opacity duration-200",
+                isImgLoaded ? "opacity-100" : "opacity-0",
+              )}
+            />
+          </>
         ) : (
           <svg viewBox="0 0 24 24" className="block size-full" aria-hidden="true">
             <circle cx="12" cy="12" r="12" fill={colors.bg} />

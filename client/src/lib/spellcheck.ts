@@ -306,10 +306,7 @@ function findTextNodeWordAtPoint(
 
   if (!textNode || !editableRoot.contains(textNode)) return null;
   const parentEl = textNode.parentElement;
-  if (
-    parentEl?.closest('[data-ghost="true"]') ||
-    parentEl?.closest('[data-note-image-block="true"]')
-  ) {
+  if (parentEl?.closest('[data-note-image-block="true"]')) {
     return null;
   }
 

@@ -106,11 +106,6 @@ import { cn } from "@/lib/utils";
 const MAX_CROP_WIDTH = 1200;
 const MAX_CROP_HEIGHT = 800;
 
-export interface RichNoteSuggestion {
-  completion: string;
-  fullPhrase: string;
-}
-
 export interface RichNoteSurfaceProps {
   courseId?: string | undefined;
   content: string;
@@ -119,7 +114,6 @@ export interface RichNoteSurfaceProps {
   onCancel?: (() => void) | undefined;
   onCaptureScreenshot?: (() => Promise<string>) | undefined;
   onOpenImage?: ((src: string) => void) | undefined;
-  getSuggestion?: ((textBefore: string) => RichNoteSuggestion | null) | undefined;
   onWritingActivity?: (() => void) | undefined;
   onSuspendSmartTimers?: (() => void) | undefined;
   placeholder?: string | undefined;
@@ -236,12 +230,14 @@ function writeSelectionRangeToClipboardEvent<T extends HTMLElement>(
 export function RichNoteHtmlContent({
   html,
   className,
+  selectable = true,
   onDoubleClick,
   onImageClick,
   onHtmlChange,
 }: {
   html: string;
   className?: string | undefined;
+  selectable?: boolean | undefined;
   onDoubleClick?: ((e: React.MouseEvent<HTMLDivElement>) => void) | undefined;
   onImageClick?: ((src: string, e: React.MouseEvent<HTMLDivElement>) => void) | undefined;
   onHtmlChange?: ((nextHtml: string) => void) | undefined;
@@ -256,26 +252,65 @@ export function RichNoteHtmlContent({
 
   useEffect(() => {
     const root = contentRef.current;
-    if (!root || root.getElementsByTagName("img").length === 0) return;
+    if (!root) return;
+    const imgs = Array.from(root.getElementsByTagName("img"));
+    if (imgs.length === 0) return;
+
+    const cleanups: Array<() => void> = [];
+    for (const img of imgs) {
+      img.loading = "lazy";
+      img.decoding = "async";
+      if (img.complete && img.naturalWidth > 0) {
+        delete img.dataset["imgLoading"];
+      } else {
+        img.dataset["imgLoading"] = "true";
+        const clearLoading = () => {
+          delete img.dataset["imgLoading"];
+        };
+        img.addEventListener("load", clearLoading, { once: true });
+        img.addEventListener("error", clearLoading, { once: true });
+        cleanups.push(() => {
+          img.removeEventListener("load", clearLoading);
+          img.removeEventListener("error", clearLoading);
+        });
+      }
+    }
+
+    if (!selectable) {
+      root.querySelectorAll("img.is-range-selected").forEach((img) => {
+        img.classList.remove("is-range-selected");
+      });
+      return () => {
+        for (const dispose of cleanups) dispose();
+      };
+    }
+
     const sync = () => syncRangeSelectedImages(root);
     sync();
     document.addEventListener("selectionchange", sync);
     return () => {
       document.removeEventListener("selectionchange", sync);
+      for (const dispose of cleanups) dispose();
       root.querySelectorAll("img.is-range-selected").forEach((img) => {
         img.classList.remove("is-range-selected");
       });
     };
-  }, [resolvedHtml]);
+  }, [resolvedHtml, selectable]);
 
   return (
     <>
       <div
         ref={contentRef}
-        className={cn("note-content select-text text-sm leading-[1.6] text-foreground", className)}
+        data-selectable={selectable ? "true" : "false"}
+        className={cn(
+          "note-content text-sm leading-[1.6] text-foreground",
+          selectable ? "select-text" : "select-none",
+          className,
+        )}
         dir="auto"
         onDoubleClick={onDoubleClick}
         onCopy={(e) => {
+          if (!selectable) return;
           writeSelectionRangeToClipboardEvent(e, contentRef.current);
         }}
         onDragStart={(e) => {
@@ -978,7 +1013,6 @@ export function RichNoteSurface({
   onCancel,
   onCaptureScreenshot,
   onOpenImage,
-  getSuggestion,
   onWritingActivity,
   onSuspendSmartTimers,
   placeholder = "Write a note…",
@@ -1001,7 +1035,6 @@ export function RichNoteSurface({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const isInitializedRef = useRef(false);
   const draggingBlockRef = useRef<HTMLElement | null>(null);
-  const ghostSpanRef = useRef<HTMLSpanElement | null>(null);
   const undoStackRef = useRef<{ html: string; bookmark: CaretBookmark | null }[]>([]);
   const redoStackRef = useRef<{ html: string; bookmark: CaretBookmark | null }[]>([]);
   const lastUndoAtRef = useRef(0);
@@ -1038,17 +1071,9 @@ export function RichNoteSurface({
   } | null>(null);
   const [contextMenu, setContextMenu] = useState<StandaloneContextMenuState | null>(null);
   contextMenuOpenRef.current = Boolean(contextMenu);
-  const [ghostSuggestion, setGhostSuggestion] = useState<{
-    completion: string;
-    fullPhrase: string;
-    node: Text;
-    offset: number;
-  } | null>(null);
 
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
-  const getSuggestionRef = useRef(getSuggestion);
-  getSuggestionRef.current = getSuggestion;
   const onWritingActivityRef = useRef(onWritingActivity);
   onWritingActivityRef.current = onWritingActivity;
 
@@ -1219,113 +1244,6 @@ export function RichNoteSurface({
     triggerWritingActivity();
     return true;
   }, [handleInput, triggerWritingActivity]);
-
-  const removeGhostSpan = useCallback(() => {
-    if (ghostSpanRef.current && ghostSpanRef.current.isConnected) {
-      ghostSpanRef.current.remove();
-    }
-    ghostSpanRef.current = null;
-  }, []);
-
-  const insertGhostSpan = useCallback(
-    (textNode: Text, offset: number, completion: string) => {
-      removeGhostSpan();
-      if (!textNode.isConnected) return;
-
-      const span = document.createElement("span");
-      span.setAttribute("data-ghost", "true");
-      span.contentEditable = "false";
-      span.textContent = completion;
-      span.style.cssText =
-        "color: var(--color-primary); opacity: 0.55; font-style: italic; pointer-events: none; user-select: none; display: inline;";
-
-      const after = textNode.splitText(offset);
-      textNode.parentNode?.insertBefore(span, after);
-      ghostSpanRef.current = span;
-
-      try {
-        const sel = window.getSelection();
-        const r = document.createRange();
-        r.setStart(textNode, textNode.textContent?.length ?? 0);
-        r.collapse(true);
-        sel?.removeAllRanges();
-        sel?.addRange(r);
-      } catch {
-        // ignore
-      }
-    },
-    [removeGhostSpan],
-  );
-
-  const updateGhostSuggestion = useCallback(() => {
-    const suggestFn = getSuggestionRef.current;
-    if (!suggestFn || !editorRef.current) {
-      removeGhostSpan();
-      setGhostSuggestion(null);
-      return;
-    }
-    const sel = window.getSelection();
-    if (!sel || sel.rangeCount === 0 || !sel.isCollapsed) {
-      removeGhostSpan();
-      setGhostSuggestion(null);
-      return;
-    }
-    const range = sel.getRangeAt(0);
-    const node = range.startContainer;
-    if (
-      !editorRef.current.contains(node) ||
-      node === ghostSpanRef.current ||
-      isInsideMarkdownSyntax(node, editorRef.current)
-    ) {
-      removeGhostSpan();
-      setGhostSuggestion(null);
-      return;
-    }
-    if (node.nodeType === Node.TEXT_NODE) {
-      const textNode = node as Text;
-      const textBefore = (textNode.textContent || "").slice(0, range.startOffset);
-      const suggestion = suggestFn(textBefore);
-      if (suggestion && suggestion.completion) {
-        if (ghostSpanRef.current?.textContent !== suggestion.completion) {
-          insertGhostSpan(textNode, range.startOffset, suggestion.completion);
-        }
-        setGhostSuggestion({
-          completion: suggestion.completion,
-          fullPhrase: suggestion.fullPhrase,
-          node: textNode,
-          offset: range.startOffset,
-        });
-        return;
-      }
-    }
-    removeGhostSpan();
-    setGhostSuggestion(null);
-  }, [insertGhostSpan, removeGhostSpan]);
-
-  const acceptGhostSuggestion = () => {
-    if (!ghostSuggestion) return;
-    removeGhostSpan();
-    const { node: textNode, offset, completion } = ghostSuggestion;
-    if (textNode && textNode.isConnected) {
-      const text = textNode.textContent || "";
-      textNode.textContent = text.slice(0, offset) + completion + text.slice(offset);
-      try {
-        const sel = window.getSelection();
-        const r = document.createRange();
-        r.setStart(textNode, offset + completion.length);
-        r.collapse(true);
-        sel?.removeAllRanges();
-        sel?.addRange(r);
-      } catch {
-        // ignore
-      }
-    } else {
-      document.execCommand("insertText", false, completion);
-    }
-    setGhostSuggestion(null);
-    handleInput();
-    triggerWritingActivity();
-  };
 
   const getImageBlock = useCallback((imgEl: HTMLImageElement): HTMLElement | null => {
     return (editorRef.current ? getTopLevelBlock(imgEl, editorRef.current) : null) || imgEl;
@@ -1824,13 +1742,6 @@ export function RichNoteSurface({
       return;
     }
     if (e.key === "Escape") {
-      if (ghostSuggestion) {
-        e.preventDefault();
-        e.stopPropagation();
-        removeGhostSpan();
-        setGhostSuggestion(null);
-        return;
-      }
       if (onCancel) {
         e.preventDefault();
         e.stopPropagation();
@@ -1839,20 +1750,6 @@ export function RichNoteSurface({
         }
         onCancel();
       }
-      return;
-    }
-    if (ghostSuggestion && (e.key === "Tab" || e.key === "ArrowRight")) {
-      if (e.key === "ArrowRight") {
-        const sel = window.getSelection();
-        if (sel && sel.rangeCount > 0) {
-          const r = sel.getRangeAt(0);
-          if (r.startOffset < (r.startContainer.textContent?.length ?? 0)) return;
-        }
-      }
-      e.preventDefault();
-      e.stopPropagation();
-      captureUndoSnapshot(true);
-      acceptGhostSuggestion();
       return;
     }
 
@@ -1934,8 +1831,6 @@ export function RichNoteSurface({
     }
 
     if (!["Control", "Shift", "Alt", "Meta", "CapsLock"].includes(e.key)) {
-      removeGhostSpan();
-      setGhostSuggestion(null);
       triggerWritingActivity();
     }
 
@@ -2013,13 +1908,11 @@ export function RichNoteSurface({
       if (!e.shiftKey && resolveInlineBoundaryOnArrow(ed, e.key)) {
         e.preventDefault();
         e.stopPropagation();
-        requestAnimationFrame(updateGhostSuggestion);
         return;
       }
       if (resolveBlockPrefixOnArrow(ed, e.key, e.shiftKey)) {
         e.preventDefault();
         e.stopPropagation();
-        requestAnimationFrame(updateGhostSuggestion);
         return;
       }
     }
@@ -2037,7 +1930,6 @@ export function RichNoteSurface({
       if (resolveArrowIntoHorizontalRule(ed, e.key)) {
         e.preventDefault();
         e.stopPropagation();
-        requestAnimationFrame(updateGhostSuggestion);
         return;
       }
       const targetImg = resolveArrowIntoImageBlock(ed, e.key);
@@ -2865,7 +2757,6 @@ export function RichNoteSurface({
           window.addEventListener("blur", handleWindowBlur);
         }}
         onScroll={() => {
-          updateGhostSuggestion();
           if (selectedImg) updateSelectedImgPos(selectedImg.element);
         }}
         style={hasScrollConstraint ? { scrollbarGutter: "stable", ...wrapperStyle } : wrapperStyle}
@@ -2893,8 +2784,6 @@ export function RichNoteSurface({
             }
           }}
           onInput={(e) => {
-            removeGhostSpan();
-            setGhostSuggestion(null);
             if (selectedImg) {
               clearSelectedImage();
             }
@@ -2946,7 +2835,6 @@ export function RichNoteSurface({
                       beforeInputSnapRef.current = null;
                       handleInput();
                       triggerWritingActivity();
-                      requestAnimationFrame(updateGhostSuggestion);
                       return;
                     }
                     // Restore space if no block trigger matched
@@ -2972,22 +2860,13 @@ export function RichNoteSurface({
             beforeInputSnapRef.current = null;
             handleInput();
             triggerWritingActivity();
-            requestAnimationFrame(updateGhostSuggestion);
           }}
-          onKeyUp={(e) => {
-            if (!["Tab", "ArrowRight"].includes(e.key)) {
-              updateGhostSuggestion();
-            }
-          }}
-          onMouseUp={updateGhostSuggestion}
           onBlur={() => {
             if (blurTimeoutRef.current !== null) {
               window.clearTimeout(blurTimeoutRef.current);
             }
             blurTimeoutRef.current = window.setTimeout(() => {
               blurTimeoutRef.current = null;
-              removeGhostSpan();
-              setGhostSuggestion(null);
               const ed = editorRef.current;
               if (
                 ed &&
@@ -3074,14 +2953,6 @@ export function RichNoteSurface({
           data-placeholder={placeholder}
           dir="auto"
         />
-
-        {ghostSuggestion && (
-          <div className="pointer-events-none absolute bottom-2 right-2 z-20 flex items-center gap-1">
-            <span className="inline-flex select-none items-center gap-0.5 rounded bg-primary-soft px-1.5 py-0.5 font-mono text-[10px] font-semibold text-primary">
-              Tab
-            </span>
-          </div>
-        )}
 
         {croppingImage && (
           <InPlaceImageCropOverlay

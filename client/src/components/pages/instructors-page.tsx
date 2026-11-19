@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type ChangeEvent } from "react";
-import { ArrowLeft, Camera, Loader2, Search } from "lucide-react";
+import { ArrowLeft, Camera, Search } from "lucide-react";
 import { toast } from "sonner";
 
 import { CourseCard, CourseSortDropdown } from "@/components/layout/app-shell";
@@ -9,6 +9,7 @@ import {
   saveInstructorAvatar,
 } from "@/components/layout/instructor-avatar";
 import { Button } from "@/components/ui/button";
+import { InstructorDetailSkeleton, InstructorListSkeleton } from "@/components/ui/skeleton";
 import {
   readAppSettings,
   readSessionFilters,
@@ -175,6 +176,10 @@ export function InstructorsPage({
     });
   }, [instructorsList, query]);
 
+  if (isLoading && activeId && !selectedInstructor) {
+    return <InstructorDetailSkeleton />;
+  }
+
   if (selectedInstructor) {
     return (
       <div className="mx-auto w-full max-w-[1440px] px-4 pb-8 pt-4 sm:px-8 sm:pb-12 sm:pt-8 lg:px-10">
@@ -267,9 +272,7 @@ export function InstructorsPage({
       </header>
 
       {isLoading ? (
-        <div className="flex items-center justify-center py-20 text-sm text-muted-foreground">
-          <Loader2 className="mr-2 size-4 animate-spin" /> Loading instructors…
-        </div>
+        <InstructorListSkeleton count={6} />
       ) : filtered.length === 0 ? (
         <div className="mt-16 flex flex-col items-center rounded-xl bg-secondary/40 px-6 py-16 text-center">
           <p className="text-base font-semibold text-foreground">

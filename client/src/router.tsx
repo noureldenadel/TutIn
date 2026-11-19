@@ -9,6 +9,8 @@ export const router = createRouter({
   context: { queryClient },
   scrollRestoration: true,
   defaultPreloadStaleTime: 0,
+  defaultPendingMs: 120,
+  defaultPendingMinMs: 250,
 });
 
 declare module "@tanstack/react-router" {

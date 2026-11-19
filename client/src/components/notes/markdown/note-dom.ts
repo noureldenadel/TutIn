@@ -99,8 +99,7 @@ function isMarkdownSyntaxNode(node: Node | null): boolean {
   return (
     Boolean(node) &&
     node!.nodeType === Node.ELEMENT_NODE &&
-    ((node as HTMLElement).hasAttribute(MD_SYNTAX_ATTR) ||
-      (node as HTMLElement).hasAttribute("data-ghost"))
+    (node as HTMLElement).hasAttribute(MD_SYNTAX_ATTR)
   );
 }
 
@@ -158,7 +157,7 @@ export function getTextWithoutArtifacts(node: Node): string {
   const clone = node.cloneNode(true) as HTMLElement | DocumentFragment;
   if ("querySelectorAll" in clone) {
     clone
-      .querySelectorAll(`[data-ghost], [data-task-checkbox], [${MD_SYNTAX_ATTR}]`)
+      .querySelectorAll(`[data-task-checkbox], [${MD_SYNTAX_ATTR}]`)
       .forEach((el) => el.remove());
   }
   return stripZeroWidth((clone.textContent || "").replace(/\u00A0/g, " "));
@@ -280,11 +279,7 @@ export function hasOwnInlineContent(el: HTMLElement): boolean {
       }
     } else if (child.nodeType === Node.ELEMENT_NODE) {
       const ce = child as HTMLElement;
-      if (
-        ce.hasAttribute(MD_SYNTAX_ATTR) ||
-        ce.hasAttribute("data-task-checkbox") ||
-        ce.hasAttribute("data-ghost")
-      ) {
+      if (ce.hasAttribute(MD_SYNTAX_ATTR) || ce.hasAttribute("data-task-checkbox")) {
         continue;
       }
       if (ce.tagName === "IMG" || hasVisibleContent(ce)) return true;
@@ -299,11 +294,7 @@ export function getLastDescendantTextNode(el: Node): Text | null {
     if (!child) continue;
     if (child.nodeType === Node.ELEMENT_NODE) {
       const childEl = child as HTMLElement;
-      if (
-        childEl.hasAttribute("data-ghost") ||
-        childEl.hasAttribute("data-task-checkbox") ||
-        childEl.hasAttribute(MD_SYNTAX_ATTR)
-      ) {
+      if (childEl.hasAttribute("data-task-checkbox") || childEl.hasAttribute(MD_SYNTAX_ATTR)) {
         continue;
       }
       const nested = getLastDescendantTextNode(childEl);
@@ -322,7 +313,7 @@ export function getFirstEditableTarget(el: HTMLElement): { node: Node; offset: n
   while (curr) {
     if (curr.nodeType === Node.TEXT_NODE) {
       const parentEl = curr.parentElement;
-      if (!parentEl?.closest(`[data-ghost], [data-task-checkbox], [${MD_SYNTAX_ATTR}]`)) {
+      if (!parentEl?.closest(`[data-task-checkbox], [${MD_SYNTAX_ATTR}]`)) {
         return { node: curr, offset: 0 };
       }
     } else if (curr.nodeType === Node.ELEMENT_NODE) {
@@ -388,7 +379,7 @@ export function isCaretAtStartOfScope(scope: HTMLElement, range: Range): boolean
   before.setStart(scope, 0);
   before.setEnd(range.startContainer, range.startOffset);
   const frag = before.cloneContents();
-  frag.querySelectorAll("[data-ghost], [data-task-checkbox]").forEach((el) => el.remove());
+  frag.querySelectorAll("[data-task-checkbox]").forEach((el) => el.remove());
   const text = (frag.textContent || "").replace(/\u00A0/g, " ").replace(/\u200B/g, "");
   if (text.length > 0) return false;
   if (frag.querySelector("img, br")) return false;
@@ -475,8 +466,7 @@ export function getCollapsedSelectionRange(editor: HTMLElement): Range | null {
 
 /**
  * Serializes a bookmark relative to persistent DOM nodes, skipping transient
- * `[data-md-syntax]` and `[data-ghost]` nodes so bookmarks align with
- * `serializeContainerMediaHtml` during undo/redo.
+ * `[data-md-syntax]` nodes so bookmarks align with `serializeContainerMediaHtml` during undo/redo.
  */
 export function getCaretBookmark(root: HTMLElement): CaretBookmark | null {
   const sel = window.getSelection();
@@ -893,7 +883,7 @@ export function sanitizeClipboardHtml(rawHtml: string): string {
 }
 
 const CHROMIUM_STYLE_ARTIFACT_SELECTOR =
-  "[style]:not([data-ghost]), font, span:not([data-task-content]):not([data-md-syntax]):not([data-md-url]):not([data-ghost])";
+  "[style], font, span:not([data-task-content]):not([data-md-syntax]):not([data-md-url])";
 
 /**
  * Removes Chromium-injected inline styles (`<span style="font-size: ...">`, `<font>`,
@@ -936,7 +926,7 @@ export function stripChromiumInlineArtifacts(
 
   const dirtyWrappers = Array.from(
     container.querySelectorAll(
-      "font, span:not([data-task-content]):not([data-md-syntax]):not([data-md-url]):not([data-ghost])",
+      "font, span:not([data-task-content]):not([data-md-syntax]):not([data-md-url])",
     ),
   ).reverse();
 
@@ -951,7 +941,7 @@ export function stripChromiumInlineArtifacts(
     }
   }
 
-  container.querySelectorAll("[style]:not([data-ghost])").forEach((el) => {
+  container.querySelectorAll("[style]").forEach((el) => {
     el.removeAttribute("style");
   });
 

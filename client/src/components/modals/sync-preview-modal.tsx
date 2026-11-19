@@ -20,6 +20,7 @@ import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
+import { SyncPreviewSkeleton } from "@/components/ui/skeleton";
 import type { Course } from "@/lib/courses";
 import {
   applyCourseSync,
@@ -239,10 +240,7 @@ export function SyncPreviewModal({
         {/* Body */}
         <div className="flex-1 space-y-5 overflow-y-auto p-4 custom-scrollbar sm:p-6">
           {isLoading ? (
-            <div className="flex h-full flex-col items-center justify-center gap-3 py-14 text-sm text-muted-foreground">
-              <Loader2 className="size-7 animate-spin text-foreground" />
-              <span>Scanning disk &amp; probing video metadata…</span>
-            </div>
+            <SyncPreviewSkeleton />
           ) : !preview ? null : preview.folderMissing ? (
             <div className="flex flex-col items-center justify-center gap-3 rounded-xl bg-secondary/40 p-8 text-center">
               <AlertTriangle className="size-8 text-amber-500" />

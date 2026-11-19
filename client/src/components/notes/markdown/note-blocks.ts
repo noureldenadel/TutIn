@@ -174,7 +174,6 @@ function getLineContextAtCaret(editor: HTMLElement, initialRange: Range): LineBl
 
   const extractTriggerAndSplitLine = (): DocumentFragment => {
     prefixRange.deleteContents();
-    editableScope.querySelectorAll("[data-ghost]").forEach((s) => s.remove());
 
     const afterRange = document.createRange();
     if (prevBr && editableScope.contains(prevBr)) {

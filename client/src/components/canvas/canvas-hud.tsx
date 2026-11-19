@@ -1,6 +1,8 @@
+import { useState } from "react";
 import { Link } from "@tanstack/react-router";
 import {
   ArrowLeft,
+  ArrowRight,
   Eraser,
   Group,
   Hand,
@@ -15,18 +17,33 @@ import {
   PenLine,
   Plus,
   Redo2,
+  RotateCcw,
   StickyNote,
-  ArrowRight,
   Type,
   Undo2,
 } from "lucide-react";
 
 import { STROKE_COLOR_OPTIONS, type CanvasToolMode } from "@/components/canvas/canvas-tokens";
-import type { CanvasStrokeColorToken } from "@/lib/course-canvas";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Switch } from "@/components/ui/switch";
+import type { CanvasArtboardCardLayout, CanvasBoardLayoutMode } from "@/lib/app-settings";
+import type { CanvasLayoutOptions, CanvasStrokeColorToken } from "@/lib/course-canvas";
 import { cn } from "@/lib/utils";
 
 const PEN_WIDTHS = [3, 5, 8];
 const HIGHLIGHTER_WIDTHS = [16, 24, 34];
+
+const BOARD_LAYOUT_OPTIONS: ReadonlyArray<{ id: CanvasBoardLayoutMode; label: string }> = [
+  { id: "module-rows", label: "Modules" },
+  { id: "wrapped-rows", label: "Rows" },
+  { id: "masonry", label: "Masonry" },
+];
+
+const CARD_LAYOUT_OPTIONS: ReadonlyArray<{ id: CanvasArtboardCardLayout; label: string }> = [
+  { id: "columns", label: "Columns" },
+  { id: "grid", label: "Grid" },
+  { id: "single", label: "Single" },
+];
 
 function HudBtn({
   active,
@@ -73,15 +90,21 @@ export function CanvasHud({
   tool,
   strokeColor,
   strokeSize,
+  layoutOptions,
   onSelectTool,
   onChangeStrokeColor,
   onChangeStrokeSize,
   onUndo,
   onRedo,
+  onChangeBoardLayout,
+  onChangeCardLayout,
+  onToggleColorByModule,
+  onTidyAll,
   onResetArrangement,
   onZoomIn,
   onZoomOut,
-  onResetView,
+  onResetZoom,
+  onFitToView,
   onToggleDrawer,
   onTriggerImageUpload,
   onCreateArtboard,
@@ -96,19 +119,26 @@ export function CanvasHud({
   tool: CanvasToolMode;
   strokeColor: CanvasStrokeColorToken;
   strokeSize: number;
+  layoutOptions: CanvasLayoutOptions;
   onSelectTool: (tool: CanvasToolMode) => void;
   onChangeStrokeColor: (color: CanvasStrokeColorToken) => void;
   onChangeStrokeSize: (size: number) => void;
   onUndo: () => void;
   onRedo: () => void;
+  onChangeBoardLayout: (mode: CanvasBoardLayoutMode) => void;
+  onChangeCardLayout: (mode: CanvasArtboardCardLayout) => void;
+  onToggleColorByModule: (enabled: boolean) => void;
+  onTidyAll: () => void;
   onResetArrangement: () => void;
   onZoomIn: () => void;
   onZoomOut: () => void;
-  onResetView: () => void;
+  onResetZoom: () => void;
+  onFitToView: () => void;
   onToggleDrawer: () => void;
   onTriggerImageUpload: () => void;
   onCreateArtboard: () => void;
 }) {
+  const [arrangeOpen, setArrangeOpen] = useState(false);
   const showInkOptions = tool === "pen" || tool === "highlighter";
   const widthChoices = tool === "highlighter" ? HIGHLIGHTER_WIDTHS : PEN_WIDTHS;
 
@@ -182,9 +212,111 @@ export function CanvasHud({
 
         <div className="mx-0.5 h-4 w-px bg-border" />
 
-        <HudBtn label="Reset arrangement" onClick={onResetArrangement}>
-          <LayoutGrid />
-        </HudBtn>
+        <Popover open={arrangeOpen} onOpenChange={setArrangeOpen}>
+          <PopoverTrigger asChild>
+            <button
+              type="button"
+              aria-label="Arrange layout"
+              aria-expanded={arrangeOpen}
+              title="Arrange layout"
+              className={cn(
+                "flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground [&_svg]:size-4 [&_svg]:stroke-[1.75]",
+                arrangeOpen && "bg-secondary text-foreground",
+              )}
+            >
+              <LayoutGrid />
+            </button>
+          </PopoverTrigger>
+          <PopoverContent
+            align="end"
+            sideOffset={10}
+            data-canvas-ui="true"
+            onPointerDown={(e) => e.stopPropagation()}
+            onDoubleClick={(e) => e.stopPropagation()}
+            onWheel={(e) => e.stopPropagation()}
+            className="w-64 space-y-3 rounded-xl border border-border/70 bg-popover p-3 shadow-workspace"
+          >
+            <div className="space-y-1.5">
+              <div className="text-[11px] font-medium text-muted-foreground">Artboards</div>
+              <div className="grid grid-cols-3 gap-1 rounded-lg bg-secondary/75 p-1">
+                {BOARD_LAYOUT_OPTIONS.map((opt) => (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    onClick={() => onChangeBoardLayout(opt.id)}
+                    className={cn(
+                      "rounded-sm py-1 text-[11px] font-medium text-muted-foreground transition-colors hover:text-foreground",
+                      layoutOptions.boardLayout === opt.id &&
+                        "bg-card text-foreground shadow-card dark:bg-accent",
+                    )}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <div className="text-[11px] font-medium text-muted-foreground">Cards</div>
+              <div className="grid grid-cols-3 gap-1 rounded-lg bg-secondary/75 p-1">
+                {CARD_LAYOUT_OPTIONS.map((opt) => (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    onClick={() => onChangeCardLayout(opt.id)}
+                    className={cn(
+                      "rounded-sm py-1 text-[11px] font-medium text-muted-foreground transition-colors hover:text-foreground",
+                      layoutOptions.cardLayout === opt.id &&
+                        "bg-card text-foreground shadow-card dark:bg-accent",
+                    )}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <label className="flex cursor-pointer items-center justify-between gap-2 py-0.5">
+              <span className="text-xs text-foreground">Color by module</span>
+              <Switch
+                checked={layoutOptions.colorByModule}
+                onCheckedChange={onToggleColorByModule}
+              />
+            </label>
+
+            <div className="space-y-1.5 border-t border-border/50 pt-2.5">
+              <button
+                type="button"
+                onClick={() => {
+                  onTidyAll();
+                  setArrangeOpen(false);
+                }}
+                className="inline-flex h-8 w-full items-center justify-center gap-1.5 rounded-md bg-secondary/85 px-2.5 text-xs font-medium text-foreground transition-colors hover:bg-secondary [&_svg]:size-3.5 [&_svg]:stroke-[1.75]"
+              >
+                <LayoutGrid />
+                <span>Tidy layout</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  onResetArrangement();
+                  setArrangeOpen(false);
+                }}
+                className="flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-secondary/60 [&_svg]:mt-0.5 [&_svg]:size-3.5 [&_svg]:shrink-0 [&_svg]:stroke-[1.75]"
+              >
+                <RotateCcw className="text-muted-foreground" />
+                <span className="min-w-0">
+                  <span className="block text-xs font-medium leading-tight text-foreground">
+                    Reset to lectures
+                  </span>
+                  <span className="mt-0.5 block text-[11px] leading-snug text-muted-foreground">
+                    Returns moved notes to lessons
+                  </span>
+                </span>
+              </button>
+            </div>
+          </PopoverContent>
+        </Popover>
 
         <div className="mx-0.5 h-4 w-px bg-border" />
 
@@ -194,8 +326,8 @@ export function CanvasHud({
           </HudBtn>
           <button
             type="button"
-            onClick={onResetView}
-            title="Reset zoom"
+            onClick={onResetZoom}
+            title="Reset to 100%"
             className="min-w-12 rounded-md px-1.5 py-1 font-mono text-xs font-medium tabular-nums text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
           >
             {Math.round(zoom * 100)}%
@@ -204,7 +336,7 @@ export function CanvasHud({
             <Plus />
           </HudBtn>
         </div>
-        <HudBtn label="Reset view" onClick={onResetView}>
+        <HudBtn label="Fit to view" shortcut="0" onClick={onFitToView}>
           <Maximize />
         </HudBtn>
       </div>

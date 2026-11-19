@@ -1,4 +1,6 @@
 import {
+  lazy,
+  Suspense,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -71,8 +73,8 @@ import {
   type Course,
   type CourseSortOption,
 } from "@/lib/courses";
-import { SettingsModal, type ThemeMode } from "@/components/modals/settings-modal";
-import { WelcomeGuideModal } from "@/components/modals/welcome-guide-modal";
+import { CourseCardSkeleton, CourseGridSkeleton } from "@/components/ui/skeleton";
+import type { AddCourseSource } from "@/components/modals/add-course-modal";
 import {
   DEFAULT_APP_SETTINGS,
   SETTINGS_CHANGED_EVENT,
@@ -86,16 +88,47 @@ import {
   updateSessionFilters,
   writeAppSettings,
   writeSessionScroll,
+  type ThemeMode,
   type ThemePreset,
 } from "@/lib/app-settings";
-import { SyncPreviewModal } from "@/components/modals/sync-preview-modal";
-import { EditCourseModal } from "@/components/modals/edit-course-modal";
-import { AddCourseModal, type AddCourseSource } from "@/components/modals/add-course-modal";
+import { useProgressiveSlice } from "@/lib/use-progressive-slice";
 import { DotLogo } from "@/components/layout/dot-logo";
 import { CourseThumbnail } from "@/components/layout/course-thumbnail";
 import { InstructorAvatar, normalizeInstructorSlug } from "@/components/layout/instructor-avatar";
 import { Toaster, toast } from "sonner";
 import { trackExternalCourseOpen } from "@/lib/watch-history";
+
+const SettingsModal = lazy(() =>
+  import("@/components/modals/settings-modal").then((m) => ({ default: m.SettingsModal })),
+);
+const WelcomeGuideModal = lazy(() =>
+  import("@/components/modals/welcome-guide-modal").then((m) => ({
+    default: m.WelcomeGuideModal,
+  })),
+);
+const SyncPreviewModal = lazy(() =>
+  import("@/components/modals/sync-preview-modal").then((m) => ({
+    default: m.SyncPreviewModal,
+  })),
+);
+const EditCourseModal = lazy(() =>
+  import("@/components/modals/edit-course-modal").then((m) => ({
+    default: m.EditCourseModal,
+  })),
+);
+const AddCourseModal = lazy(() =>
+  import("@/components/modals/add-course-modal").then((m) => ({ default: m.AddCourseModal })),
+);
+
+function useHasOpened(open: boolean): boolean {
+  const [hasOpened, setHasOpened] = useState(open);
+  useEffect(() => {
+    if (open && !hasOpened) {
+      setHasOpened(true);
+    }
+  }, [hasOpened, open]);
+  return open || hasOpened;
+}
 
 type StatusFilter = "All" | "In Progress" | "Completed";
 const STATUS_FILTERS: readonly StatusFilter[] = ["All", "In Progress", "Completed"];
@@ -114,9 +147,9 @@ function getActiveNavIndex(pathname: string): number {
   const idx = navItems.findIndex((item) =>
     item.to === "/"
       ? pathname === "/" ||
-        pathname.startsWith("/learn") ||
-        pathname.startsWith("/manage") ||
-        pathname.startsWith("/canvas")
+      pathname.startsWith("/learn") ||
+      pathname.startsWith("/manage") ||
+      pathname.startsWith("/canvas")
       : pathname.startsWith(item.to),
   );
   return idx >= 0 ? idx : 0;
@@ -179,7 +212,13 @@ function DockButton({
   );
 }
 
-function IconDock({ activeIndex, onSettings }: { activeIndex: number; onSettings: () => void }) {
+function IconDock({
+  activeIndex,
+  onSettings,
+}: {
+  activeIndex: number;
+  onSettings: () => void;
+}) {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const jobsMap = useTranscriptJobs();
   const activeJobs = useMemo(
@@ -363,6 +402,7 @@ const courseSources = {
 
 function AddCourseControl() {
   const [source, setSource] = useState<AddCourseSource | null>(null);
+  const mountModal = useHasOpened(source !== null);
 
   return (
     <>
@@ -445,13 +485,17 @@ function AddCourseControl() {
         </DropdownMenu>
       </div>
 
-      <AddCourseModal
-        open={source !== null}
-        initialSource={source ?? "local"}
-        onOpenChange={(isOpen) => {
-          if (!isOpen) setSource(null);
-        }}
-      />
+      {mountModal && (
+        <Suspense fallback={null}>
+          <AddCourseModal
+            open={source !== null}
+            initialSource={source ?? "local"}
+            onOpenChange={(isOpen) => {
+              if (!isOpen) setSource(null);
+            }}
+          />
+        </Suspense>
+      )}
     </>
   );
 }
@@ -954,31 +998,55 @@ export function AppShell({ children }: { children: ReactNode }) {
     writeAppSettings({ ...readAppSettings(), themePreset: next });
   };
 
+  const mountSettings = useHasOpened(settingsOpen);
+  const mountWelcome = useHasOpened(welcomeOpen);
+  const mountRescan = useHasOpened(Boolean(rescanCourse));
+  const mountEdit = useHasOpened(Boolean(editingCourse));
+
   return (
     <TooltipProvider delayDuration={250}>
       <div className="flex h-dvh flex-col overflow-hidden bg-shell text-foreground md:flex-row">
-        <IconDock activeIndex={activeNavIndex} onSettings={() => setSettingsOpen(true)} />
-        <SettingsModal
-          open={settingsOpen}
-          onOpenChange={setSettingsOpen}
-          theme={mode}
-          isDark={dark}
-          onThemeChange={applyMode}
-          themePreset={themePreset}
-          onThemePresetChange={applyThemePreset}
-          onOpenWelcomeGuide={() => setWelcomeOpen(true)}
+        <IconDock
+          activeIndex={activeNavIndex}
+          onSettings={() => setSettingsOpen(true)}
         />
-        <WelcomeGuideModal open={welcomeOpen} onOpenChange={setWelcomeOpen} />
-        <SyncPreviewModal
-          open={Boolean(rescanCourse)}
-          onOpenChange={(isOpen) => !isOpen && setRescanCourse(null)}
-          course={rescanCourse}
-        />
-        <EditCourseModal
-          open={Boolean(editingCourse)}
-          onOpenChange={(isOpen) => !isOpen && setEditingCourse(null)}
-          course={editingCourse}
-        />
+        {mountSettings && (
+          <Suspense fallback={null}>
+            <SettingsModal
+              open={settingsOpen}
+              onOpenChange={setSettingsOpen}
+              theme={mode}
+              isDark={dark}
+              onThemeChange={applyMode}
+              themePreset={themePreset}
+              onThemePresetChange={applyThemePreset}
+              onOpenWelcomeGuide={() => setWelcomeOpen(true)}
+            />
+          </Suspense>
+        )}
+        {mountWelcome && (
+          <Suspense fallback={null}>
+            <WelcomeGuideModal open={welcomeOpen} onOpenChange={setWelcomeOpen} />
+          </Suspense>
+        )}
+        {mountRescan && (
+          <Suspense fallback={null}>
+            <SyncPreviewModal
+              open={Boolean(rescanCourse)}
+              onOpenChange={(isOpen) => !isOpen && setRescanCourse(null)}
+              course={rescanCourse}
+            />
+          </Suspense>
+        )}
+        {mountEdit && (
+          <Suspense fallback={null}>
+            <EditCourseModal
+              open={Boolean(editingCourse)}
+              onOpenChange={(isOpen) => !isOpen && setEditingCourse(null)}
+              course={editingCourse}
+            />
+          </Suspense>
+        )}
         <main
           ref={mainRef}
           onScroll={(e) => {
@@ -1244,6 +1312,29 @@ export function HomePage() {
     return sortCourses(filtered, sort);
   }, [allCourses, filter, query, sort]);
 
+  const initialRestoredCourseCount = useMemo(() => {
+    const savedScroll = readSessionScroll("page:/") ?? 0;
+    if (savedScroll <= 0) return 0;
+    return Math.ceil((savedScroll + 960) / 300) * 4;
+  }, []);
+
+  const {
+    visibleCount: renderedCourseCount,
+    hasMore: hasMoreCourses,
+    sentinelRef: coursesSentinelRef,
+  } = useProgressiveSlice({
+    total: visibleCourses.length,
+    initialCount: 24,
+    step: 24,
+    minVisibleCount: initialRestoredCourseCount,
+    resetKey: `${filter}|${sort}|${query.trim().toLowerCase()}`,
+  });
+
+  const renderedCourses = useMemo(
+    () => visibleCourses.slice(0, renderedCourseCount),
+    [renderedCourseCount, visibleCourses],
+  );
+
   return (
     <div className="mx-auto max-w-[1440px] px-4 pb-8 pt-4 sm:px-8 sm:pb-12 sm:pt-8 lg:px-10">
       <header className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-end">
@@ -1313,7 +1404,7 @@ export function HomePage() {
               className={cn(
                 "pointer-events-none absolute top-1 bottom-1 left-0 rounded-sm bg-card dark:bg-accent",
                 tabIndicator.ready &&
-                  "transition-[transform,width] duration-250 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none",
+                "transition-[transform,width] duration-250 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none",
               )}
               style={{
                 width: `${tabIndicator.width}px`,
@@ -1388,25 +1479,39 @@ export function HomePage() {
           Failed to connect to TutIn server: {error}
         </div>
       ) : isLoading && allCourses.length === 0 ? (
-        <div className="mt-16 flex items-center justify-center text-sm text-muted-foreground">
-          Loading courses…
-        </div>
+        <CourseGridSkeleton count={8} className="mt-5 sm:mt-8" />
       ) : (
-        <section
-          className="mt-5 grid gap-4 sm:mt-8 sm:gap-5 md:grid-cols-2 xl:grid-cols-4"
-          aria-label="Course library"
-        >
-          {visibleCourses.length ? (
-            visibleCourses.map((course) => <CourseCard key={course.id} course={course} />)
-          ) : (
-            <EmptyState
-              clear={() => {
-                setQuery("");
-                setFilter("All");
-              }}
-            />
+        <>
+          <section
+            className="mt-5 grid gap-4 sm:mt-8 sm:gap-5 md:grid-cols-2 xl:grid-cols-4"
+            aria-label="Course library"
+          >
+            {renderedCourses.length ? (
+              renderedCourses.map((course) => <CourseCard key={course.id} course={course} />)
+            ) : (
+              <EmptyState
+                clear={() => {
+                  setQuery("");
+                  setFilter("All");
+                }}
+              />
+            )}
+          </section>
+          {hasMoreCourses && (
+            <div
+              ref={coursesSentinelRef}
+              aria-hidden="true"
+              className="mt-4 grid gap-4 sm:mt-5 sm:gap-5 md:grid-cols-2 xl:grid-cols-4"
+            >
+              {Array.from(
+                { length: Math.min(4, visibleCourses.length - renderedCourseCount) },
+                (_, idx) => (
+                  <CourseCardSkeleton key={idx} />
+                ),
+              )}
+            </div>
           )}
-        </section>
+        </>
       )}
     </div>
   );

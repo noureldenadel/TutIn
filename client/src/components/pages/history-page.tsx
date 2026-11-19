@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Clock, History, Loader2, Search, Trash2 } from "lucide-react";
+import { Clock, History, Search, Trash2 } from "lucide-react";
 import { Link } from "@tanstack/react-router";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
+import { HistoryListSkeleton, HistoryRowsSkeleton } from "@/components/ui/skeleton";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -17,7 +18,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { CourseThumbnail } from "@/components/layout/course-thumbnail";
 import { apiRequest } from "@/lib/api";
-import { readSessionFilters, updateSessionFilters } from "@/lib/app-settings";
+import { readSessionFilters, readSessionScroll, updateSessionFilters } from "@/lib/app-settings";
 import {
   COURSES_CHANGED_EVENT,
   COURSE_DELETED_EVENT,
@@ -25,6 +26,7 @@ import {
   type Course,
 } from "@/lib/courses";
 import { formatClockShort } from "@/lib/format";
+import { useProgressiveSlice } from "@/lib/use-progressive-slice";
 import { cn } from "@/lib/utils";
 import { trackExternalCourseOpen } from "@/lib/watch-history";
 
@@ -193,17 +195,34 @@ export function HistoryPage() {
     });
   }, [entries, query, dateFilter]);
 
-  const groups = useMemo(() => {
-    const seen = new Set<string>();
-    const list: string[] = [];
-    for (const item of visible) {
-      if (!seen.has(item.group)) {
-        seen.add(item.group);
-        list.push(item.group);
-      }
+  const initialRestoredHistoryCount = useMemo(() => {
+    const savedScroll = readSessionScroll("page:/history") ?? 0;
+    if (savedScroll <= 0) return 0;
+    return Math.ceil((savedScroll + 960) / 110);
+  }, []);
+
+  const {
+    visibleCount: renderedHistoryCount,
+    hasMore: hasMoreHistory,
+    sentinelRef: historySentinelRef,
+  } = useProgressiveSlice({
+    total: visible.length,
+    initialCount: 30,
+    step: 30,
+    minVisibleCount: initialRestoredHistoryCount,
+    resetKey: `${dateFilter}|${query.trim().toLowerCase()}`,
+  });
+
+  const groupedVisible = useMemo(() => {
+    const slice = visible.slice(0, renderedHistoryCount);
+    const map = new Map<string, HistoryEntry[]>();
+    for (const item of slice) {
+      const bucket = map.get(item.group);
+      if (bucket) bucket.push(item);
+      else map.set(item.group, [item]);
     }
-    return list;
-  }, [visible]);
+    return Array.from(map.entries());
+  }, [renderedHistoryCount, visible]);
 
   const removeEntry = async (id: string) => {
     const prev = entries;
@@ -291,10 +310,7 @@ export function HistoryPage() {
       </div>
 
       {isLoading ? (
-        <div className="mt-16 flex items-center justify-center py-16 text-sm text-muted-foreground">
-          <Loader2 className="mr-2 size-4 animate-spin" />
-          Loading history…
-        </div>
+        <HistoryListSkeleton />
       ) : visible.length === 0 ? (
         <div className="mt-16 flex flex-col items-center rounded-xl bg-secondary/40 px-6 py-16 text-center">
           <History className="size-10 text-muted-foreground" strokeWidth={1.5} />
@@ -322,27 +338,28 @@ export function HistoryPage() {
         </div>
       ) : (
         <div className="mt-4 flex flex-col gap-6">
-          {groups.map((group) => {
-            const items = visible.filter((entry) => entry.group === group);
-            if (!items.length) return null;
-            return (
-              <section key={group} aria-label={group}>
-                <h2 className="px-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                  {group}
-                </h2>
-                <div className="mt-2 flex flex-col gap-1">
-                  {items.map((entry) => (
-                    <HistoryRow
-                      key={entry.id}
-                      entry={entry}
-                      course={courseMap.get(entry.courseId)}
-                      onRemove={() => void removeEntry(entry.id)}
-                    />
-                  ))}
-                </div>
-              </section>
-            );
-          })}
+          {groupedVisible.map(([group, items]) => (
+            <section key={group} aria-label={group}>
+              <h2 className="px-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                {group}
+              </h2>
+              <div className="mt-2 flex flex-col gap-1">
+                {items.map((entry) => (
+                  <HistoryRow
+                    key={entry.id}
+                    entry={entry}
+                    course={courseMap.get(entry.courseId)}
+                    onRemove={() => void removeEntry(entry.id)}
+                  />
+                ))}
+              </div>
+            </section>
+          ))}
+          {hasMoreHistory && (
+            <div ref={historySentinelRef}>
+              <HistoryRowsSkeleton count={Math.min(3, visible.length - renderedHistoryCount)} />
+            </div>
+          )}
         </div>
       )}
     </div>

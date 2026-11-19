@@ -1,8 +1,9 @@
-import { memo, useEffect, useRef, useState } from "react";
+import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Link } from "@tanstack/react-router";
 import { Clock, CornerDownLeft, Maximize2, Pencil, Trash2 } from "lucide-react";
 
 import { RichNoteHtmlContent, RichNoteSurface } from "@/components/notes/rich-note-surface";
+import { Skeleton } from "@/components/ui/skeleton";
 import { getArtboardAccentVar } from "@/components/canvas/canvas-tokens";
 import { formatTimestamp } from "@/lib/course-lessons";
 import { hasMeaningfulHtmlContent } from "@/lib/course-notes";
@@ -263,7 +264,21 @@ function ImageCardBody({
   onOpenLightbox: (src: string) => void;
 }) {
   const resolvedUrl = useMediaUrl(card.imageSrc);
+  const imgRef = useRef<HTMLImageElement>(null);
+  const [loadedUrl, setLoadedUrl] = useState<string | null>(null);
+  const [erroredUrl, setErroredUrl] = useState<string | null>(null);
   const [draft, setDraft] = useState(card.caption ?? "");
+
+  const isImgLoaded = Boolean(resolvedUrl && loadedUrl === resolvedUrl);
+  const isImgErrored = Boolean(resolvedUrl && erroredUrl === resolvedUrl);
+
+  useLayoutEffect(() => {
+    if (!resolvedUrl) return;
+    const img = imgRef.current;
+    if (img && img.complete && img.naturalWidth > 0) {
+      setLoadedUrl(resolvedUrl);
+    }
+  }, [resolvedUrl]);
 
   useEffect(() => {
     setDraft(card.caption ?? "");
@@ -285,15 +300,28 @@ function ImageCardBody({
           onOpenLightbox(resolvedUrl);
         }}
       >
-        {resolvedUrl ? (
-          <img
-            src={resolvedUrl}
-            alt={card.caption || "Canvas image"}
-            draggable={false}
-            className="size-full select-none object-contain"
-          />
+        {resolvedUrl && !isImgErrored ? (
+          <>
+            {!isImgLoaded && <Skeleton className="absolute inset-0 rounded-none" />}
+            <img
+              ref={imgRef}
+              src={resolvedUrl}
+              alt={card.caption || "Canvas image"}
+              draggable={false}
+              loading="lazy"
+              decoding="async"
+              onLoad={() => setLoadedUrl(resolvedUrl)}
+              onError={() => setErroredUrl(resolvedUrl)}
+              className={cn(
+                "size-full select-none object-contain transition-opacity duration-200",
+                isImgLoaded ? "opacity-100" : "opacity-0",
+              )}
+            />
+          </>
+        ) : isImgErrored ? (
+          <span className="text-xs text-muted-foreground">Image unavailable</span>
         ) : (
-          <span className="text-xs text-muted-foreground">Loading image…</span>
+          <Skeleton className="size-full rounded-none" />
         )}
         {resolvedUrl && (
           <button
@@ -566,6 +594,13 @@ export const CanvasCardView = memo(function CanvasCardView({
             ? `color-mix(in oklch, ${accentVar} 38%, var(--border))`
             : undefined,
       }}
+      onMouseDown={(e) => {
+        if (pointerEventsDisabled || isEditing || editingCaption || e.button !== 0) return;
+        const targetEl = e.target as HTMLElement | null;
+        if (targetEl?.closest("input, a, button")) return;
+        // Prevent native browser text/image range selection when clicking or dragging a non-editing card.
+        e.preventDefault();
+      }}
       onPointerDown={(e) => {
         if (pointerEventsDisabled) return;
         if (e.button === 1) return;
@@ -651,6 +686,7 @@ export const CanvasCardView = memo(function CanvasCardView({
       }}
       className={cn(
         "group/card absolute left-0 top-0 flex flex-col rounded-lg text-card-foreground transition-[box-shadow,border-color] duration-150",
+        !isEditing && !editingCaption && "select-none",
         !isImage && "canvas-card-note",
         isTextOnly
           ? selected || isEditing
@@ -839,7 +875,8 @@ export const CanvasCardView = memo(function CanvasCardView({
 
           <RichNoteHtmlContent
             html={card.htmlContent || "<p></p>"}
-            className={cn("select-none", isTextOnly && "text-base font-medium leading-[1.6]")}
+            selectable={false}
+            className={cn(isTextOnly && "text-base font-medium leading-[1.6]")}
             onImageClick={(src) => onOpenLightbox(src, card)}
             onHtmlChange={onCommitHtml ? (nextHtml) => onCommitHtml(card.id, nextHtml) : undefined}
           />

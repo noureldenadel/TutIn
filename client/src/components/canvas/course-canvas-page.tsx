@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { CanvasArtboard } from "@/components/canvas/canvas-artboard";
@@ -7,16 +7,25 @@ import {
   CanvasContextMenu,
   type CanvasContextMenuTarget,
 } from "@/components/canvas/canvas-context-menu";
+import { CanvasDotGrid } from "@/components/canvas/canvas-dot-grid";
 import { CanvasEdgesLayer } from "@/components/canvas/canvas-edges";
 import { CanvasHud } from "@/components/canvas/canvas-hud";
 import { CanvasInkLayer } from "@/components/canvas/canvas-ink-layer";
 import { CanvasNotesDrawer } from "@/components/canvas/canvas-notes-drawer";
 import type { CanvasToolMode } from "@/components/canvas/canvas-tokens";
-import { ImageLightboxModal } from "@/components/notes/image-lightbox-modal";
+import { CanvasSkeleton } from "@/components/ui/skeleton";
+import {
+  readAppSettings,
+  SETTINGS_CHANGED_EVENT,
+  writeAppSettings,
+  type CanvasArtboardCardLayout,
+  type CanvasBoardLayoutMode,
+} from "@/lib/app-settings";
 import type { Course } from "@/lib/courses";
 import {
   applyCardDropMembership,
   applyCardHeightUpdate,
+  applyVideoArtboardTintPolicy,
   CANVAS_ARTBOARD_MIN_HEIGHT,
   CANVAS_ARTBOARD_MIN_WIDTH,
   CANVAS_CARD_WIDTH,
@@ -26,6 +35,7 @@ import {
   CANVAS_MIN_ZOOM,
   cloneCanvasSelectionItems,
   collectCanvasSelectionItems,
+  computeFitViewport,
   createCanvasClipboardPayload,
   createCanvasId,
   estimateVideoNoteCardHeight,
@@ -59,6 +69,7 @@ import {
   type CanvasCard,
   type CanvasClipboardPayload,
   type CanvasGroup,
+  type CanvasLayoutOptions,
   type CanvasSide,
   type CanvasStroke,
   type CanvasStrokeColorToken,
@@ -192,6 +203,15 @@ function isEditableElement(target: EventTarget | null): boolean {
   return Boolean(target.closest('input, textarea, select, [contenteditable="true"]'));
 }
 
+const CANVAS_CARD_CULL_THRESHOLD = 36;
+const CANVAS_VIEWPORT_OVERSCAN_PX = 700;
+
+const LazyImageLightboxModal = lazy(() =>
+  import("@/components/notes/image-lightbox-modal").then((m) => ({
+    default: m.ImageLightboxModal,
+  })),
+);
+
 export function CourseCanvasPage({ course }: { course: Course }) {
   const courseId = String(course.id);
   const [lessons, setLessons] = useState<CourseLessonItem[]>(() => getCourseLessons(courseId));
@@ -209,6 +229,36 @@ export function CourseCanvasPage({ course }: { course: Course }) {
   } | null>(null);
   const [isZoomDragging, setIsZoomDragging] = useState(false);
 
+  const [layoutOptions, setLayoutOptions] = useState<CanvasLayoutOptions>(() => {
+    const s = readAppSettings();
+    return {
+      boardLayout: s.canvasBoardLayout,
+      cardLayout: s.canvasCardLayout,
+      colorByModule: s.canvasColorByModule,
+    };
+  });
+  const layoutOptionsRef = useRef(layoutOptions);
+  layoutOptionsRef.current = layoutOptions;
+
+  useEffect(() => {
+    const syncLayoutSettings = () => {
+      const s = readAppSettings();
+      setLayoutOptions((prev) =>
+        prev.boardLayout === s.canvasBoardLayout &&
+        prev.cardLayout === s.canvasCardLayout &&
+        prev.colorByModule === s.canvasColorByModule
+          ? prev
+          : {
+              boardLayout: s.canvasBoardLayout,
+              cardLayout: s.canvasCardLayout,
+              colorByModule: s.canvasColorByModule,
+            },
+      );
+    };
+    window.addEventListener(SETTINGS_CHANGED_EVENT, syncLayoutSettings);
+    return () => window.removeEventListener(SETTINGS_CHANGED_EVENT, syncLayoutSettings);
+  }, []);
+
   const [notes, setNotes] = useState<NoteItem[]>(() => getCourseNotes(courseId));
   const [canvasState, setCanvasState] = useState<CourseCanvasState>(() =>
     reconcileCanvasWithNotes(
@@ -216,6 +266,8 @@ export function CourseCanvasPage({ course }: { course: Course }) {
       getCourseNotes(courseId),
       lessons,
       courseId,
+      0,
+      layoutOptions,
     ),
   );
 
@@ -244,6 +296,13 @@ export function CourseCanvasPage({ course }: { course: Course }) {
   }, []);
 
   // Interaction & UI state
+  const [isHydrating, setIsHydrating] = useState(
+    () => canvasState.groups.length === 0 && canvasState.cards.length === 0,
+  );
+  const [containerSize, setContainerSize] = useState(() => ({
+    width: typeof window !== "undefined" ? window.innerWidth : 1440,
+    height: typeof window !== "undefined" ? window.innerHeight : 900,
+  }));
   const [tool, setTool] = useState<CanvasToolMode>("select");
   const [strokeColor, setStrokeColor] = useState<CanvasStrokeColorToken>("ink");
   const [penSize, setPenSize] = useState(5);
@@ -264,6 +323,7 @@ export function CourseCanvasPage({ course }: { course: Course }) {
     Boolean(sharedCanvasClipboard),
   );
   const lastPointerWorldRef = useRef<{ x: number; y: number } | null>(null);
+  const suppressCardClickUntilRef = useRef(0);
   const [marqueeRect, setMarqueeRect] = useState<{
     x: number;
     y: number;
@@ -354,10 +414,31 @@ export function CourseCanvasPage({ course }: { course: Course }) {
     erasedAny: boolean;
   } | null>(null);
 
+  // Track canvas container dimensions for viewport-frustum lazy card mounting
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const update = () => {
+      const rect = el.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) return;
+      setContainerSize((prev) =>
+        Math.abs(prev.width - rect.width) < 2 && Math.abs(prev.height - rect.height) < 2
+          ? prev
+          : { width: rect.width, height: rect.height },
+      );
+    };
+    update();
+    if (typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
   // Hydrate real curriculum, notes, and Canvas v2 state from SQLite + .tutin/canvas.json
   useEffect(() => {
     let cancelled = false;
     canvasHydratedRef.current = false;
+    setIsHydrating(!loadCourseCanvas(courseId, []));
     undoStackRef.current = [];
     redoStackRef.current = [];
     setUndoStack([]);
@@ -378,18 +459,36 @@ export function CourseCanvasPage({ course }: { course: Course }) {
         if (cancelled) return;
         setLessons(curr.lessons);
         setNotes(loadedNotes);
-        const reconciled = reconcileCanvasWithNotes(
+        const isFreshCanvas =
+          !loadedCanvas || (loadedCanvas.groups.length === 0 && loadedCanvas.cards.length === 0);
+        const reconciledBase = reconcileCanvasWithNotes(
           loadedCanvas,
           loadedNotes,
           curr.lessons,
           courseId,
+          0,
+          layoutOptionsRef.current,
         );
+        const rect = containerRef.current?.getBoundingClientRect();
+        const reconciled =
+          isFreshCanvas &&
+          rect &&
+          rect.width > 0 &&
+          rect.height > 0 &&
+          (reconciledBase.groups.length > 0 || reconciledBase.cards.length > 0)
+            ? {
+                ...reconciledBase,
+                viewport: computeFitViewport(reconciledBase, rect.width, rect.height),
+              }
+            : reconciledBase;
         lastSavedSnapshotRef.current = reconciled;
         setCanvasState(reconciled);
         canvasHydratedRef.current = true;
+        setIsHydrating(false);
       } catch (err) {
         console.error("[CourseCanvas] Failed to hydrate from server:", err);
         canvasHydratedRef.current = true;
+        if (!cancelled) setIsHydrating(false);
       }
     })();
 
@@ -410,7 +509,14 @@ export function CourseCanvasPage({ course }: { course: Course }) {
       lastNotesRevisionRef.current += 1;
       setNotes(nextNotes);
       setCanvasState((prev) =>
-        reconcileCanvasWithNotes(prev, nextNotes, lessons, courseId, lastNotesRevisionRef.current),
+        reconcileCanvasWithNotes(
+          prev,
+          nextNotes,
+          lessons,
+          courseId,
+          lastNotesRevisionRef.current,
+          layoutOptionsRef.current,
+        ),
       );
     });
   }, [courseId, lessons]);
@@ -469,6 +575,7 @@ export function CourseCanvasPage({ course }: { course: Course }) {
             pending.cardId,
             estimatedHeight,
             pending.html,
+            layoutOptionsRef.current.cardLayout,
           );
           if (card.type === "video-note" && card.noteId) {
             updateCourseNoteContent(courseId, card.noteId, pending.html, {
@@ -631,12 +738,20 @@ export function CourseCanvasPage({ course }: { course: Course }) {
     [zoomAroundScreenPoint],
   );
 
-  const resetView = useCallback(() => {
+  const fitToView = useCallback(() => {
+    const rect = containerRef.current?.getBoundingClientRect();
+    if (!rect) return;
     setCanvasState((prev) => ({
       ...prev,
-      viewport: { x: 40, y: 30, zoom: 1 },
+      viewport: computeFitViewport(prev, rect.width, rect.height),
     }));
   }, []);
+
+  const resetZoom100 = useCallback(() => {
+    const rect = containerRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    zoomAroundScreenPoint(rect.left + rect.width / 2, rect.top + rect.height / 2, 1);
+  }, [zoomAroundScreenPoint]);
 
   const focusCard = useCallback((cardId: string) => {
     const rect = containerRef.current?.getBoundingClientRect();
@@ -682,7 +797,15 @@ export function CourseCanvasPage({ course }: { course: Course }) {
       if (updateLayout) {
         if (!contentChanged) return;
         const estimatedHeight = estimateVideoNoteCardHeight(html, 0, card.width, card.type);
-        setCanvasState((prev) => applyCardHeightUpdate(prev, cardId, estimatedHeight, html));
+        setCanvasState((prev) =>
+          applyCardHeightUpdate(
+            prev,
+            cardId,
+            estimatedHeight,
+            html,
+            layoutOptionsRef.current.cardLayout,
+          ),
+        );
       } else if (contentChanged) {
         const now = Date.now();
         setCanvasState((prev) => ({
@@ -724,6 +847,7 @@ export function CourseCanvasPage({ course }: { course: Course }) {
     }
     editSessionRef.current = null;
     setEditingCardId(null);
+    window.getSelection()?.removeAllRanges();
   }, [persistCardDraft]);
 
   const startEditingCard = useCallback(
@@ -910,6 +1034,74 @@ export function CourseCanvasPage({ course }: { course: Course }) {
     insertCustomArtboardAt();
   }, [insertCustomArtboardAt]);
 
+  const applyBoardArrangement = useCallback(
+    (
+      transform: (prev: CourseCanvasState, opts: CanvasLayoutOptions) => CourseCanvasState,
+      opts: CanvasLayoutOptions,
+    ) => {
+      commitPendingEdit();
+      const rect = containerRef.current?.getBoundingClientRect();
+      applyWithUndo((prev) => {
+        const arranged = transform(prev, opts);
+        if (!rect) return arranged;
+        return {
+          ...arranged,
+          viewport: computeFitViewport(arranged, rect.width, rect.height),
+        };
+      });
+    },
+    [applyWithUndo, commitPendingEdit],
+  );
+
+  const handleChangeBoardLayout = useCallback(
+    (boardLayout: CanvasBoardLayoutMode) => {
+      const nextOpts: CanvasLayoutOptions = { ...layoutOptionsRef.current, boardLayout };
+      layoutOptionsRef.current = nextOpts;
+      setLayoutOptions(nextOpts);
+      writeAppSettings({ ...readAppSettings(), canvasBoardLayout: boardLayout });
+      applyBoardArrangement((prev, opts) => tidyAllCanvasArtboards(prev, lessons, opts), nextOpts);
+    },
+    [applyBoardArrangement, lessons],
+  );
+
+  const handleChangeCardLayout = useCallback(
+    (cardLayout: CanvasArtboardCardLayout) => {
+      const nextOpts: CanvasLayoutOptions = { ...layoutOptionsRef.current, cardLayout };
+      layoutOptionsRef.current = nextOpts;
+      setLayoutOptions(nextOpts);
+      writeAppSettings({ ...readAppSettings(), canvasCardLayout: cardLayout });
+      applyBoardArrangement((prev, opts) => tidyAllCanvasArtboards(prev, lessons, opts), nextOpts);
+    },
+    [applyBoardArrangement, lessons],
+  );
+
+  const handleToggleColorByModule = useCallback(
+    (colorByModule: boolean) => {
+      const nextOpts: CanvasLayoutOptions = { ...layoutOptionsRef.current, colorByModule };
+      layoutOptionsRef.current = nextOpts;
+      setLayoutOptions(nextOpts);
+      writeAppSettings({ ...readAppSettings(), canvasColorByModule: colorByModule });
+      applyWithUndo((prev) => applyVideoArtboardTintPolicy(prev, lessons, colorByModule));
+    },
+    [applyWithUndo, lessons],
+  );
+
+  const handleTidyAll = useCallback(() => {
+    applyBoardArrangement(
+      (prev, opts) => tidyAllCanvasArtboards(prev, lessons, opts),
+      layoutOptionsRef.current,
+    );
+    toast("Layout tidied");
+  }, [applyBoardArrangement, lessons]);
+
+  const handleResetArrangement = useCallback(() => {
+    applyBoardArrangement(
+      (prev, opts) => resetCanvasArrangement(prev, lessons, opts),
+      layoutOptionsRef.current,
+    );
+    toast("Reset to lectures");
+  }, [applyBoardArrangement, lessons]);
+
   const copySelectionToClipboard = useCallback(
     (groupIds: Iterable<string>, cardIds: Iterable<string>) => {
       const payload = createCanvasClipboardPayload(stateRef.current, groupIds, cardIds);
@@ -1064,7 +1256,9 @@ export function CourseCanvasPage({ course }: { course: Course }) {
       const note = notes.find((n) => n.id === noteId);
       if (!note) return;
 
-      applyWithUndo((prev) => restoreNoteCardToCanvas(prev, note, lessons));
+      applyWithUndo((prev) =>
+        restoreNoteCardToCanvas(prev, note, lessons, layoutOptionsRef.current),
+      );
 
       const cardId =
         stateRef.current.cards.find((c) => c.noteId === noteId)?.id ?? getVideoNoteCardId(noteId);
@@ -1174,7 +1368,9 @@ export function CourseCanvasPage({ course }: { course: Course }) {
 
   const handleReturnCardToOrigin = useCallback(
     (cardId: string) => {
-      applyWithUndo((prev) => returnCardToOriginGroup(prev, cardId, lessons));
+      applyWithUndo((prev) =>
+        returnCardToOriginGroup(prev, cardId, lessons, layoutOptionsRef.current),
+      );
       toast("Returned to lesson artboard");
     },
     [applyWithUndo, lessons],
@@ -1376,6 +1572,9 @@ export function CourseCanvasPage({ course }: { course: Course }) {
         case "g":
           insertCustomArtboard();
           break;
+        case "0":
+          fitToView();
+          break;
       }
     };
 
@@ -1408,6 +1607,7 @@ export function CourseCanvasPage({ course }: { course: Course }) {
     commitPendingEdit,
     connectingFrom,
     deleteSelectionByIds,
+    fitToView,
     handleRedo,
     handleUndo,
     insertCustomArtboard,
@@ -2047,6 +2247,7 @@ export function CourseCanvasPage({ course }: { course: Course }) {
       setDropTargetGroupId(null);
 
       if (gesture.moved) {
+        suppressCardClickUntilRef.current = performance.now() + 200;
         pushHistorySnapshot(gesture.snapshotBefore);
         if (gesture.groupOrigPositions.size === 0 && gesture.cardOrigPositions.size > 0) {
           const movedIds = new Set(gesture.cardOrigPositions.keys());
@@ -2326,7 +2527,9 @@ export function CourseCanvasPage({ course }: { course: Course }) {
 
   const handleTidyGroup = useCallback(
     (groupId: string) => {
-      applyWithUndo((prev) => tidyVideoArtboard(prev, groupId));
+      applyWithUndo((prev) =>
+        tidyVideoArtboard(prev, groupId, layoutOptionsRef.current.cardLayout),
+      );
     },
     [applyWithUndo],
   );
@@ -2358,22 +2561,28 @@ export function CourseCanvasPage({ course }: { course: Course }) {
     });
   }, []);
 
-  const handleSelectCard = useCallback((cardId: string, ev: React.PointerEvent) => {
-    if (ev.shiftKey) {
-      const next = new Set(selectedCardIdsRef.current);
-      if (next.has(cardId)) next.delete(cardId);
-      else next.add(cardId);
-      selectedCardIdsRef.current = next;
-      setSelectedCardIds(next);
-    } else if (!selectedCardIdsRef.current.has(cardId)) {
-      const next = new Set([cardId]);
-      selectedCardIdsRef.current = next;
-      setSelectedCardIds(next);
-      selectedGroupIdsRef.current = new Set();
-      setSelectedGroupIds(new Set());
-    }
-    setSelectedEdgeId(null);
-  }, []);
+  const handleSelectCard = useCallback(
+    (cardId: string, ev: React.PointerEvent) => {
+      if (editingCardIdRef.current && editingCardIdRef.current !== cardId) {
+        commitPendingEdit();
+      }
+      if (ev.shiftKey) {
+        const next = new Set(selectedCardIdsRef.current);
+        if (next.has(cardId)) next.delete(cardId);
+        else next.add(cardId);
+        selectedCardIdsRef.current = next;
+        setSelectedCardIds(next);
+      } else if (!selectedCardIdsRef.current.has(cardId)) {
+        const next = new Set([cardId]);
+        selectedCardIdsRef.current = next;
+        setSelectedCardIds(next);
+        selectedGroupIdsRef.current = new Set();
+        setSelectedGroupIds(new Set());
+      }
+      setSelectedEdgeId(null);
+    },
+    [commitPendingEdit],
+  );
 
   const handleStartCardResize = useCallback(
     (cardId: string, ev: React.PointerEvent, axis?: "both" | "width" | "height") =>
@@ -2383,7 +2592,9 @@ export function CourseCanvasPage({ course }: { course: Course }) {
 
   const handleFitCardDimensions = useCallback(
     (cardId: string, nextWidth: number, nextHeight: number) => {
-      applyWithUndo((prev) => resizeCardToFit(prev, cardId, nextWidth, nextHeight));
+      applyWithUndo((prev) =>
+        resizeCardToFit(prev, cardId, nextWidth, nextHeight, layoutOptionsRef.current.cardLayout),
+      );
     },
     [applyWithUndo],
   );
@@ -2394,7 +2605,15 @@ export function CourseCanvasPage({ course }: { course: Course }) {
   );
 
   const handleMeasuredCardHeightGrow = useCallback((cardId: string, measuredHeight: number) => {
-    setCanvasState((prev) => applyCardHeightUpdate(prev, cardId, measuredHeight));
+    setCanvasState((prev) =>
+      applyCardHeightUpdate(
+        prev,
+        cardId,
+        measuredHeight,
+        undefined,
+        layoutOptionsRef.current.cardLayout,
+      ),
+    );
   }, []);
 
   const handleDeleteSingleCard = useCallback(
@@ -2463,6 +2682,7 @@ export function CourseCanvasPage({ course }: { course: Course }) {
 
   const handleOpenCardLightbox = useCallback(
     (src: string, card: CanvasCard) => {
+      if (performance.now() < suppressCardClickUntilRef.current) return;
       setLightboxImage({
         src,
         label:
@@ -2501,6 +2721,42 @@ export function CourseCanvasPage({ course }: { course: Course }) {
     () => canvasState.cards.filter((c) => !c.groupId || !collapsedGroupIds.has(c.groupId)),
     [canvasState.cards, collapsedGroupIds],
   );
+
+  // Lazily mount only viewport-adjacent cards on large boards while keeping selected/editing/connecting cards live
+  const mountedCards = useMemo(() => {
+    if (visibleCards.length <= CANVAS_CARD_CULL_THRESHOLD) return visibleCards;
+    const { x, y, zoom } = canvasState.viewport;
+    const safeZoom = Math.max(0.05, zoom);
+    const pad = CANVAS_VIEWPORT_OVERSCAN_PX / safeZoom;
+    const minWorldX = -x / safeZoom - pad;
+    const minWorldY = -y / safeZoom - pad;
+    const maxWorldX = (containerSize.width - x) / safeZoom + pad;
+    const maxWorldY = (containerSize.height - y) / safeZoom + pad;
+
+    return visibleCards.filter((card) => {
+      if (
+        card.id === editingCardId ||
+        selectedCardIds.has(card.id) ||
+        connectingFrom?.cardId === card.id
+      ) {
+        return true;
+      }
+      return (
+        card.x + card.width >= minWorldX &&
+        card.x <= maxWorldX &&
+        card.y + card.height >= minWorldY &&
+        card.y <= maxWorldY
+      );
+    });
+  }, [
+    canvasState.viewport,
+    connectingFrom?.cardId,
+    containerSize.height,
+    containerSize.width,
+    editingCardId,
+    selectedCardIds,
+    visibleCards,
+  ]);
 
   const snapConnectTarget = useMemo(() => {
     if (!connectingFrom) return null;
@@ -2605,16 +2861,17 @@ export function CourseCanvasPage({ course }: { course: Course }) {
           void insertImageFileAt(file, wp.x + idx * 36, wp.y + idx * 36);
         });
       }}
-      style={{
-        backgroundImage: "radial-gradient(circle, var(--border) 1px, transparent 1px)",
-        backgroundSize: `${24 * canvasState.viewport.zoom}px ${24 * canvasState.viewport.zoom}px`,
-        backgroundPosition: `${canvasState.viewport.x}px ${canvasState.viewport.y}px`,
-      }}
       className={cn(
         "relative h-dvh w-full overflow-hidden bg-shell/65 select-none touch-none",
         stageCursor,
       )}
     >
+      <CanvasDotGrid
+        x={canvasState.viewport.x}
+        y={canvasState.viewport.y}
+        zoom={canvasState.viewport.zoom}
+      />
+
       {/* Hidden image upload input */}
       <input
         ref={fileInputRef}
@@ -2676,6 +2933,7 @@ export function CourseCanvasPage({ course }: { course: Course }) {
         <CanvasEdgesLayer
           edges={canvasState.edges}
           cards={visibleCards}
+          zoom={canvasState.viewport.zoom}
           selectedEdgeId={selectedEdgeId}
           connectingFrom={connectingFrom}
           connectingSnapTarget={snapConnectTarget}
@@ -2707,7 +2965,7 @@ export function CourseCanvasPage({ course }: { course: Course }) {
 
         {/* 3. Cards Layer */}
         <div className={stageInterceptsCards ? "pointer-events-none" : "pointer-events-auto"}>
-          {visibleCards.map((card) => {
+          {mountedCards.map((card) => {
             const lessonItem =
               card.originLessonIdx !== undefined ? lessons[card.originLessonIdx] : undefined;
             const lessonCode =
@@ -2797,6 +3055,7 @@ export function CourseCanvasPage({ course }: { course: Course }) {
         tool={tool}
         strokeColor={strokeColor}
         strokeSize={tool === "highlighter" ? highlighterSize : penSize}
+        layoutOptions={layoutOptions}
         onSelectTool={(nextTool) => {
           setTool(nextTool);
           if (nextTool !== "connect") setConnectingFrom(null);
@@ -2808,13 +3067,15 @@ export function CourseCanvasPage({ course }: { course: Course }) {
         }}
         onUndo={handleUndo}
         onRedo={handleRedo}
-        onResetArrangement={() => {
-          applyWithUndo((prev) => resetCanvasArrangement(prev, lessons));
-          toast("Video cards reset to artboards");
-        }}
+        onChangeBoardLayout={handleChangeBoardLayout}
+        onChangeCardLayout={handleChangeCardLayout}
+        onToggleColorByModule={handleToggleColorByModule}
+        onTidyAll={handleTidyAll}
+        onResetArrangement={handleResetArrangement}
         onZoomIn={() => centerViewportZoom(1.18)}
         onZoomOut={() => centerViewportZoom(0.84)}
-        onResetView={resetView}
+        onResetZoom={resetZoom100}
+        onFitToView={fitToView}
         onToggleDrawer={() => setDrawerOpen((v) => !v)}
         onTriggerImageUpload={() => fileInputRef.current?.click()}
         onCreateArtboard={insertCustomArtboard}
@@ -2879,7 +3140,8 @@ export function CourseCanvasPage({ course }: { course: Course }) {
           onReturnCardsToOrigin={(cardIds) => {
             applyWithUndo((prev) =>
               cardIds.reduce(
-                (nextState, id) => returnCardToOriginGroup(nextState, id, lessons),
+                (nextState, id) =>
+                  returnCardToOriginGroup(nextState, id, lessons, layoutOptionsRef.current),
                 prev,
               ),
             );
@@ -2904,14 +3166,15 @@ export function CourseCanvasPage({ course }: { course: Course }) {
           }}
           onTidyGroups={(groupIds) => {
             applyWithUndo((prev) =>
-              groupIds.reduce((nextState, id) => tidyVideoArtboard(nextState, id), prev),
+              groupIds.reduce(
+                (nextState, id) =>
+                  tidyVideoArtboard(nextState, id, layoutOptionsRef.current.cardLayout),
+                prev,
+              ),
             );
             toast(groupIds.length > 1 ? "Artboards tidied" : "Artboard tidied");
           }}
-          onTidyAll={() => {
-            applyWithUndo((prev) => tidyAllCanvasArtboards(prev));
-            toast("Canvas tidied");
-          }}
+          onTidyAll={handleTidyAll}
           onSetGroupsCollapsed={(groupIds, collapsed) => {
             const targetSet = new Set(groupIds);
             applyWithUndo((prev) => ({
@@ -2933,14 +3196,23 @@ export function CourseCanvasPage({ course }: { course: Course }) {
         />
       )}
 
+      {/* Hydration Skeleton Overlay (keeps containerRef mounted for exact Fit-to-View sizing) */}
+      {isHydrating && canvasState.groups.length === 0 && canvasState.cards.length === 0 && (
+        <div className="pointer-events-none absolute inset-0 z-30">
+          <CanvasSkeleton />
+        </div>
+      )}
+
       {/* Lightbox Image Preview */}
       {lightboxImage && (
-        <ImageLightboxModal
-          src={lightboxImage.src}
-          alt={lightboxImage.label}
-          downloadName="canvas-image.png"
-          onClose={() => setLightboxImage(null)}
-        />
+        <Suspense fallback={null}>
+          <LazyImageLightboxModal
+            src={lightboxImage.src}
+            alt={lightboxImage.label}
+            downloadName="canvas-image.png"
+            onClose={() => setLightboxImage(null)}
+          />
+        </Suspense>
       )}
     </div>
   );

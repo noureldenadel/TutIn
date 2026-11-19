@@ -87,6 +87,7 @@ import {
 import { SyncPreviewModal } from "@/components/modals/sync-preview-modal";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { CurriculumSkeleton } from "@/components/ui/skeleton";
 import {
   Dialog,
   DialogContent,
@@ -876,9 +877,7 @@ export function CurriculumManager({ course: initialCourse }: { course: Course })
       {/* Curriculum List */}
       <div className="mt-5 space-y-4">
         {loading ? (
-          <div className="flex items-center justify-center rounded-xl bg-card py-16 text-sm text-muted-foreground shadow-card">
-            <Loader2 className="mr-2 size-4 animate-spin" /> Loading curriculum…
-          </div>
+          <CurriculumSkeleton moduleCount={3} />
         ) : modules.length === 0 ? (
           <div className="rounded-xl bg-card px-6 py-12 text-center shadow-card">
             <p className="text-sm text-muted-foreground">No modules yet.</p>

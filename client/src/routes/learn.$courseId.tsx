@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { Loader2 } from "lucide-react";
 import { CoursePlayer } from "@/components/player/course-player";
+import { PlayerSkeleton } from "@/components/ui/skeleton";
 import { useSavedCourseQuery } from "@/lib/courses";
 
 interface LearnSearch {
@@ -24,6 +24,7 @@ export const Route = createFileRoute("/learn/$courseId")({
         rawTab === "playlist" || rawTab === "notes" || rawTab === "transcript" ? rawTab : undefined,
     };
   },
+  pendingComponent: PlayerSkeleton,
   component: LearnPage,
 });
 
@@ -33,12 +34,7 @@ function LearnPage() {
   const { course, isLoading } = useSavedCourseQuery(courseId);
 
   if (isLoading && !course) {
-    return (
-      <div className="flex h-full items-center justify-center p-10 text-muted-foreground">
-        <Loader2 className="mr-2 size-4 animate-spin" />
-        Loading course…
-      </div>
-    );
+    return <PlayerSkeleton />;
   }
 
   if (!course) {

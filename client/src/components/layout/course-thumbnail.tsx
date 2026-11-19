@@ -1,4 +1,5 @@
-import { useMemo } from "react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import {
   generateThumbnailSvg,
@@ -18,21 +19,44 @@ export function CourseThumbnail({ course, className }: CourseThumbnailProps) {
     return getCourseCoverUrl(course);
   }, [course]);
 
+  const imgRef = useRef<HTMLImageElement>(null);
+  const [loadedUrl, setLoadedUrl] = useState<string | null>(null);
+  const [erroredUrl, setErroredUrl] = useState<string | null>(null);
+
+  const isLoaded = Boolean(coverUrl && loadedUrl === coverUrl);
+  const isErrored = Boolean(coverUrl && erroredUrl === coverUrl);
+
+  useLayoutEffect(() => {
+    if (!coverUrl) return;
+    const img = imgRef.current;
+    if (img && img.complete && img.naturalWidth > 0) {
+      setLoadedUrl(coverUrl);
+    }
+  }, [coverUrl]);
+
   const seed = useMemo(() => getCourseSeed(course), [course]);
 
   const hue = useMemo(() => getCourseHue(seed, course.thumbnailHue), [seed, course.thumbnailHue]);
 
   const { svg } = useMemo(() => generateThumbnailSvg(seed, hue), [seed, hue]);
 
-  if (coverUrl) {
+  if (coverUrl && !isErrored) {
     return (
       <div className={cn("relative size-full select-none overflow-hidden bg-muted", className)}>
+        {!isLoaded && <Skeleton className="absolute inset-0 rounded-none" />}
         <img
+          ref={imgRef}
           src={coverUrl}
           alt={course.title}
           draggable={false}
-          className="size-full select-none object-cover"
           loading="lazy"
+          decoding="async"
+          onLoad={() => setLoadedUrl(coverUrl)}
+          onError={() => setErroredUrl(coverUrl)}
+          className={cn(
+            "size-full select-none object-cover transition-opacity duration-200",
+            isLoaded ? "opacity-100" : "opacity-0",
+          )}
         />
       </div>
     );

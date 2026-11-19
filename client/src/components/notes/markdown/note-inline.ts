@@ -271,14 +271,7 @@ function getInlineAtCaretForOvertype(
 function stepOutAfterInline(editor: HTMLElement, inlineEl: HTMLElement): void {
   const parent = inlineEl.parentNode;
   if (!parent) return;
-  let next = inlineEl.nextSibling;
-  while (
-    next &&
-    next.nodeType === Node.ELEMENT_NODE &&
-    (next as HTMLElement).hasAttribute("data-ghost")
-  ) {
-    next = next.nextSibling;
-  }
+  const next = inlineEl.nextSibling;
 
   if (next && next.nodeType === Node.TEXT_NODE) {
     const tn = next as Text;
@@ -1061,14 +1054,7 @@ function findOuterInlineAtEdge(
 function moveCaretAfterInline(inlineEl: HTMLElement): boolean {
   const parent = inlineEl.parentNode;
   if (!parent) return false;
-  let next = inlineEl.nextSibling;
-  while (
-    next &&
-    next.nodeType === Node.ELEMENT_NODE &&
-    (next as HTMLElement).hasAttribute("data-ghost")
-  ) {
-    next = next.nextSibling;
-  }
+  const next = inlineEl.nextSibling;
 
   if (next && next.nodeType === Node.TEXT_NODE) {
     const tn = next as Text;
