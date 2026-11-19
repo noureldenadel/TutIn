@@ -276,7 +276,8 @@ export function normalizeSubtitleSources(rawSources = [], courseLanguage = 'en')
             filePath: raw.filePath,
             format: raw.format || 'vtt',
             is_master: Boolean(raw.is_master),
-            is_ai_source: Boolean(raw.is_ai_source)
+            is_ai_source: Boolean(raw.is_ai_source),
+            ...(raw.meta && typeof raw.meta === 'object' ? { meta: raw.meta } : {})
         }
 
         if (existingIdx >= 0) {
@@ -284,7 +285,10 @@ export function normalizeSubtitleSources(rawSources = [], courseLanguage = 'en')
                 ...normalized[existingIdx],
                 ...entry,
                 is_master: normalized[existingIdx].is_master || entry.is_master,
-                is_ai_source: normalized[existingIdx].is_ai_source || entry.is_ai_source
+                is_ai_source: normalized[existingIdx].is_ai_source || entry.is_ai_source,
+                ...(entry.meta || normalized[existingIdx].meta
+                    ? { meta: entry.meta || normalized[existingIdx].meta }
+                    : {})
             }
         } else {
             normalized.push(entry)
@@ -354,6 +358,46 @@ export function getCacheFilePath(videoId, lang, origin = 'uploaded', version = 1
     const originSuffix = isGenerated ? '-generated' : (ver > 1 ? `-u${ver}` : '')
     const safeLang = (lang && lang !== 'source') ? `.${lang}` : '.en'
     return path.join(getTranscriptsDir(), `${videoId}${originSuffix}${safeLang}.json`)
+}
+
+/**
+ * Derive the portable `.meta.json` sidecar path for a subtitle file in `.tutin/subtitles/`
+ * (or AppData cache for cloud courses).
+ */
+export function getSubtitleMetaFilePath(subtitleFilePath) {
+    if (!subtitleFilePath || typeof subtitleFilePath !== 'string') return null
+    return subtitleFilePath.replace(/\.(?:vtt|srt|ass|ssa|json)$/i, '.meta.json')
+}
+
+export function saveSubtitleTrackMeta(subtitleFilePath, metaPayload) {
+    const metaPath = getSubtitleMetaFilePath(subtitleFilePath)
+    if (!metaPath || !metaPayload || typeof metaPayload !== 'object') return null
+    try {
+        ensureDir(path.dirname(metaPath), 'subtitles_meta')
+        fs.writeFileSync(metaPath, JSON.stringify(metaPayload, null, 2), 'utf8')
+        return metaPath
+    } catch (err) {
+        console.warn('[CourseAssets] Failed to write subtitle track metadata:', err.message)
+        return null
+    }
+}
+
+export function loadSubtitleTrackMeta(subtitleFilePath) {
+    const metaPath = getSubtitleMetaFilePath(subtitleFilePath)
+    if (!metaPath || !fs.existsSync(metaPath)) return null
+    try {
+        return JSON.parse(fs.readFileSync(metaPath, 'utf8'))
+    } catch {
+        return null
+    }
+}
+
+export function deleteSubtitleTrackMeta(subtitleFilePath) {
+    const metaPath = getSubtitleMetaFilePath(subtitleFilePath)
+    if (!metaPath) return
+    try {
+        if (fs.existsSync(metaPath)) fs.unlinkSync(metaPath)
+    } catch { }
 }
 
 // ── Caption Save & Load ─────────────────────────────────────────

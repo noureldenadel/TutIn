@@ -839,7 +839,7 @@ export const CanvasCardView = memo(function CanvasCardView({
 
           <RichNoteHtmlContent
             html={card.htmlContent || "<p></p>"}
-            className={isTextOnly ? "text-base font-medium leading-[1.6]" : undefined}
+            className={cn("select-none", isTextOnly && "text-base font-medium leading-[1.6]")}
             onImageClick={(src) => onOpenLightbox(src, card)}
             onHtmlChange={onCommitHtml ? (nextHtml) => onCommitHtml(card.id, nextHtml) : undefined}
           />

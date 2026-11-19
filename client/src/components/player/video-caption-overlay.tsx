@@ -240,7 +240,7 @@ export function VideoCaptionOverlay({
                 }),
           }}
           className={cn(
-            "pointer-events-none absolute select-none whitespace-pre-line text-center font-sans font-normal leading-[1.46] text-white antialiased",
+            "pointer-events-none absolute select-none whitespace-pre-line text-center font-sans font-normal leading-[1.56] text-white antialiased",
             isDragging
               ? "transition-none"
               : "transition-[left,top,bottom,transform,opacity] duration-200 ease-out",
@@ -261,7 +261,7 @@ export function VideoCaptionOverlay({
               isCueVisible ? "pointer-events-auto" : "pointer-events-none",
               isDragging ? "cursor-grabbing" : "cursor-grab",
               showBackground
-                ? "rounded-[0.2em] bg-[rgba(8,8,8,0.85)] px-[0.42em] py-[0.06em]"
+                ? "rounded-[0.2em] bg-[rgba(8,8,8,0.85)] px-[0.42em] pt-[0.02em] pb-[0.14em]"
                 : "bg-transparent px-[0.2em] [text-shadow:0_1px_3px_rgba(0,0,0,0.92),0_0_6px_rgba(0,0,0,0.85)]",
             )}
           >

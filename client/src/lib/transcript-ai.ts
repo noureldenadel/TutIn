@@ -35,6 +35,13 @@ export interface DubTrackMeta {
   engine?: DubVoiceEngine | undefined;
   bgMode?: DubBackgroundMode | undefined;
   voiceGender?: DubVoiceGender | undefined;
+  ttsModel?: string | null | undefined;
+  backgroundModel?: string | null | undefined;
+  pipeline?: string | null | undefined;
+  generationSeconds?: number | null | undefined;
+  sourceTranscriptFile?: string | null | undefined;
+  transcriptionModel?: string | null | undefined;
+  translationModel?: string | null | undefined;
   generatedAt?: string | null | undefined;
 }
 
@@ -438,12 +445,14 @@ export async function transcribeVideoCaptions(
   }
 
   // 3. Fallback: In-Browser WebGPU / WASM Whisper Worker
+  const browserStartMs = performance.now();
   const browserChunks = await runBrowserWhisperTranscription(
     target.videoId,
     normLang,
     onProgress,
     signal,
   );
+  const browserSeconds = Math.round(((performance.now() - browserStartMs) / 1000) * 10) / 10;
 
   onProgress?.({
     step: "saving",
@@ -457,6 +466,11 @@ export async function transcribeVideoCaptions(
     body: JSON.stringify({
       language: normLang,
       chunks: browserChunks,
+      meta: {
+        pipeline: "Transcribe",
+        generationSeconds: browserSeconds,
+        transcriptionModel: `Whisper (Browser) · ${settings.whisperModel}`,
+      },
     }),
     ...(signal ? { signal } : {}),
   });

@@ -79,7 +79,7 @@ export const CanvasArtboard = memo(function CanvasArtboard({
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [draftTitle, setDraftTitle] = useState(group.title);
   const [edgeHovered, setEdgeHovered] = useState(false);
-  const lastRenameSignalRef = useRef(renameSignal);
+  const lastRenameSignalRef = useRef(0);
 
   useEffect(() => {
     if (renameSignal > 0 && renameSignal !== lastRenameSignalRef.current) {
@@ -118,7 +118,7 @@ export const CanvasArtboard = memo(function CanvasArtboard({
     }
     if (e.button !== 0) return;
     e.stopPropagation();
-    if (!selected) {
+    if (!selected && !e.altKey) {
       // Obsidian-style: clicking an unselected group perimeter selects it without starting a drag.
       onSelect(group.id, e);
       return;
@@ -227,15 +227,18 @@ export const CanvasArtboard = memo(function CanvasArtboard({
             type="text"
             autoFocus
             value={draftTitle}
+            onFocus={(e) => e.currentTarget.select()}
             onPointerDown={(e) => e.stopPropagation()}
             onChange={(e) => setDraftTitle(e.target.value)}
             onBlur={commitTitle}
             onKeyDown={(e) => {
               if (e.key === "Enter") {
                 e.preventDefault();
+                e.stopPropagation();
                 commitTitle();
               } else if (e.key === "Escape") {
                 e.preventDefault();
+                e.stopPropagation();
                 setDraftTitle(group.title);
                 setIsEditingTitle(false);
               }

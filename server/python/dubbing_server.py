@@ -922,6 +922,7 @@ def process_dubbing_job(job_id: str, req: DubRequest):
             # 3A. Fast Neural Voice Engine (Edge-TTS)
             if engine == "neural":
                 voice_id = resolve_edge_voice(target_lang, voice_gender)
+                job["tts_model"] = f"Edge-TTS ({voice_id})"
                 job["step"] = f"Synthesizing neural voice ({voice_id})…"
                 job["progress"] = base_progress
                 synthesized_clips, synthesis_errors = asyncio.run(
@@ -937,6 +938,7 @@ def process_dubbing_job(job_id: str, req: DubRequest):
             # 3B. Zero-Shot Voice Cloning Engine (XTTS-v2 with Course Voice Profile Cache)
             else:
                 xtts_lang = map_xtts_lang(target_lang)
+                job["tts_model"] = "Coqui XTTS-v2"
                 job["step"] = "Loading voice cloning model…"
                 job["progress"] = base_progress
                 load_xtts_model(device_pref)
@@ -1245,6 +1247,7 @@ def submit_dub(req: DubRequest, background_tasks: BackgroundTasks):
         "engine": engine,
         "bg_mode": req.resolved_bg_mode(),
         "voice_gender": req.voiceGender or "male",
+        "tts_model": None,
     }
     background_tasks.add_task(process_dubbing_job, job_id, req)
     return {"job_id": job_id, "status": "queued"}

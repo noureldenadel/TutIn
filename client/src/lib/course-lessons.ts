@@ -4,6 +4,16 @@ import { formatTimestamp, parseTimestampToSeconds } from "@/lib/format";
 
 export { formatTimestamp, parseTimestampToSeconds as parseDurationToSeconds };
 
+export interface SubtitleTrackMeta {
+  pipeline?: string | undefined;
+  generationSeconds?: number | null | undefined;
+  transcriptionModel?: string | null | undefined;
+  translationModel?: string | null | undefined;
+  sourceTrackFile?: string | null | undefined;
+  sourceLanguage?: string | null | undefined;
+  generatedAt?: string | null | undefined;
+}
+
 export interface SubtitleSource {
   id?: string | undefined;
   language?: string | undefined;
@@ -17,6 +27,7 @@ export interface SubtitleSource {
   isDefault?: boolean | undefined;
   is_master?: boolean | undefined;
   is_ai_source?: boolean | undefined;
+  meta?: SubtitleTrackMeta | undefined;
 }
 
 export interface VideoBookmark {

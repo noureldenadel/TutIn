@@ -17,10 +17,16 @@ import type { Course } from "@/lib/courses";
 import {
   applyCardDropMembership,
   applyCardHeightUpdate,
+  CANVAS_ARTBOARD_MIN_HEIGHT,
+  CANVAS_ARTBOARD_MIN_WIDTH,
   CANVAS_CARD_WIDTH,
+  CANVAS_CLIPBOARD_MIME,
   CANVAS_GROUP_HEADER_HEIGHT,
   CANVAS_MAX_ZOOM,
   CANVAS_MIN_ZOOM,
+  cloneCanvasSelectionItems,
+  collectCanvasSelectionItems,
+  createCanvasClipboardPayload,
   createCanvasId,
   estimateVideoNoteCardHeight,
   fetchCourseCanvas,
@@ -31,8 +37,11 @@ import {
   getCardMinHeight,
   getCardMinWidth,
   getVideoNoteCardId,
+  groupSelectionIntoArtboard,
   hitTestStroke,
   loadCourseCanvas,
+  parseCanvasClipboardPayload,
+  pasteCanvasClipboardPayload,
   rebuildAllAutoChronoEdges,
   reconcileCanvasWithNotes,
   resetCanvasArrangement,
@@ -48,6 +57,7 @@ import {
   tidySelectedCards,
   tidyVideoArtboard,
   type CanvasCard,
+  type CanvasClipboardPayload,
   type CanvasGroup,
   type CanvasSide,
   type CanvasStroke,
@@ -68,7 +78,6 @@ import {
   updateCourseNoteContent,
   type NoteItem,
 } from "@/lib/course-notes";
-import { copyImageToClipboard } from "@/lib/clipboard";
 import {
   extractSameCourseVaultImageUrisFromHtml,
   resolveMediaUrl,
@@ -79,6 +88,69 @@ import { inspectAppContextTarget } from "@/lib/spellcheck";
 import { cn } from "@/lib/utils";
 
 const MAX_UNDO_HISTORY = 50;
+const PASTE_CASCADE_STEP = 32;
+
+interface CanvasClipboardMemory {
+  payload: CanvasClipboardPayload;
+  pasteCount: number;
+  lastAnchor: { x: number; y: number } | null;
+}
+
+let sharedCanvasClipboard: CanvasClipboardMemory | null = null;
+
+function writeCanvasClipboardSync(payload: CanvasClipboardPayload): void {
+  const serialized = JSON.stringify(payload);
+  const activeEl = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  const sel = window.getSelection();
+  const savedRanges: Range[] = [];
+  if (sel) {
+    for (let i = 0; i < sel.rangeCount; i++) {
+      savedRanges.push(sel.getRangeAt(i).cloneRange());
+    }
+  }
+
+  const sandbox = document.createElement("span");
+  sandbox.textContent = "\u200B";
+  sandbox.style.position = "fixed";
+  sandbox.style.left = "-9999px";
+  sandbox.style.top = "0";
+  sandbox.style.opacity = "0";
+  document.body.appendChild(sandbox);
+
+  const onSyntheticCopy = (ev: ClipboardEvent) => {
+    ev.preventDefault();
+    ev.stopImmediatePropagation();
+    ev.clipboardData?.setData(CANVAS_CLIPBOARD_MIME, serialized);
+    ev.clipboardData?.setData("text/plain", payload.plainText);
+  };
+
+  document.addEventListener("copy", onSyntheticCopy, true);
+  try {
+    const range = document.createRange();
+    range.selectNodeContents(sandbox);
+    sel?.removeAllRanges();
+    sel?.addRange(range);
+    document.execCommand("copy");
+  } catch {
+    // In-memory `sharedCanvasClipboard` still guarantees in-app Paste works.
+  } finally {
+    document.removeEventListener("copy", onSyntheticCopy, true);
+    sandbox.remove();
+    if (activeEl && activeEl.isConnected) {
+      activeEl.focus({ preventScroll: true });
+    }
+    if (sel) {
+      sel.removeAllRanges();
+      for (const r of savedRanges) {
+        try {
+          sel.addRange(r);
+        } catch {
+          // ignore stale range
+        }
+      }
+    }
+  }
+}
 
 type HistorySnapshot = Pick<
   CourseCanvasState,
@@ -187,6 +259,11 @@ export function CourseCanvasPage({ course }: { course: Course }) {
   const [spacePressed, setSpacePressed] = useState(false);
   const [isPanning, setIsPanning] = useState(false);
   const [isDraggingSelection, setIsDraggingSelection] = useState(false);
+  const [isDuplicatingDrag, setIsDuplicatingDrag] = useState(false);
+  const [hasCanvasClipboard, setHasCanvasClipboard] = useState(() =>
+    Boolean(sharedCanvasClipboard),
+  );
+  const lastPointerWorldRef = useRef<{ x: number; y: number } | null>(null);
   const [marqueeRect, setMarqueeRect] = useState<{
     x: number;
     y: number;
@@ -227,33 +304,26 @@ export function CourseCanvasPage({ course }: { course: Course }) {
     origPanY: number;
   } | null>(null);
 
-  const dragCardsRef = useRef<{
+  const dragSelectionRef = useRef<{
+    originKind: "card" | "group";
+    primaryId: string;
     pointerId: number;
     startClientX: number;
     startClientY: number;
     startWorldX: number;
     startWorldY: number;
-    initialPositions: Map<string, { x: number; y: number }>;
+    seedGroupIds: string[];
+    seedCardIds: string[];
+    cardOrigPositions: Map<string, { x: number; y: number }>;
     groupOrigPositions: Map<string, { x: number; y: number }>;
     strokeOrigPoints: Map<string, [number, number, number][]>;
-    primaryCardId: string;
     snapshotBefore: HistorySnapshot;
     moved: boolean;
+    duplicated: boolean;
+    altKeyAtDown: boolean;
     wasSoleSelectedAtDown: boolean;
     shiftKey: boolean;
     allowClickEdit: boolean;
-  } | null>(null);
-
-  const dragGroupRef = useRef<{
-    groupId: string;
-    startWorldX: number;
-    startWorldY: number;
-    groupOrigPositions: Map<string, { x: number; y: number }>;
-    childOrigPositions: Map<string, { x: number; y: number }>;
-    strokeOrigPoints: Map<string, [number, number, number][]>;
-    snapshotBefore: HistorySnapshot;
-    moved: boolean;
-    shiftKey: boolean;
   } | null>(null);
 
   const resizeGestureRef = useRef<{
@@ -840,6 +910,155 @@ export function CourseCanvasPage({ course }: { course: Course }) {
     insertCustomArtboardAt();
   }, [insertCustomArtboardAt]);
 
+  const copySelectionToClipboard = useCallback(
+    (groupIds: Iterable<string>, cardIds: Iterable<string>) => {
+      const payload = createCanvasClipboardPayload(stateRef.current, groupIds, cardIds);
+      if (!payload) return false;
+      sharedCanvasClipboard = { payload, pasteCount: 0, lastAnchor: null };
+      setHasCanvasClipboard(true);
+      writeCanvasClipboardSync(payload);
+      const count =
+        payload.groups.length +
+        payload.explicitCardIds.filter((id) => {
+          const card = payload.cards.find((c) => c.id === id);
+          return !card?.groupId || !payload.groups.some((g) => g.id === card.groupId);
+        }).length;
+      toast(count > 1 ? `${count} items copied` : "Copied");
+      return true;
+    },
+    [],
+  );
+
+  const pastePayloadToCanvas = useCallback(
+    (payload: CanvasClipboardPayload, explicitWorldPos?: { x: number; y: number }) => {
+      commitPendingEdit();
+
+      if (
+        !sharedCanvasClipboard ||
+        sharedCanvasClipboard.payload.clipboardId !== payload.clipboardId
+      ) {
+        sharedCanvasClipboard = { payload, pasteCount: 0, lastAnchor: null };
+        setHasCanvasClipboard(true);
+      }
+
+      const entry = sharedCanvasClipboard;
+      const bounds = payload.bounds;
+      const boundsCenterX = bounds.x + bounds.width / 2;
+      const boundsCenterY = bounds.y + bounds.height / 2;
+
+      let dx: number;
+      let dy: number;
+
+      if (explicitWorldPos) {
+        dx = explicitWorldPos.x - boundsCenterX;
+        dy = explicitWorldPos.y - boundsCenterY;
+        entry.lastAnchor = explicitWorldPos;
+        entry.pasteCount = 1;
+      } else {
+        const ptr = lastPointerWorldRef.current;
+        const margin = 12;
+        const pointerOutsideSource =
+          ptr !== null &&
+          (ptr.x < bounds.x - margin ||
+            ptr.x > bounds.x + bounds.width + margin ||
+            ptr.y < bounds.y - margin ||
+            ptr.y > bounds.y + bounds.height + margin);
+
+        if (pointerOutsideSource && ptr) {
+          const sameSpot =
+            entry.lastAnchor !== null &&
+            Math.hypot(ptr.x - entry.lastAnchor.x, ptr.y - entry.lastAnchor.y) < 16;
+          const step = sameSpot ? entry.pasteCount : 0;
+          dx = ptr.x - boundsCenterX + step * PASTE_CASCADE_STEP;
+          dy = ptr.y - boundsCenterY + step * PASTE_CASCADE_STEP;
+          entry.lastAnchor = sameSpot ? entry.lastAnchor : ptr;
+          entry.pasteCount = step + 1;
+        } else {
+          const rect = containerRef.current?.getBoundingClientRect();
+          const vp = stateRef.current.viewport;
+          let sourceVisible = true;
+          let viewCenterX = boundsCenterX;
+          let viewCenterY = boundsCenterY;
+          if (rect) {
+            const viewLeft = -vp.x / vp.zoom;
+            const viewTop = -vp.y / vp.zoom;
+            const viewRight = (rect.width - vp.x) / vp.zoom;
+            const viewBottom = (rect.height - vp.y) / vp.zoom;
+            viewCenterX = (viewLeft + viewRight) / 2;
+            viewCenterY = (viewTop + viewBottom) / 2;
+            sourceVisible =
+              bounds.x < viewRight &&
+              bounds.x + bounds.width > viewLeft &&
+              bounds.y < viewBottom &&
+              bounds.y + bounds.height > viewTop;
+          }
+
+          if (sourceVisible) {
+            const step = entry.lastAnchor === null ? entry.pasteCount + 1 : 1;
+            dx = step * PASTE_CASCADE_STEP;
+            dy = step * PASTE_CASCADE_STEP;
+            entry.pasteCount = step;
+            entry.lastAnchor = null;
+          } else {
+            const step = entry.lastAnchor === null ? entry.pasteCount : 0;
+            dx = viewCenterX - boundsCenterX + step * PASTE_CASCADE_STEP;
+            dy = viewCenterY - boundsCenterY + step * PASTE_CASCADE_STEP;
+            entry.pasteCount = step + 1;
+            entry.lastAnchor = null;
+          }
+        }
+      }
+
+      let pastedGroupIds: string[] = [];
+      let pastedCardIds: string[] = [];
+      applyWithUndo((prev) => {
+        const result = pasteCanvasClipboardPayload(prev, payload, dx, dy);
+        pastedGroupIds = result.clonedGroups.map((g) => g.id);
+        pastedCardIds = result.topLevelClonedCardIds;
+        return result.nextState;
+      });
+
+      const nextGroups = new Set(pastedGroupIds);
+      const nextCards = new Set(pastedCardIds);
+      selectedGroupIdsRef.current = nextGroups;
+      setSelectedGroupIds(nextGroups);
+      selectedCardIdsRef.current = nextCards;
+      setSelectedCardIds(nextCards);
+      setSelectedEdgeId(null);
+      setTool("select");
+    },
+    [applyWithUndo, commitPendingEdit],
+  );
+
+  const handleGroupSelectionIntoArtboard = useCallback(
+    (groupIds: Iterable<string>, cardIds: Iterable<string>) => {
+      commitPendingEdit();
+      const bundle = collectCanvasSelectionItems(stateRef.current, groupIds, cardIds);
+      const targetCardIds = bundle.cards.map((c) => c.id);
+      if (targetCardIds.length === 0) return;
+
+      let createdGroupId: string | null = null;
+      applyWithUndo((prev) => {
+        const result = groupSelectionIntoArtboard(prev, targetCardIds);
+        if (!result) return prev;
+        createdGroupId = result.group.id;
+        return result.nextState;
+      });
+
+      if (createdGroupId) {
+        const nextGroups = new Set([createdGroupId]);
+        selectedGroupIdsRef.current = nextGroups;
+        setSelectedGroupIds(nextGroups);
+        selectedCardIdsRef.current = new Set();
+        setSelectedCardIds(new Set());
+        setSelectedEdgeId(null);
+        setTool("select");
+        setRenameGroupSignal((prev) => ({ groupId: createdGroupId!, seq: (prev?.seq ?? 0) + 1 }));
+      }
+    },
+    [applyWithUndo, commitPendingEdit],
+  );
+
   const restoreNoteToCanvas = useCallback(
     (noteId: string) => {
       const note = notes.find((n) => n.id === noteId);
@@ -1107,26 +1326,6 @@ export function CourseCanvasPage({ course }: { course: Course }) {
         return;
       }
 
-      if (
-        (e.ctrlKey || e.metaKey) &&
-        !e.shiftKey &&
-        !e.altKey &&
-        e.key.toLowerCase() === "c" &&
-        selectedCardIds.size === 1 &&
-        !window.getSelection()?.toString()
-      ) {
-        const selectedId = Array.from(selectedCardIds)[0];
-        const card = stateRef.current.cards.find((c) => c.id === selectedId);
-        if (card?.type === "image" && card.imageSrc) {
-          e.preventDefault();
-          void resolveMediaUrl(card.imageSrc)
-            .then((resolved) => copyImageToClipboard(resolved))
-            .then(() => toast("Image copied"))
-            .catch(() => toast.error("Could not copy image."));
-          return;
-        }
-      }
-
       if (e.key === "Delete" || e.key === "Backspace") {
         if (selectedEdgeId) {
           e.preventDefault();
@@ -1193,6 +1392,7 @@ export function CourseCanvasPage({ course }: { course: Course }) {
       altUsedInGestureRef.current = false;
       zoomDragRef.current = null;
       setIsZoomDragging(false);
+      setIsDuplicatingDrag(false);
     };
 
     window.addEventListener("keydown", onKeyDown);
@@ -1218,10 +1418,63 @@ export function CourseCanvasPage({ course }: { course: Course }) {
     startEditingCard,
   ]);
 
-  // Clipboard image paste onto open canvas
+  // Canvas item copy & paste (cards, artboards, enclosed strokes & manual edges) + image paste
   useEffect(() => {
+    const onCopy = (e: ClipboardEvent) => {
+      if (
+        isEditableElement(e.target) ||
+        editingCardIdRef.current ||
+        lightboxImage ||
+        document.querySelector('[role="dialog"]')
+      ) {
+        return;
+      }
+      if (selectedCardIdsRef.current.size === 0 && selectedGroupIdsRef.current.size === 0) return;
+
+      const payload = createCanvasClipboardPayload(
+        stateRef.current,
+        selectedGroupIdsRef.current,
+        selectedCardIdsRef.current,
+      );
+      if (!payload) return;
+
+      e.preventDefault();
+      e.clipboardData?.setData(CANVAS_CLIPBOARD_MIME, JSON.stringify(payload));
+      e.clipboardData?.setData("text/plain", payload.plainText);
+      sharedCanvasClipboard = { payload, pasteCount: 0, lastAnchor: null };
+      setHasCanvasClipboard(true);
+
+      const count =
+        payload.groups.length +
+        payload.explicitCardIds.filter((id) => {
+          const card = payload.cards.find((c) => c.id === id);
+          return !card?.groupId || !payload.groups.some((g) => g.id === card.groupId);
+        }).length;
+      toast(count > 1 ? `${count} items copied` : "Copied");
+    };
+
     const onPaste = (e: ClipboardEvent) => {
-      if (isEditableElement(e.target) || editingCardId) return;
+      if (
+        isEditableElement(e.target) ||
+        editingCardIdRef.current ||
+        lightboxImage ||
+        document.querySelector('[role="dialog"]')
+      ) {
+        return;
+      }
+
+      // Priority 1: Native canvas clipboard payload (works across tabs & preserves full card/group state)
+      const rawCanvas = e.clipboardData?.getData(CANVAS_CLIPBOARD_MIME) ?? "";
+      if (rawCanvas) {
+        const parsed = parseCanvasClipboardPayload(rawCanvas);
+        if (parsed) {
+          e.preventDefault();
+          pastePayloadToCanvas(parsed);
+          return;
+        }
+      }
+
+      // Priority 2: OS / vault image paste onto open canvas
       const rawHtml = e.clipboardData?.getData("text/html") ?? "";
       const items = e.clipboardData?.items ? Array.from(e.clipboardData.items) : [];
       const pastedFiles = items
@@ -1232,42 +1485,57 @@ export function CourseCanvasPage({ course }: { course: Course }) {
       const sameCourseUris = rawHtml
         ? extractSameCourseVaultImageUrisFromHtml(rawHtml, courseId)
         : null;
-      if ((!sameCourseUris || sameCourseUris.length === 0) && pastedFiles.length === 0) return;
+      if ((sameCourseUris && sameCourseUris.length > 0) || pastedFiles.length > 0) {
+        e.preventDefault();
+        const rect = containerRef.current?.getBoundingClientRect();
+        const vp = stateRef.current.viewport;
+        const cx = rect ? (rect.width / 2 - vp.x) / vp.zoom : 240;
+        const cy = rect ? (rect.height / 2 - vp.y) / vp.zoom : 200;
 
-      e.preventDefault();
-      const rect = containerRef.current?.getBoundingClientRect();
-      const vp = stateRef.current.viewport;
-      const cx = rect ? (rect.width / 2 - vp.x) / vp.zoom : 240;
-      const cy = rect ? (rect.height / 2 - vp.y) / vp.zoom : 200;
-
-      if (sameCourseUris && sameCourseUris.length > 0) {
-        void (async () => {
-          const checks = await Promise.all(
-            sameCourseUris.map((uri) => verifyVaultMediaExists(uri)),
-          );
-          if (checks.every(Boolean)) {
-            for (let i = 0; i < sameCourseUris.length; i++) {
-              await insertImageMediaUriAt(sameCourseUris[i]!, cx + i * 36, cy + i * 36);
+        if (sameCourseUris && sameCourseUris.length > 0) {
+          void (async () => {
+            const checks = await Promise.all(
+              sameCourseUris.map((uri) => verifyVaultMediaExists(uri)),
+            );
+            if (checks.every(Boolean)) {
+              for (let i = 0; i < sameCourseUris.length; i++) {
+                await insertImageMediaUriAt(sameCourseUris[i]!, cx + i * 36, cy + i * 36);
+              }
+              return;
             }
-            return;
-          }
-          if (pastedFiles.length > 0) {
-            await insertImageFileAt(pastedFiles[0]!, cx, cy);
-          }
-        })().catch((err) => {
-          toast.error(err instanceof Error ? err.message : "Failed to paste image.");
-        });
+            if (pastedFiles.length > 0) {
+              await insertImageFileAt(pastedFiles[0]!, cx, cy);
+            }
+          })().catch((err) => {
+            toast.error(err instanceof Error ? err.message : "Failed to paste image.");
+          });
+          return;
+        }
+
+        if (pastedFiles.length > 0) {
+          void insertImageFileAt(pastedFiles[0]!, cx, cy);
+        }
         return;
       }
 
-      if (pastedFiles.length > 0) {
-        void insertImageFileAt(pastedFiles[0]!, cx, cy);
+      // Priority 3: Fallback to in-memory canvas clipboard when custom MIME is stripped by the host
+      if (sharedCanvasClipboard) {
+        const plain = e.clipboardData?.getData("text/plain") ?? "";
+        const hasAnyFiles = (e.clipboardData?.files?.length ?? 0) > 0;
+        if (!hasAnyFiles && plain === sharedCanvasClipboard.payload.plainText) {
+          e.preventDefault();
+          pastePayloadToCanvas(sharedCanvasClipboard.payload);
+        }
       }
     };
 
+    window.addEventListener("copy", onCopy);
     window.addEventListener("paste", onPaste);
-    return () => window.removeEventListener("paste", onPaste);
-  }, [courseId, editingCardId, insertImageFileAt, insertImageMediaUriAt]);
+    return () => {
+      window.removeEventListener("copy", onCopy);
+      window.removeEventListener("paste", onPaste);
+    };
+  }, [courseId, insertImageFileAt, insertImageMediaUriAt, lightboxImage, pastePayloadToCanvas]);
 
   // Native non-passive wheel listener for responsive zoom (Alt + wheel) and pan
   useEffect(() => {
@@ -1426,6 +1694,8 @@ export function CourseCanvasPage({ course }: { course: Course }) {
   };
 
   const handleStagePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    lastPointerWorldRef.current = screenToWorld(e.clientX, e.clientY);
+
     if (zoomDragRef.current) {
       const zoomDrag = zoomDragRef.current;
       const dragDelta = e.clientX - zoomDrag.anchorClientX - (e.clientY - zoomDrag.anchorClientY);
@@ -1495,8 +1765,8 @@ export function CourseCanvasPage({ course }: { course: Course }) {
       return;
     }
 
-    if (dragCardsRef.current) {
-      const g = dragCardsRef.current;
+    if (dragSelectionRef.current) {
+      const g = dragSelectionRef.current;
       if (!g.moved) {
         if (Math.hypot(e.clientX - g.startClientX, e.clientY - g.startClientY) <= 4) {
           return;
@@ -1508,7 +1778,57 @@ export function CourseCanvasPage({ course }: { course: Course }) {
         } catch {
           // ignore
         }
+
+        if (g.altKeyAtDown || e.altKey) {
+          altUsedInGestureRef.current = true;
+          const cloned = cloneCanvasSelectionItems(
+            stateRef.current,
+            g.seedGroupIds,
+            g.seedCardIds,
+            0,
+            0,
+          );
+          if (cloned) {
+            g.duplicated = true;
+            setIsDuplicatingDrag(true);
+            stateRef.current = cloned.nextState;
+
+            const nextGroupOrigins = new Map<string, { x: number; y: number }>();
+            for (const grp of cloned.clonedGroups) {
+              nextGroupOrigins.set(grp.id, { x: grp.x, y: grp.y });
+            }
+            const nextCardOrigins = new Map<string, { x: number; y: number }>();
+            for (const card of cloned.clonedCards) {
+              nextCardOrigins.set(card.id, { x: card.x, y: card.y });
+            }
+            const nextStrokeOrigins = new Map<string, [number, number, number][]>();
+            for (const stroke of cloned.clonedStrokes) {
+              nextStrokeOrigins.set(
+                stroke.id,
+                stroke.points.map((pt) => [...pt] as [number, number, number]),
+              );
+            }
+            g.groupOrigPositions = nextGroupOrigins;
+            g.cardOrigPositions = nextCardOrigins;
+            g.strokeOrigPoints = nextStrokeOrigins;
+            g.primaryId =
+              g.originKind === "card"
+                ? (cloned.cardIdMap.get(g.primaryId) ?? g.primaryId)
+                : (cloned.groupIdMap.get(g.primaryId) ?? g.primaryId);
+
+            const nextGroups = new Set(cloned.clonedGroups.map((gr) => gr.id));
+            const nextCards = new Set(cloned.topLevelClonedCardIds);
+            selectedGroupIdsRef.current = nextGroups;
+            setSelectedGroupIds(nextGroups);
+            selectedCardIdsRef.current = nextCards;
+            setSelectedCardIds(nextCards);
+            setSelectedEdgeId(null);
+
+            setCanvasState(cloned.nextState);
+          }
+        }
       }
+
       const wp = screenToWorld(e.clientX, e.clientY);
       const dx = wp.x - g.startWorldX;
       const dy = wp.y - g.startWorldY;
@@ -1524,16 +1844,23 @@ export function CourseCanvasPage({ course }: { course: Course }) {
                 return orig ? { ...gr, x: orig.x + rdx, y: orig.y + rdy } : gr;
               })
             : prev.groups;
-        const updatedCards = prev.cards.map((c) => {
-          const orig = g.initialPositions.get(c.id);
-          if (!orig) return c;
-          const updated = { ...c, x: Math.round(orig.x + dx), y: Math.round(orig.y + dy) };
-          if (c.id === g.primaryCardId && g.groupOrigPositions.size === 0) {
-            const target = resolveCardGroupAtDrop(updated, prev.groups);
-            nextDropGroupId = target?.id ?? null;
-          }
-          return updated;
-        });
+        const updatedCards =
+          g.cardOrigPositions.size > 0
+            ? prev.cards.map((c) => {
+                const orig = g.cardOrigPositions.get(c.id);
+                if (!orig) return c;
+                const updated = { ...c, x: Math.round(orig.x + dx), y: Math.round(orig.y + dy) };
+                if (
+                  g.originKind === "card" &&
+                  c.id === g.primaryId &&
+                  g.groupOrigPositions.size === 0
+                ) {
+                  const target = resolveCardGroupAtDrop(updated, prev.groups);
+                  nextDropGroupId = target?.id ?? null;
+                }
+                return updated;
+              })
+            : prev.cards;
         const updatedStrokes =
           g.strokeOrigPoints.size > 0
             ? prev.strokes.map((s) => {
@@ -1550,37 +1877,9 @@ export function CourseCanvasPage({ course }: { course: Course }) {
             : prev.strokes;
         return { ...prev, groups: updatedGroups, cards: updatedCards, strokes: updatedStrokes };
       });
-      setDropTargetGroupId(nextDropGroupId);
-      return;
-    }
-
-    if (dragGroupRef.current) {
-      const g = dragGroupRef.current;
-      const wp = screenToWorld(e.clientX, e.clientY);
-      const dx = Math.round(wp.x - g.startWorldX);
-      const dy = Math.round(wp.y - g.startWorldY);
-      if (!g.moved && Math.hypot(dx, dy) > 2) {
-        g.moved = true;
-        setIsDraggingSelection(true);
+      if (g.originKind === "card" && g.groupOrigPositions.size === 0) {
+        setDropTargetGroupId(nextDropGroupId);
       }
-
-      setCanvasState((prev) => ({
-        ...prev,
-        groups: prev.groups.map((gr) => {
-          const orig = g.groupOrigPositions.get(gr.id);
-          return orig ? { ...gr, x: orig.x + dx, y: orig.y + dy } : gr;
-        }),
-        cards: prev.cards.map((c) => {
-          const orig = g.childOrigPositions.get(c.id);
-          return orig ? { ...c, x: orig.x + dx, y: orig.y + dy } : c;
-        }),
-        strokes: prev.strokes.map((s) => {
-          const origPts = g.strokeOrigPoints.get(s.id);
-          return origPts
-            ? { ...s, points: origPts.map(([px, py, pr]) => [px + dx, py + dy, pr]) }
-            : s;
-        }),
-      }));
       return;
     }
 
@@ -1623,8 +1922,8 @@ export function CourseCanvasPage({ course }: { course: Course }) {
           };
         });
       } else {
-        const nextW = Math.max(280, Math.round(r.origW + dw));
-        const nextH = Math.max(160, Math.round(r.origH + dh));
+        const nextW = Math.max(CANVAS_ARTBOARD_MIN_WIDTH, Math.round(r.origW + dw));
+        const nextH = Math.max(CANVAS_ARTBOARD_MIN_HEIGHT, Math.round(r.origH + dh));
         setCanvasState((prev) => ({
           ...prev,
           groups: prev.groups.map((gr) =>
@@ -1694,6 +1993,7 @@ export function CourseCanvasPage({ course }: { course: Course }) {
       setIsPanning(false);
     }
     setIsDraggingSelection(false);
+    setIsDuplicatingDrag(false);
 
     if (connectingFrom) {
       const dragDist = Math.hypot(
@@ -1741,44 +2041,36 @@ export function CourseCanvasPage({ course }: { course: Course }) {
       eraseSweepRef.current = null;
     }
 
-    if (dragCardsRef.current) {
-      const gesture = dragCardsRef.current;
-      dragCardsRef.current = null;
+    if (dragSelectionRef.current) {
+      const gesture = dragSelectionRef.current;
+      dragSelectionRef.current = null;
       setDropTargetGroupId(null);
 
       if (gesture.moved) {
         pushHistorySnapshot(gesture.snapshotBefore);
-        if (gesture.groupOrigPositions.size === 0) {
-          const movedIds = new Set(gesture.initialPositions.keys());
+        if (gesture.groupOrigPositions.size === 0 && gesture.cardOrigPositions.size > 0) {
+          const movedIds = new Set(gesture.cardOrigPositions.keys());
           setCanvasState((prev) => applyCardDropMembership(prev, movedIds));
         }
-      } else {
-        const clickedCard = stateRef.current.cards.find((c) => c.id === gesture.primaryCardId);
+      } else if (gesture.originKind === "card") {
+        const clickedCard = stateRef.current.cards.find((c) => c.id === gesture.primaryId);
         if (
           gesture.wasSoleSelectedAtDown &&
           gesture.allowClickEdit &&
           clickedCard &&
           clickedCard.type !== "image"
         ) {
-          startEditingCard(gesture.primaryCardId);
+          startEditingCard(gesture.primaryId);
         } else if (!gesture.shiftKey && clickedCard) {
-          const nextCards = new Set([gesture.primaryCardId]);
+          const nextCards = new Set([gesture.primaryId]);
           selectedCardIdsRef.current = nextCards;
           setSelectedCardIds(nextCards);
           selectedGroupIdsRef.current = new Set();
           setSelectedGroupIds(new Set());
           setSelectedEdgeId(null);
         }
-      }
-    }
-
-    if (dragGroupRef.current) {
-      const gesture = dragGroupRef.current;
-      dragGroupRef.current = null;
-      if (gesture.moved) {
-        pushHistorySnapshot(gesture.snapshotBefore);
       } else if (!gesture.shiftKey) {
-        const nextGroups = new Set([gesture.groupId]);
+        const nextGroups = new Set([gesture.primaryId]);
         selectedGroupIdsRef.current = nextGroups;
         setSelectedGroupIds(nextGroups);
         selectedCardIdsRef.current = new Set();
@@ -1802,69 +2094,22 @@ export function CourseCanvasPage({ course }: { course: Course }) {
 
   const captureMoveOrigins = useCallback(
     (groupIds: Iterable<string>, cardIds: Iterable<string>) => {
+      const bundle = collectCanvasSelectionItems(stateRef.current, groupIds, cardIds);
       const groupOrigPositions = new Map<string, { x: number; y: number }>();
-      const movedGroupIds = new Set<string>();
-      const movedGroupBounds: Array<{ x: number; y: number; width: number; height: number }> = [];
-      for (const gid of groupIds) {
-        const group = stateRef.current.groups.find((item) => item.id === gid);
-        if (group) {
-          groupOrigPositions.set(gid, { x: group.x, y: group.y });
-          movedGroupIds.add(gid);
-          if (!group.collapsed) {
-            movedGroupBounds.push({
-              x: group.x,
-              y: group.y,
-              width: group.width,
-              height: group.height,
-            });
-          }
-        }
+      for (const g of bundle.groups) {
+        groupOrigPositions.set(g.id, { x: g.x, y: g.y });
       }
-
-      const isPointInMovedGroup = (px: number, py: number): boolean =>
-        movedGroupBounds.some(
-          (b) => px >= b.x && px <= b.x + b.width && py >= b.y && py <= b.y + b.height,
-        );
-
       const cardOrigPositions = new Map<string, { x: number; y: number }>();
-      for (const c of stateRef.current.cards) {
-        if (
-          (c.groupId && movedGroupIds.has(c.groupId)) ||
-          (!c.groupId &&
-            movedGroupBounds.length > 0 &&
-            isPointInMovedGroup(c.x + c.width / 2, c.y + c.height / 2))
-        ) {
-          cardOrigPositions.set(c.id, { x: c.x, y: c.y });
-        }
+      for (const c of bundle.cards) {
+        cardOrigPositions.set(c.id, { x: c.x, y: c.y });
       }
-      for (const cid of cardIds) {
-        if (!cardOrigPositions.has(cid)) {
-          const c = stateRef.current.cards.find((item) => item.id === cid);
-          if (c) cardOrigPositions.set(cid, { x: c.x, y: c.y });
-        }
-      }
-
       const strokeOrigPoints = new Map<string, [number, number, number][]>();
-      if (movedGroupIds.size > 0) {
-        for (const s of stateRef.current.strokes) {
-          const belongsToGroup = Boolean(s.parentGroupId && movedGroupIds.has(s.parentGroupId));
-          const enclosesMidpoint =
-            !s.parentGroupId &&
-            movedGroupBounds.length > 0 &&
-            s.points.length > 0 &&
-            (() => {
-              const mid = s.points[Math.floor(s.points.length / 2)]!;
-              return isPointInMovedGroup(mid[0], mid[1]);
-            })();
-          if (belongsToGroup || enclosesMidpoint) {
-            strokeOrigPoints.set(
-              s.id,
-              s.points.map((pt) => [...pt] as [number, number, number]),
-            );
-          }
-        }
+      for (const s of bundle.strokes) {
+        strokeOrigPoints.set(
+          s.id,
+          s.points.map((pt) => [...pt] as [number, number, number]),
+        );
       }
-
       return { groupOrigPositions, cardOrigPositions, strokeOrigPoints };
     },
     [],
@@ -1873,17 +2118,20 @@ export function CourseCanvasPage({ course }: { course: Course }) {
   const handleStartDragCard = useCallback(
     (cardId: string, e: React.PointerEvent) => {
       if (e.button !== 0) return;
+      if (e.altKey) altUsedInGestureRef.current = true;
       const wp = screenToWorld(e.clientX, e.clientY);
       const currentSelectedCards = selectedCardIdsRef.current;
       const currentSelectedGroups = selectedGroupIdsRef.current;
       const wasSoleSelectedAtDown =
         !e.shiftKey &&
+        !e.altKey &&
         ((currentSelectedCards.size === 1 &&
           currentSelectedCards.has(cardId) &&
           currentSelectedGroups.size === 0) ||
           e.detail >= 2);
       const allowClickEdit =
         !e.shiftKey &&
+        !e.altKey &&
         !(e.target instanceof Element && Boolean(e.target.closest("img, a, button")));
       const isCardInSelection = currentSelectedCards.has(cardId);
       const activeCardIds = isCardInSelection ? Array.from(currentSelectedCards) : [cardId];
@@ -1893,18 +2141,23 @@ export function CourseCanvasPage({ course }: { course: Course }) {
         activeCardIds,
       );
 
-      dragCardsRef.current = {
+      dragSelectionRef.current = {
+        originKind: "card",
+        primaryId: cardId,
         pointerId: e.pointerId,
         startClientX: e.clientX,
         startClientY: e.clientY,
         startWorldX: wp.x,
         startWorldY: wp.y,
-        initialPositions: cardOrigPositions,
+        seedGroupIds: activeGroupIds,
+        seedCardIds: activeCardIds,
+        cardOrigPositions,
         groupOrigPositions,
         strokeOrigPoints,
-        primaryCardId: cardId,
         snapshotBefore: snapshotOf(stateRef.current),
         moved: false,
+        duplicated: false,
+        altKeyAtDown: e.altKey,
         wasSoleSelectedAtDown,
         shiftKey: e.shiftKey,
         allowClickEdit,
@@ -1918,6 +2171,7 @@ export function CourseCanvasPage({ course }: { course: Course }) {
       if (e.button !== 0) return;
       const group = stateRef.current.groups.find((g) => g.id === groupId);
       if (!group) return;
+      if (e.altKey) altUsedInGestureRef.current = true;
 
       const currentSelectedGroups = selectedGroupIdsRef.current;
       const currentSelectedCards = selectedCardIdsRef.current;
@@ -1959,22 +2213,27 @@ export function CourseCanvasPage({ course }: { course: Course }) {
         activeCardIds,
       );
 
-      dragGroupRef.current = {
-        groupId,
+      dragSelectionRef.current = {
+        originKind: "group",
+        primaryId: groupId,
+        pointerId: e.pointerId,
+        startClientX: e.clientX,
+        startClientY: e.clientY,
         startWorldX: wp.x,
         startWorldY: wp.y,
+        seedGroupIds: activeGroupIds,
+        seedCardIds: activeCardIds,
+        cardOrigPositions,
         groupOrigPositions,
-        childOrigPositions: cardOrigPositions,
         strokeOrigPoints,
         snapshotBefore: snapshotOf(stateRef.current),
         moved: false,
+        duplicated: false,
+        altKeyAtDown: e.altKey,
+        wasSoleSelectedAtDown: false,
         shiftKey: e.shiftKey,
+        allowClickEdit: false,
       };
-      try {
-        containerRef.current?.setPointerCapture(e.pointerId);
-      } catch {
-        // ignore
-      }
     },
     [captureMoveOrigins, screenToWorld],
   );
@@ -2079,10 +2338,10 @@ export function CourseCanvasPage({ course }: { course: Course }) {
 
   const handleGroupContextMenu = useCallback((groupId: string, ev: React.MouseEvent) => {
     const currSelectedGroups = selectedGroupIdsRef.current;
-    const targetGroupIds = currSelectedGroups.has(groupId)
-      ? Array.from(currSelectedGroups)
-      : [groupId];
-    if (!currSelectedGroups.has(groupId)) {
+    const isInSelection = currSelectedGroups.has(groupId);
+    const targetGroupIds = isInSelection ? Array.from(currSelectedGroups) : [groupId];
+    const targetCardIds = isInSelection ? Array.from(selectedCardIdsRef.current) : [];
+    if (!isInSelection) {
       const nextGroups = new Set([groupId]);
       selectedGroupIdsRef.current = nextGroups;
       setSelectedGroupIds(nextGroups);
@@ -2095,6 +2354,7 @@ export function CourseCanvasPage({ course }: { course: Course }) {
       clientX: ev.clientX,
       clientY: ev.clientY,
       groupIds: targetGroupIds,
+      cardIds: targetCardIds,
     });
   }, []);
 
@@ -2159,8 +2419,10 @@ export function CourseCanvasPage({ course }: { course: Course }) {
   const handleCardContextMenu = useCallback(
     (card: CanvasCard, ev: React.MouseEvent) => {
       const currSelected = selectedCardIdsRef.current;
-      const targetIds = currSelected.has(card.id) ? Array.from(currSelected) : [card.id];
-      if (!currSelected.has(card.id)) {
+      const isInSelection = currSelected.has(card.id);
+      const targetIds = isInSelection ? Array.from(currSelected) : [card.id];
+      const targetGroupIds = isInSelection ? Array.from(selectedGroupIdsRef.current) : [];
+      if (!isInSelection) {
         const next = new Set([card.id]);
         selectedCardIdsRef.current = next;
         setSelectedCardIds(next);
@@ -2191,6 +2453,7 @@ export function CourseCanvasPage({ course }: { course: Course }) {
         clientX: ev.clientX,
         clientY: ev.clientY,
         cardIds: targetIds,
+        groupIds: targetGroupIds,
         analysis,
         onOpenImage: (src) => setLightboxImage({ src, label: cardLabel }),
       });
@@ -2264,7 +2527,9 @@ export function CourseCanvasPage({ course }: { course: Course }) {
   const stageCursor = isZoomDragging
     ? "cursor-ns-resize"
     : isDraggingSelection
-      ? "cursor-grabbing"
+      ? isDuplicatingDrag
+        ? "cursor-copy"
+        : "cursor-grabbing"
       : isPanning || spacePressed || tool === "pan"
         ? isPanning
           ? "cursor-grabbing"
@@ -2284,6 +2549,9 @@ export function CourseCanvasPage({ course }: { course: Course }) {
       onPointerMove={handleStagePointerMove}
       onPointerUp={handleStagePointerUp}
       onPointerCancel={handleStagePointerUp}
+      onPointerLeave={() => {
+        lastPointerWorldRef.current = null;
+      }}
       onContextMenu={(e) => {
         if (
           e.target instanceof Element &&
@@ -2587,6 +2855,9 @@ export function CourseCanvasPage({ course }: { course: Course }) {
               : false
           }
           hasGroups={canvasState.groups.length > 0}
+          canPaste={hasCanvasClipboard && Boolean(sharedCanvasClipboard)}
+          activeSelectedCardIds={Array.from(selectedCardIds)}
+          activeSelectedGroupIds={Array.from(selectedGroupIds)}
           edge={
             contextMenu.kind === "edge"
               ? canvasState.edges.find((edge) => edge.id === contextMenu.edgeId)
@@ -2594,6 +2865,17 @@ export function CourseCanvasPage({ course }: { course: Course }) {
           }
           onUpdateCardsAccent={updateCardsAccent}
           onEditCard={startEditingCard}
+          onCopySelection={(groupIds, cardIds) => {
+            copySelectionToClipboard(groupIds, cardIds);
+          }}
+          onPasteAt={(worldX, worldY) => {
+            if (sharedCanvasClipboard) {
+              pastePayloadToCanvas(sharedCanvasClipboard.payload, { x: worldX, y: worldY });
+            }
+          }}
+          onAddToArtboard={(groupIds, cardIds) => {
+            handleGroupSelectionIntoArtboard(groupIds, cardIds);
+          }}
           onReturnCardsToOrigin={(cardIds) => {
             applyWithUndo((prev) =>
               cardIds.reduce(
@@ -2607,7 +2889,9 @@ export function CourseCanvasPage({ course }: { course: Course }) {
             applyWithUndo((prev) => tidySelectedCards(prev, cardIds));
             toast("Selection tidied");
           }}
-          onDeleteCards={(cardIds) => deleteCardsByIds(new Set(cardIds))}
+          onDeleteSelection={(groupIds, cardIds) =>
+            deleteSelectionByIds(new Set(cardIds), new Set(groupIds))
+          }
           onUpdateGroupsTint={(groupIds, tintIndex) => {
             const targetSet = new Set(groupIds);
             applyWithUndo((prev) => ({
@@ -2635,7 +2919,6 @@ export function CourseCanvasPage({ course }: { course: Course }) {
               groups: prev.groups.map((g) => (targetSet.has(g.id) ? { ...g, collapsed } : g)),
             }));
           }}
-          onDeleteGroups={(groupIds) => deleteGroupsByIds(new Set(groupIds))}
           onDeleteEdge={(edgeId) => {
             applyWithUndo((prev) => ({
               ...prev,

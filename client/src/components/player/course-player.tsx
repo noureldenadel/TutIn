@@ -24,6 +24,7 @@ import {
   Copy,
   Download,
   Gauge,
+  Info,
   LayoutGrid,
   ListChecks,
   Maximize,
@@ -56,6 +57,7 @@ import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -182,6 +184,7 @@ interface TranscriptTrack {
   fileName?: string | undefined;
   is_master?: boolean | undefined;
   is_ai_source?: boolean | undefined;
+  meta?: SubtitleSource["meta"] | undefined;
 }
 
 const RTL_LANG_PREFIXES = ["ar", "he", "fa", "ur"];
@@ -838,7 +841,7 @@ export function CoursePlayer({
             startPosition: Math.round(sess.startPosition),
             endPosition: Math.round(endPos),
           }),
-        }).catch(() => { });
+        }).catch(() => {});
       }
     },
     [course.id],
@@ -984,6 +987,7 @@ export function CoursePlayer({
                 fileName: src.fileName,
                 is_master: src.is_master,
                 is_ai_source: src.is_ai_source,
+                meta: src.meta,
               });
             }
           } else {
@@ -1546,7 +1550,7 @@ export function CoursePlayer({
     seek((v.currentTime || time) + direction * (1 / 30));
   };
   const playVideo = useCallback(() => {
-    videoRef.current?.play().catch(() => { });
+    videoRef.current?.play().catch(() => {});
   }, []);
   const pauseVideo = useCallback(() => {
     videoRef.current?.pause();
@@ -1787,7 +1791,7 @@ export function CoursePlayer({
       a.playbackRate = v.playbackRate || effectiveSpeedRef.current;
       syncTimeFromVideo();
       if (a.readyState >= 1 && (v.currentTime || 0) < (a.duration || Infinity) - 0.15) {
-        void a.play().catch(() => { });
+        void a.play().catch(() => {});
       }
     };
 
@@ -1809,7 +1813,7 @@ export function CoursePlayer({
       const limit = Number.isFinite(a.duration) && a.duration > 0 ? a.duration : Infinity;
       if (v.currentTime >= limit - 0.15) return;
       if (a.paused) {
-        void a.play().catch(() => { });
+        void a.play().catch(() => {});
       }
       if (Math.abs(a.currentTime - v.currentTime) > 0.45) {
         try {
@@ -1826,7 +1830,7 @@ export function CoursePlayer({
       a.playbackRate = v.playbackRate || effectiveSpeedRef.current;
       syncTimeFromVideo();
       if (!v.paused && !v.ended && v.currentTime < (a.duration || Infinity) - 0.15) {
-        void a.play().catch(() => { });
+        void a.play().catch(() => {});
       }
     };
 
@@ -1906,7 +1910,7 @@ export function CoursePlayer({
       pendingAutoStartLessonIdRef.current = null;
       syncMediaPlaybackRate(effectiveSpeedRef.current);
       if (media.paused && !media.ended) {
-        void media.play().catch(() => { });
+        void media.play().catch(() => {});
       }
     },
     [syncMediaPlaybackRate],
@@ -1958,7 +1962,7 @@ export function CoursePlayer({
         if (autoStart) {
           const v = videoRef.current;
           if (v && v.paused) {
-            void v.play().catch(() => { });
+            void v.play().catch(() => {});
           }
         }
         return;
@@ -2324,8 +2328,8 @@ export function CoursePlayer({
     return () => observer.disconnect();
   }, [hasNativeVideoControls]);
 
-  const shortcutHandlerRef = useRef<(e: KeyboardEvent) => void>(() => { });
-  const shortcutKeyUpHandlerRef = useRef<(e: KeyboardEvent) => void>(() => { });
+  const shortcutHandlerRef = useRef<(e: KeyboardEvent) => void>(() => {});
+  const shortcutKeyUpHandlerRef = useRef<(e: KeyboardEvent) => void>(() => {});
   shortcutHandlerRef.current = (e: KeyboardEvent) => {
     if (!shortcutsEnabled || e.defaultPrevented) return;
     if (e.ctrlKey || e.metaKey || e.altKey) return;
@@ -2403,7 +2407,7 @@ export function CoursePlayer({
         }
         updateBoostState("space", true);
         if (v.paused && !v.ended) {
-          void v.play().catch(() => { });
+          void v.play().catch(() => {});
         }
       }, SPACE_HOLD_DELAY_MS);
       return;
@@ -5323,7 +5327,7 @@ function NotesTab({
                 className={cn(
                   "group overflow-hidden rounded-lg bg-secondary/55 transition-colors hover:bg-secondary/75",
                   isEditing &&
-                  "rounded-xl bg-background ring-1 ring-primary/35 shadow-card hover:bg-background",
+                    "rounded-xl bg-background ring-1 ring-primary/35 shadow-card hover:bg-background",
                 )}
               >
                 {isEditing ? (
@@ -5508,7 +5512,7 @@ function NoteEditorFooter({
                       0,
                       ((smartPauseState.countdownSecs ?? smartPauseDelay) /
                         (smartPauseState.smartPauseDelay || smartPauseDelay)) *
-                      100,
+                        100,
                     ),
                   )}%`,
                 }}
@@ -5540,6 +5544,148 @@ function NoteEditorFooter({
         </Button>
       </div>
     </div>
+  );
+}
+
+function formatGenerationDuration(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds < 0) return "0s";
+  if (seconds < 60) {
+    return `${seconds < 10 ? seconds.toFixed(1) : Math.round(seconds)}s`;
+  }
+  const mins = Math.floor(seconds / 60);
+  const rem = Math.round(seconds % 60);
+  return rem > 0 ? `${mins}m ${rem}s` : `${mins}m`;
+}
+
+interface TrackMetaRow {
+  label: string;
+  value: string;
+  mono?: boolean;
+}
+
+function buildSubtitleMetaRows(track: TranscriptTrack): TrackMetaRow[] {
+  const meta = track.meta;
+  const rows: TrackMetaRow[] = [];
+  if (typeof meta?.generationSeconds === "number") {
+    rows.push({
+      label: "Time",
+      value: formatGenerationDuration(meta.generationSeconds),
+      mono: true,
+    });
+  }
+  rows.push({
+    label: "Pipeline",
+    value: meta?.pipeline || (track.origin === "generated" ? "AI generated" : "Uploaded"),
+  });
+  if (meta?.transcriptionModel) {
+    rows.push({ label: "Transcript", value: meta.transcriptionModel });
+  }
+  if (meta?.translationModel) {
+    rows.push({ label: "Translation", value: meta.translationModel });
+  }
+  if (meta?.sourceTrackFile && meta.sourceTrackFile !== track.fileName) {
+    rows.push({ label: "Based on", value: meta.sourceTrackFile, mono: true });
+  }
+  if (track.fileName) {
+    rows.push({ label: "File", value: track.fileName, mono: true });
+  }
+  return rows;
+}
+
+function buildDubMetaRows(lang: string, meta?: DubTrackMeta | null): TrackMetaRow[] {
+  const rows: TrackMetaRow[] = [];
+  if (typeof meta?.generationSeconds === "number") {
+    rows.push({
+      label: "Time",
+      value: formatGenerationDuration(meta.generationSeconds),
+      mono: true,
+    });
+  }
+  rows.push({
+    label: "Pipeline",
+    value: meta?.pipeline || "Dub",
+  });
+  if (meta?.transcriptionModel) {
+    rows.push({ label: "Transcript", value: meta.transcriptionModel });
+  }
+  if (meta?.translationModel) {
+    rows.push({ label: "Translation", value: meta.translationModel });
+  }
+  rows.push({
+    label: "TTS",
+    value:
+      meta?.ttsModel ||
+      (meta?.engine === "clone"
+        ? "Coqui XTTS-v2"
+        : `Edge-TTS (${meta?.voiceGender === "female" ? "Female" : "Male"})`),
+  });
+  rows.push({
+    label: "Background",
+    value:
+      meta?.bgMode === "demucs"
+        ? meta.backgroundModel
+          ? `Music & SFX · ${meta.backgroundModel}`
+          : "Music & SFX"
+        : "Off",
+  });
+  if (meta?.sourceTranscriptFile) {
+    rows.push({ label: "Based on", value: meta.sourceTranscriptFile, mono: true });
+  } else {
+    rows.push({ label: "Language", value: getLanguageName(lang) });
+  }
+  return rows;
+}
+
+function TrackMetaInfoTooltip({
+  rows,
+  side = "left",
+  compact = false,
+}: {
+  rows: TrackMetaRow[];
+  side?: "left" | "top" | "bottom" | "right";
+  compact?: boolean;
+}) {
+  if (rows.length === 0) return null;
+  return (
+    <Tooltip delayDuration={150}>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          aria-label="Track details"
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+          }}
+          className={cn(
+            "inline-flex shrink-0 items-center justify-center rounded-md text-muted-foreground/75 transition-colors hover:bg-secondary hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+            compact ? "p-1" : "size-8 rounded-lg bg-secondary/75 hover:bg-secondary",
+          )}
+        >
+          <Info className="size-3.5" />
+        </button>
+      </TooltipTrigger>
+      <TooltipContent
+        side={side}
+        sideOffset={8}
+        className="w-64 max-w-[85vw] rounded-lg border border-border/50 bg-popover p-3 text-popover-foreground shadow-workspace"
+      >
+        <dl className="space-y-1.5 text-[11px] leading-snug">
+          {rows.map((row) => (
+            <div key={row.label} className="flex items-start justify-between gap-3">
+              <dt className="shrink-0 text-muted-foreground">{row.label}</dt>
+              <dd
+                className={cn(
+                  "min-w-0 text-right font-medium text-foreground break-words",
+                  row.mono && "font-mono text-[10.5px] tabular-nums break-all",
+                )}
+              >
+                {row.value}
+              </dd>
+            </div>
+          ))}
+        </dl>
+      </TooltipContent>
+    </Tooltip>
   );
 }
 
@@ -5707,7 +5853,7 @@ function TranscriptTab({
   return (
     <div className="flex h-full flex-col">
       <div className="space-y-2 px-3 pb-3 pt-1">
-        <div className="flex items-center">
+        <div className="flex items-center gap-1.5">
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button
@@ -5814,6 +5960,7 @@ function TranscriptTab({
                           Source
                         </button>
                       )}
+                      <TrackMetaInfoTooltip rows={buildSubtitleMetaRows(tr)} side="left" compact />
                       {videoId && (
                         <button
                           type="button"
@@ -5863,7 +6010,7 @@ function TranscriptTab({
           </DropdownMenu>
         </div>
 
-        <div className="flex items-center">
+        <div className="flex items-center gap-1.5">
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button
@@ -5935,13 +6082,18 @@ function TranscriptTab({
                         </span>
                       )}
                     </span>
-                    {videoId && (
-                      <div
-                        className="ml-auto flex shrink-0 items-center"
-                        onPointerDown={(e) => e.stopPropagation()}
-                        onPointerUp={(e) => e.stopPropagation()}
-                        onClick={(e) => e.stopPropagation()}
-                      >
+                    <div
+                      className="ml-auto flex shrink-0 items-center gap-0.5"
+                      onPointerDown={(e) => e.stopPropagation()}
+                      onPointerUp={(e) => e.stopPropagation()}
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <TrackMetaInfoTooltip
+                        rows={buildDubMetaRows(lang, trackMeta)}
+                        side="left"
+                        compact
+                      />
+                      {videoId && (
                         <button
                           type="button"
                           onClick={(e) => {
@@ -5955,8 +6107,8 @@ function TranscriptTab({
                         >
                           <Trash2 className="size-3.5" />
                         </button>
-                      </div>
-                    )}
+                      )}
+                    </div>
                   </DropdownMenuItem>
                 );
               })}
@@ -6005,20 +6157,19 @@ function TranscriptTab({
             writeSessionScroll(scrollKey, top);
           }}
           dir={currentTrack?.rtl ? "rtl" : "ltr"}
-          className="relative min-h-0 flex-1 space-y-1 overflow-y-auto px-3 pb-4 custom-scrollbar-sm"
+          className="relative min-h-0 flex-1 space-y-1 overflow-y-auto px-3 pb-4 select-text custom-scrollbar-sm"
         >
           {cues.map((cue, i) => (
             <li key={`${cue.start}-${i}`}>
-              <button
-                type="button"
-                onClick={(e) => {
-                  if (e.detail > 0) e.currentTarget.blur();
+              <div
+                onClick={() => {
+                  if (window.getSelection()?.toString()) return;
                   const span = Math.max(0, cue.end - cue.start);
                   const nudge = span > 0 ? Math.min(0.035, span * 0.2) : 0.025;
                   seek(cue.start + nudge, { minLockTime: cue.start });
                 }}
                 className={cn(
-                  "flex w-full gap-3 rounded-lg px-3 py-2.5 text-start transition-colors duration-300 hover:bg-secondary/60",
+                  "flex w-full cursor-pointer gap-3 rounded-lg px-3 py-2.5 text-start transition-colors duration-300 hover:bg-secondary/60",
                   i === activeIdx && "bg-primary-soft hover:bg-primary-soft",
                 )}
               >
@@ -6039,7 +6190,7 @@ function TranscriptTab({
                 >
                   {cue.text}
                 </span>
-              </button>
+              </div>
             </li>
           ))}
         </ol>

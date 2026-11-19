@@ -2136,3 +2136,520 @@ export function hitTestStroke(
   }
   return false;
 }
+
+export const CANVAS_CLIPBOARD_MIME = "application/x-tutin-canvas";
+export const CANVAS_ARTBOARD_MIN_WIDTH = 280;
+export const CANVAS_ARTBOARD_MIN_HEIGHT = 160;
+
+export interface CanvasBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface CanvasSelectionBundle {
+  groups: CanvasGroup[];
+  cards: CanvasCard[];
+  edges: CanvasEdge[];
+  strokes: CanvasStroke[];
+  /** Card IDs that were explicitly in the selection (not only pulled in as group children). */
+  explicitCardIds: string[];
+}
+
+export interface CanvasClipboardPayload {
+  version: 1;
+  clipboardId: string;
+  sourceCourseId: string;
+  bounds: CanvasBounds;
+  explicitCardIds: string[];
+  groups: CanvasGroup[];
+  cards: CanvasCard[];
+  edges: CanvasEdge[];
+  strokes: CanvasStroke[];
+  plainText: string;
+}
+
+export interface CanvasCloneResult {
+  nextState: CourseCanvasState;
+  clonedGroups: CanvasGroup[];
+  clonedCards: CanvasCard[];
+  clonedStrokes: CanvasStroke[];
+  topLevelClonedCardIds: string[];
+  groupIdMap: Map<string, string>;
+  cardIdMap: Map<string, string>;
+}
+
+/**
+ * Single source of truth for resolving everything that belongs to a canvas selection:
+ * selected artboards, their child/enclosed cards, explicitly selected cards,
+ * parented/enclosed strokes, and manual edges connecting two cards inside the bundle.
+ */
+export function collectCanvasSelectionItems(
+  state: CourseCanvasState,
+  groupIds: Iterable<string>,
+  cardIds: Iterable<string>,
+): CanvasSelectionBundle {
+  const groupIdSet = new Set(groupIds);
+  const explicitCardSet = new Set(cardIds);
+
+  const groups: CanvasGroup[] = [];
+  const activeGroupIds = new Set<string>();
+  const nonCollapsedGroupBounds: CanvasBounds[] = [];
+  for (const g of state.groups) {
+    if (!groupIdSet.has(g.id)) continue;
+    groups.push(g);
+    activeGroupIds.add(g.id);
+    if (!g.collapsed) {
+      nonCollapsedGroupBounds.push({ x: g.x, y: g.y, width: g.width, height: g.height });
+    }
+  }
+
+  const isPointInSelectedGroup = (px: number, py: number): boolean =>
+    nonCollapsedGroupBounds.some(
+      (b) => px >= b.x && px <= b.x + b.width && py >= b.y && py <= b.y + b.height,
+    );
+
+  const cards: CanvasCard[] = [];
+  const includedCardIds = new Set<string>();
+  const explicitCardIds: string[] = [];
+
+  for (const c of state.cards) {
+    const isExplicit = explicitCardSet.has(c.id);
+    const belongsToGroup = Boolean(c.groupId && activeGroupIds.has(c.groupId));
+    const enclosedInGroup =
+      !c.groupId &&
+      nonCollapsedGroupBounds.length > 0 &&
+      isPointInSelectedGroup(c.x + c.width / 2, c.y + c.height / 2);
+
+    if (isExplicit || belongsToGroup || enclosedInGroup) {
+      cards.push(c);
+      includedCardIds.add(c.id);
+      if (isExplicit) explicitCardIds.push(c.id);
+    }
+  }
+
+  const strokes: CanvasStroke[] = [];
+  if (activeGroupIds.size > 0) {
+    for (const s of state.strokes) {
+      const belongsToGroup = Boolean(s.parentGroupId && activeGroupIds.has(s.parentGroupId));
+      const enclosesMidpoint =
+        !s.parentGroupId &&
+        nonCollapsedGroupBounds.length > 0 &&
+        s.points.length > 0 &&
+        (() => {
+          const mid = s.points[Math.floor(s.points.length / 2)]!;
+          return isPointInSelectedGroup(mid[0], mid[1]);
+        })();
+      if (belongsToGroup || enclosesMidpoint) {
+        strokes.push(s);
+      }
+    }
+  }
+
+  const edges = state.edges.filter(
+    (e) => e.edgeKind === "manual" && includedCardIds.has(e.fromId) && includedCardIds.has(e.toId),
+  );
+
+  return { groups, cards, edges, strokes, explicitCardIds };
+}
+
+export function computeCanvasBundleBounds(
+  groups: CanvasGroup[],
+  cards: CanvasCard[],
+  strokes: CanvasStroke[] = [],
+): CanvasBounds | null {
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+
+  for (const g of groups) {
+    const h = g.collapsed ? CANVAS_GROUP_HEADER_HEIGHT : g.height;
+    if (g.x < minX) minX = g.x;
+    if (g.y < minY) minY = g.y;
+    if (g.x + g.width > maxX) maxX = g.x + g.width;
+    if (g.y + h > maxY) maxY = g.y + h;
+  }
+
+  for (const c of cards) {
+    if (c.x < minX) minX = c.x;
+    if (c.y < minY) minY = c.y;
+    if (c.x + c.width > maxX) maxX = c.x + c.width;
+    if (c.y + c.height > maxY) maxY = c.y + c.height;
+  }
+
+  for (const s of strokes) {
+    const b = getStrokeBounds(s);
+    if (!b) continue;
+    if (b.x < minX) minX = b.x;
+    if (b.y < minY) minY = b.y;
+    if (b.x + b.width > maxX) maxX = b.x + b.width;
+    if (b.y + b.height > maxY) maxY = b.y + b.height;
+  }
+
+  if (!Number.isFinite(minX) || !Number.isFinite(minY)) return null;
+  return {
+    x: minX,
+    y: minY,
+    width: Math.max(1, maxX - minX),
+    height: Math.max(1, maxY - minY),
+  };
+}
+
+function instantiateClonedBundle(
+  bundle: Pick<CanvasSelectionBundle, "groups" | "cards" | "edges" | "strokes" | "explicitCardIds">,
+  dx: number,
+  dy: number,
+): {
+  clonedGroups: CanvasGroup[];
+  clonedCards: CanvasCard[];
+  clonedEdges: CanvasEdge[];
+  clonedStrokes: CanvasStroke[];
+  topLevelClonedCardIds: string[];
+  groupIdMap: Map<string, string>;
+  cardIdMap: Map<string, string>;
+} {
+  const now = Date.now();
+  const rdx = Math.round(dx);
+  const rdy = Math.round(dy);
+
+  const groupIdMap = new Map<string, string>();
+  const clonedGroups: CanvasGroup[] = bundle.groups.map((g) => {
+    const nextId = createCanvasId("cgroup");
+    groupIdMap.set(g.id, nextId);
+    // Cloned artboards are always independent custom artboards so lesson video-artboard uniqueness stays intact.
+    return {
+      id: nextId,
+      type: "custom-artboard",
+      title: g.title,
+      x: Math.round(g.x + rdx),
+      y: Math.round(g.y + rdy),
+      width: g.width,
+      height: g.height,
+      tintIndex: g.tintIndex,
+      layoutMode: "custom",
+      collapsed: g.collapsed ?? false,
+    };
+  });
+
+  const cardIdMap = new Map<string, string>();
+  const clonedCards: CanvasCard[] = bundle.cards.map((c) => {
+    // Cloned video-notes become independent canvas-notes so 1:1 Player noteId sync never collides.
+    const nextType: CanvasCardType = c.type === "video-note" ? "canvas-note" : c.type;
+    const idPrefix = nextType === "text" ? "text" : nextType === "image" ? "img" : "ccard";
+    const nextId = createCanvasId(idPrefix);
+    cardIdMap.set(c.id, nextId);
+    const mappedGroupId = c.groupId ? (groupIdMap.get(c.groupId) ?? null) : null;
+    return {
+      id: nextId,
+      type: nextType,
+      groupId: mappedGroupId,
+      membershipState: "canvas-only",
+      isCanvasOnly: true,
+      x: Math.round(c.x + rdx),
+      y: Math.round(c.y + rdy),
+      width: c.width,
+      height: c.height,
+      htmlContent: c.htmlContent,
+      ...(c.imageSrc !== undefined ? { imageSrc: c.imageSrc } : {}),
+      ...(c.caption !== undefined ? { caption: c.caption } : {}),
+      ...(c.accentIndex !== undefined ? { accentIndex: c.accentIndex } : {}),
+      createdAt: now,
+      updatedAt: now,
+    };
+  });
+
+  const clonedEdges: CanvasEdge[] = [];
+  for (const e of bundle.edges) {
+    if (e.edgeKind !== "manual") continue;
+    const fromId = cardIdMap.get(e.fromId);
+    const toId = cardIdMap.get(e.toId);
+    if (!fromId || !toId) continue;
+    clonedEdges.push({
+      id: createCanvasId("cedge"),
+      edgeKind: "manual",
+      fromId,
+      toId,
+      ...(e.fromSide !== undefined ? { fromSide: e.fromSide } : {}),
+      ...(e.toSide !== undefined ? { toSide: e.toSide } : {}),
+      style: e.style,
+      ...(e.label !== undefined ? { label: e.label } : {}),
+      createdAt: now,
+    });
+  }
+
+  const clonedStrokes: CanvasStroke[] = bundle.strokes.map((s) => ({
+    id: createCanvasId("stroke"),
+    tool: s.tool,
+    points: s.points.map(([px, py, pressure]) => [px + rdx, py + rdy, pressure]),
+    colorToken: s.colorToken,
+    size: s.size,
+    parentGroupId: s.parentGroupId ? (groupIdMap.get(s.parentGroupId) ?? null) : null,
+  }));
+
+  const topLevelClonedCardIds = bundle.explicitCardIds
+    .map((id) => cardIdMap.get(id))
+    .filter((id): id is string => Boolean(id));
+
+  return {
+    clonedGroups,
+    clonedCards,
+    clonedEdges,
+    clonedStrokes,
+    topLevelClonedCardIds,
+    groupIdMap,
+    cardIdMap,
+  };
+}
+
+export function createCanvasClipboardPayload(
+  state: CourseCanvasState,
+  groupIds: Iterable<string>,
+  cardIds: Iterable<string>,
+): CanvasClipboardPayload | null {
+  const bundle = collectCanvasSelectionItems(state, groupIds, cardIds);
+  if (bundle.groups.length === 0 && bundle.cards.length === 0) return null;
+
+  const bounds = computeCanvasBundleBounds(bundle.groups, bundle.cards, bundle.strokes);
+  if (!bounds) return null;
+
+  const plainParts: string[] = [];
+  for (const c of bundle.cards) {
+    const text =
+      c.type === "image" ? (c.caption?.trim() ?? "") : stripHtmlToText(c.htmlContent).trim();
+    if (text) plainParts.push(text);
+  }
+
+  return {
+    version: 1,
+    clipboardId: createCanvasId("clip"),
+    sourceCourseId: state.courseId,
+    bounds,
+    explicitCardIds: [...bundle.explicitCardIds],
+    groups: bundle.groups.map((g) => ({ ...g })),
+    cards: bundle.cards.map((c) => ({ ...c })),
+    edges: bundle.edges.map((e) => ({ ...e })),
+    strokes: bundle.strokes.map((s) => ({
+      ...s,
+      points: s.points.map((pt) => [...pt] as [number, number, number]),
+    })),
+    plainText: plainParts.join("\n\n"),
+  };
+}
+
+export function parseCanvasClipboardPayload(raw: string): CanvasClipboardPayload | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as Partial<CanvasClipboardPayload> | null;
+    if (
+      !parsed ||
+      parsed.version !== 1 ||
+      typeof parsed.clipboardId !== "string" ||
+      !Array.isArray(parsed.groups) ||
+      !Array.isArray(parsed.cards) ||
+      !Array.isArray(parsed.edges) ||
+      !Array.isArray(parsed.strokes) ||
+      !parsed.bounds ||
+      !Number.isFinite(parsed.bounds.x) ||
+      !Number.isFinite(parsed.bounds.y) ||
+      !Number.isFinite(parsed.bounds.width) ||
+      !Number.isFinite(parsed.bounds.height)
+    ) {
+      return null;
+    }
+    return {
+      version: 1,
+      clipboardId: parsed.clipboardId,
+      sourceCourseId: typeof parsed.sourceCourseId === "string" ? parsed.sourceCourseId : "",
+      bounds: {
+        x: parsed.bounds.x,
+        y: parsed.bounds.y,
+        width: parsed.bounds.width,
+        height: parsed.bounds.height,
+      },
+      explicitCardIds: Array.isArray(parsed.explicitCardIds)
+        ? parsed.explicitCardIds.filter((id): id is string => typeof id === "string")
+        : parsed.cards.map((c) => c.id),
+      groups: parsed.groups,
+      cards: parsed.cards,
+      edges: parsed.edges,
+      strokes: parsed.strokes,
+      plainText: typeof parsed.plainText === "string" ? parsed.plainText : "",
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Duplicates the currently selected groups and/or cards in place (used by Alt+Drag).
+ * Drop membership for standalone cloned cards is resolved when the drag finishes.
+ */
+export function cloneCanvasSelectionItems(
+  state: CourseCanvasState,
+  groupIds: Iterable<string>,
+  cardIds: Iterable<string>,
+  dx = 0,
+  dy = 0,
+): CanvasCloneResult | null {
+  const bundle = collectCanvasSelectionItems(state, groupIds, cardIds);
+  if (bundle.groups.length === 0 && bundle.cards.length === 0) return null;
+
+  const {
+    clonedGroups,
+    clonedCards,
+    clonedEdges,
+    clonedStrokes,
+    topLevelClonedCardIds,
+    groupIdMap,
+    cardIdMap,
+  } = instantiateClonedBundle(bundle, dx, dy);
+
+  const nextState: CourseCanvasState = {
+    ...state,
+    groups: [...state.groups, ...clonedGroups],
+    cards: [...state.cards, ...clonedCards],
+    edges: [...state.edges, ...clonedEdges],
+    strokes: [...state.strokes, ...clonedStrokes],
+  };
+
+  return {
+    nextState,
+    clonedGroups,
+    clonedCards,
+    clonedStrokes,
+    topLevelClonedCardIds,
+    groupIdMap,
+    cardIdMap,
+  };
+}
+
+/**
+ * Pastes a serialized canvas clipboard payload at offset `(dx, dy)` relative to its original bounds.
+ * When pasting cards without artboards, resolves artboard drop membership cleanly.
+ */
+export function pasteCanvasClipboardPayload(
+  state: CourseCanvasState,
+  payload: CanvasClipboardPayload,
+  dx: number,
+  dy: number,
+): CanvasCloneResult {
+  const {
+    clonedGroups,
+    clonedCards,
+    clonedEdges,
+    clonedStrokes,
+    topLevelClonedCardIds,
+    groupIdMap,
+    cardIdMap,
+  } = instantiateClonedBundle(payload, dx, dy);
+
+  let nextState: CourseCanvasState = {
+    ...state,
+    groups: [...state.groups, ...clonedGroups],
+    cards: [...state.cards, ...clonedCards],
+    edges: [...state.edges, ...clonedEdges],
+    strokes: [...state.strokes, ...clonedStrokes],
+  };
+
+  if (clonedGroups.length === 0 && clonedCards.length > 0) {
+    nextState = applyCardDropMembership(nextState, new Set(clonedCards.map((c) => c.id)));
+  } else if (clonedGroups.length > 0) {
+    const fittedGroups = nextState.groups.map((g) => ({ ...g }));
+    fitArtboardsToChildren(fittedGroups, nextState.cards);
+    nextState = {
+      ...nextState,
+      groups: fittedGroups,
+    };
+  }
+
+  return {
+    nextState,
+    clonedGroups,
+    clonedCards,
+    clonedStrokes,
+    topLevelClonedCardIds,
+    groupIdMap,
+    cardIdMap,
+  };
+}
+
+/**
+ * Wraps the selected cards in a newly created custom artboard sized snugly around them,
+ * preserving each card's exact canvas position and parenting any enclosed unparented strokes.
+ */
+export function groupSelectionIntoArtboard(
+  state: CourseCanvasState,
+  cardIds: Iterable<string>,
+  title = "New group",
+): { nextState: CourseCanvasState; group: CanvasGroup } | null {
+  const idSet = new Set(cardIds);
+  if (idSet.size === 0) return null;
+
+  const nextGroups = state.groups.map((g) => ({ ...g }));
+  const nextCards = state.cards.map((c) => ({ ...c }));
+  const selected = nextCards.filter((c) => idSet.has(c.id));
+  if (selected.length === 0) return null;
+
+  const minX = Math.min(...selected.map((c) => c.x));
+  const minY = Math.min(...selected.map((c) => c.y));
+  const maxRight = Math.max(...selected.map((c) => c.x + c.width));
+  const maxBottom = Math.max(...selected.map((c) => c.y + c.height));
+
+  const topPad = CANVAS_GROUP_HEADER_HEIGHT + 14;
+  const gx = Math.round(minX - CANVAS_PADDING_X);
+  const gy = Math.round(minY - topPad);
+  const gw = Math.max(
+    CANVAS_ARTBOARD_MIN_WIDTH,
+    Math.round(maxRight - minX + CANVAS_PADDING_X * 2),
+  );
+  const gh = Math.max(
+    CANVAS_ARTBOARD_MIN_HEIGHT,
+    Math.round(maxBottom - minY + topPad + CANVAS_PADDING_BOTTOM),
+  );
+
+  const newGroup: CanvasGroup = {
+    id: createCanvasId("cgroup"),
+    type: "custom-artboard",
+    title,
+    x: gx,
+    y: gy,
+    width: gw,
+    height: gh,
+    tintIndex: nextGroups.length % 5,
+    layoutMode: "custom",
+    collapsed: false,
+  };
+
+  for (const card of selected) {
+    if (card.groupId) {
+      const prevGroup = nextGroups.find((g) => g.id === card.groupId);
+      if (prevGroup) prevGroup.layoutMode = "custom";
+    }
+    card.groupId = newGroup.id;
+    card.membershipState = card.isCanvasOnly ? "canvas-only" : "reassigned";
+  }
+
+  nextGroups.push(newGroup);
+
+  const nextStrokes = state.strokes.map((s) => {
+    if (s.parentGroupId || s.points.length === 0) return s;
+    const mid = s.points[Math.floor(s.points.length / 2)]!;
+    if (mid[0] >= gx && mid[0] <= gx + gw && mid[1] >= gy && mid[1] <= gy + gh) {
+      return { ...s, parentGroupId: newGroup.id };
+    }
+    return s;
+  });
+
+  return {
+    group: newGroup,
+    nextState: {
+      ...state,
+      groups: nextGroups,
+      cards: nextCards,
+      strokes: nextStrokes,
+      edges: rebuildAllAutoChronoEdges(nextGroups, nextCards, state.edges),
+    },
+  };
+}

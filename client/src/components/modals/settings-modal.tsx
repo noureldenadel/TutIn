@@ -138,6 +138,8 @@ const SHORTCUT_GROUPS: ShortcutGroup[] = [
       { action: "Connect cards", keys: "A" },
       { action: "Pen, highlighter, or eraser", keys: "P / M / E" },
       { action: "Upload image or new artboard", keys: "I / G" },
+      { action: "Copy / Paste selection", keys: "Ctrl+C / Ctrl+V" },
+      { action: "Duplicate selection", keys: "Alt + Drag" },
       { action: "Undo / Redo", keys: "Ctrl+Z / Ctrl+Shift+Z" },
       { action: "Delete selected item", keys: "Del / Backspace" },
       { action: "Reset tool or cancel link", keys: "Esc" },

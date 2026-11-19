@@ -12,6 +12,8 @@ import {
     saveDubTrackMeta,
     loadDubTrackMeta,
     deleteDubTrackMeta,
+    saveSubtitleTrackMeta,
+    loadSubtitleTrackMeta,
     loadCaptionChunks,
     saveCaptionFile,
     normalizeSubtitleSources,
@@ -193,6 +195,15 @@ function reconcileVideoDubbedTracks(meta) {
             engine: sidecarMeta?.engine || existingEntry?.engine || 'neural',
             bgMode: (sidecarMeta?.bgMode || existingEntry?.bgMode) === 'demucs' ? 'demucs' : 'none',
             voiceGender: sidecarMeta?.voiceGender || existingEntry?.voiceGender || 'male',
+            ttsModel: sidecarMeta?.ttsModel || existingEntry?.ttsModel || null,
+            backgroundModel: sidecarMeta?.backgroundModel || existingEntry?.backgroundModel || null,
+            pipeline: sidecarMeta?.pipeline || existingEntry?.pipeline || null,
+            generationSeconds: typeof sidecarMeta?.generationSeconds === 'number'
+                ? sidecarMeta.generationSeconds
+                : (typeof existingEntry?.generationSeconds === 'number' ? existingEntry.generationSeconds : null),
+            sourceTranscriptFile: sidecarMeta?.sourceTranscriptFile || existingEntry?.sourceTranscriptFile || null,
+            transcriptionModel: sidecarMeta?.transcriptionModel || existingEntry?.transcriptionModel || null,
+            translationModel: sidecarMeta?.translationModel || existingEntry?.translationModel || null,
             generatedAt: sidecarMeta?.generatedAt || existingEntry?.generatedAt || null
         })
     }
@@ -309,9 +320,18 @@ router.post('/video/:videoId/generate', async (req, res) => {
             return res.end()
         }
 
+        const dubStartMs = Date.now()
+        let didTranscribe = false
+        let didTranslate = false
+        let usedTranscriptionModel = null
+        let usedTranslationModel = null
+        let baseTranscriptFilePath = null
+        let baseTranscriptFileName = null
+
         const normalizedSources = normalizeSubtitleSources(meta.subtitleSources, meta.courseLanguage)
 
         // 1. Check if target language subtitle track already exists
+        const existingTargetEntry = resolveSubtitleSourceEntry(targetLang, normalizedSources, meta.courseLanguage)
         let targetChunks = loadCaptionChunks(
             meta.id,
             targetLang,
@@ -321,6 +341,14 @@ router.post('/video/:videoId/generate', async (req, res) => {
             meta.videoBaseName,
             meta.courseLanguage
         )
+
+        if (targetChunks && targetChunks.length > 0 && existingTargetEntry) {
+            baseTranscriptFilePath = existingTargetEntry.filePath || null
+            baseTranscriptFileName = existingTargetEntry.fileName || (baseTranscriptFilePath ? path.basename(baseTranscriptFilePath) : null)
+            const existingSubMeta = loadSubtitleTrackMeta(baseTranscriptFilePath)
+            if (existingSubMeta?.transcriptionModel) usedTranscriptionModel = existingSubMeta.transcriptionModel
+            if (existingSubMeta?.translationModel) usedTranslationModel = existingSubMeta.translationModel
+        }
 
         // 2. If no target language subtitles exist, auto-prepare from source (transcribe if needed -> translate)
         if (!targetChunks || targetChunks.length === 0) {
@@ -343,6 +371,13 @@ router.post('/video/:videoId/generate', async (req, res) => {
                 meta.courseLanguage
             )
 
+            if (sourceChunks && sourceChunks.length > 0 && resolvedSourceEntry) {
+                baseTranscriptFilePath = resolvedSourceEntry.filePath || null
+                baseTranscriptFileName = resolvedSourceEntry.fileName || (baseTranscriptFilePath ? path.basename(baseTranscriptFilePath) : null)
+                const srcMeta = loadSubtitleTrackMeta(baseTranscriptFilePath)
+                if (srcMeta?.transcriptionModel) usedTranscriptionModel = srcMeta.transcriptionModel
+            }
+
             // 2a. If no source subtitles exist at all, transcribe local video first
             if ((!sourceChunks || sourceChunks.length === 0) && meta.videoFilePath && fs.existsSync(meta.videoFilePath)) {
                 sendEvent({
@@ -350,6 +385,7 @@ router.post('/video/:videoId/generate', async (req, res) => {
                     percent: 8,
                     message: `Transcribing ${LANG_DISPLAY_MAP[effectiveSourceLang] || effectiveSourceLang} audio…`
                 })
+                const transcribeT0 = Date.now()
                 const pyTranscript = await transcribeWithPythonService({
                     videoPath: meta.videoFilePath,
                     language: effectiveSourceLang,
@@ -360,7 +396,21 @@ router.post('/video/:videoId/generate', async (req, res) => {
                 if (pyTranscript && Array.isArray(pyTranscript.chunks) && pyTranscript.chunks.length > 0) {
                     sourceChunks = normalizeCuesIntoClauses(pyTranscript.chunks, effectiveSourceLang)
                     if (sourceChunks.length > 0) {
+                        didTranscribe = true
+                        usedTranscriptionModel = `Faster-Whisper · ${pyTranscript.model || 'large-v3-turbo'}`
                         const savedSourcePath = saveCaptionFile(meta, effectiveSourceLang, sourceChunks, 'generated', 1)
+                        const srcFileName = path.basename(savedSourcePath || `${meta.videoBaseName}-generated.${effectiveSourceLang}.vtt`)
+                        const srcSubMeta = {
+                            pipeline: 'Transcribe',
+                            generationSeconds: typeof pyTranscript.elapsed_seconds === 'number'
+                                ? Math.round(pyTranscript.elapsed_seconds * 10) / 10
+                                : Math.round(((Date.now() - transcribeT0) / 1000) * 10) / 10,
+                            transcriptionModel: usedTranscriptionModel,
+                            generatedAt: new Date().toISOString()
+                        }
+                        saveSubtitleTrackMeta(savedSourcePath, srcSubMeta)
+                        baseTranscriptFilePath = savedSourcePath
+                        baseTranscriptFileName = srcFileName
                         const srcTrackId = buildTrackId(effectiveSourceLang, 'generated', 1)
                         const otherSrcs = normalizedSources.filter(s => s.id !== srcTrackId)
                         otherSrcs.push({
@@ -369,11 +419,12 @@ router.post('/video/:videoId/generate', async (req, res) => {
                             origin: 'generated',
                             version: 1,
                             label: 'AI',
-                            fileName: path.basename(savedSourcePath || `${meta.videoBaseName}-generated.${effectiveSourceLang}.vtt`),
+                            fileName: srcFileName,
                             filePath: savedSourcePath,
                             format: 'vtt',
                             is_master: !otherSrcs.some(s => s.lang === effectiveSourceLang && s.is_master),
-                            is_ai_source: !otherSrcs.some(s => s.is_ai_source)
+                            is_ai_source: !otherSrcs.some(s => s.is_ai_source),
+                            meta: srcSubMeta
                         })
                         const nextNormalized = normalizeSubtitleSources(otherSrcs, meta.courseLanguage)
                         run('UPDATE videos SET has_transcript = 1, subtitle_sources = ? WHERE id = ?', [
@@ -417,6 +468,7 @@ router.post('/video/:videoId/generate', async (req, res) => {
                     message: `Translating subtitles to ${LANG_DISPLAY_MAP[targetLang] || targetLang}…`
                 })
 
+                const translateT0 = Date.now()
                 const translated = await translateChunks(
                     sourceChunks,
                     targetLang,
@@ -440,9 +492,28 @@ router.post('/video/:videoId/generate', async (req, res) => {
                     throw new Error(`Could not translate subtitles to ${LANG_DISPLAY_MAP[targetLang] || targetLang}.`)
                 }
 
+                didTranslate = true
+                const usedOpenRouter = Boolean(apiKey && String(apiKey).trim())
+                usedTranslationModel = usedOpenRouter
+                    ? `OpenRouter · ${modelName || 'openai/gpt-4o-mini'}`
+                    : 'NLLB-200 (Local)'
+
                 // Save translated subtitles to vault so both Subtitles & Dub stay in sync
                 const currentSources = normalizeSubtitleSources(meta.subtitleSources, meta.courseLanguage)
                 const savedTgtPath = saveCaptionFile(meta, targetLang, translated, 'generated', 1)
+                const tgtFileName = path.basename(savedTgtPath || `${meta.videoBaseName}-generated.${targetLang}.vtt`)
+                const tgtSubMeta = {
+                    pipeline: 'Translate',
+                    generationSeconds: Math.round(((Date.now() - translateT0) / 1000) * 10) / 10,
+                    ...(usedTranscriptionModel ? { transcriptionModel: usedTranscriptionModel } : {}),
+                    translationModel: usedTranslationModel,
+                    ...(baseTranscriptFileName ? { sourceTrackFile: baseTranscriptFileName } : {}),
+                    sourceLanguage: effectiveSourceLang,
+                    generatedAt: new Date().toISOString()
+                }
+                saveSubtitleTrackMeta(savedTgtPath, tgtSubMeta)
+                baseTranscriptFilePath = savedTgtPath
+                baseTranscriptFileName = tgtFileName
                 const tgtTrackId = buildTrackId(targetLang, 'generated', 1)
                 const otherTgtSrcs = currentSources.filter(s => s.id !== tgtTrackId)
                 otherTgtSrcs.push({
@@ -451,11 +522,12 @@ router.post('/video/:videoId/generate', async (req, res) => {
                     origin: 'generated',
                     version: 1,
                     label: 'AI',
-                    fileName: path.basename(savedTgtPath || `${meta.videoBaseName}-generated.${targetLang}.vtt`),
+                    fileName: tgtFileName,
                     filePath: savedTgtPath,
                     format: 'vtt',
                     is_master: !otherTgtSrcs.some(s => s.lang === targetLang && s.is_master),
-                    is_ai_source: false
+                    is_ai_source: false,
+                    meta: tgtSubMeta
                 })
                 const updatedSources = normalizeSubtitleSources(otherTgtSrcs, meta.courseLanguage)
                 run('UPDATE videos SET has_transcript = 1, subtitle_sources = ? WHERE id = ?', [
@@ -540,13 +612,27 @@ router.post('/video/:videoId/generate', async (req, res) => {
                 }
 
                 const completedAt = new Date().toISOString()
+                const resolvedBgMode = live.bg_mode === 'demucs' ? 'demucs' : 'none'
+                const pipelineParts = []
+                if (didTranscribe) pipelineParts.push('Transcribe')
+                if (didTranslate) pipelineParts.push('Translate')
+                pipelineParts.push('Dub')
+                const totalGenerationSec = Math.round(((Date.now() - dubStartMs) / 1000) * 10) / 10
+
                 const trackMeta = {
                     language: targetLang,
                     filePath: finalPath,
                     status: 'ready',
                     engine: live.engine || engine,
-                    bgMode: live.bg_mode === 'demucs' ? 'demucs' : 'none',
+                    bgMode: resolvedBgMode,
                     voiceGender: live.voice_gender || voiceGender,
+                    ttsModel: live.tts_model || (engine === 'clone' ? 'Coqui XTTS-v2' : 'Edge-TTS'),
+                    backgroundModel: resolvedBgMode === 'demucs' ? 'HTDemucs' : null,
+                    pipeline: pipelineParts.join(' → '),
+                    generationSeconds: totalGenerationSec > 0 ? totalGenerationSec : (live.timings?.total_seconds ?? null),
+                    sourceTranscriptFile: baseTranscriptFileName,
+                    transcriptionModel: usedTranscriptionModel,
+                    translationModel: usedTranslationModel,
                     generatedAt: completedAt
                 }
 

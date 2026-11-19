@@ -1,6 +1,7 @@
 import {
   ChevronDown,
   ChevronUp,
+  ClipboardPaste,
   Copy,
   CornerDownLeft,
   Group,
@@ -10,7 +11,6 @@ import {
   Trash2,
   Type,
 } from "lucide-react";
-import { toast } from "sonner";
 
 import {
   ContextMenuDivider,
@@ -18,11 +18,8 @@ import {
   ContextMenuSurface,
   EditorAndImageMenuSections,
 } from "@/components/notes/app-context-menu";
-import { noteHtmlToMarkdown } from "@/components/notes/note-markdown";
 import { CANVAS_ACCENT_OPTIONS } from "@/components/canvas/canvas-tokens";
-import { copyTextToClipboard } from "@/lib/clipboard";
 import type { CanvasCard, CanvasEdge, CanvasGroup } from "@/lib/course-canvas";
-import { stripHtmlToText } from "@/lib/course-notes";
 import type { ContextMenuTargetAnalysis } from "@/lib/spellcheck";
 import { cn } from "@/lib/utils";
 
@@ -32,6 +29,7 @@ export type CanvasContextMenuTarget =
       clientX: number;
       clientY: number;
       cardIds: string[];
+      groupIds?: string[] | undefined;
       analysis?: ContextMenuTargetAnalysis | undefined;
       onOpenImage?: ((src: string) => void) | undefined;
     }
@@ -40,6 +38,7 @@ export type CanvasContextMenuTarget =
       clientX: number;
       clientY: number;
       groupIds: string[];
+      cardIds?: string[] | undefined;
     }
   | {
       kind: "edge";
@@ -116,18 +115,23 @@ export function CanvasContextMenu({
   groups,
   canTidyGroup = false,
   hasGroups = false,
+  canPaste = false,
+  activeSelectedCardIds = [],
+  activeSelectedGroupIds = [],
   edge,
   onUpdateCardsAccent,
   onEditCard,
+  onCopySelection,
+  onPasteAt,
+  onAddToArtboard,
   onReturnCardsToOrigin,
   onTidyCards,
-  onDeleteCards,
+  onDeleteSelection,
   onUpdateGroupsTint,
   onRenameGroup,
   onTidyGroups,
   onTidyAll,
   onSetGroupsCollapsed,
-  onDeleteGroups,
   onDeleteEdge,
   onAddNoteAt,
   onAddTextAt,
@@ -140,18 +144,23 @@ export function CanvasContextMenu({
   groups: CanvasGroup[];
   canTidyGroup?: boolean | undefined;
   hasGroups?: boolean | undefined;
+  canPaste?: boolean | undefined;
+  activeSelectedCardIds?: string[] | undefined;
+  activeSelectedGroupIds?: string[] | undefined;
   edge?: CanvasEdge | undefined;
   onUpdateCardsAccent: (cardIds: string[], accentIndex: number | undefined) => void;
   onEditCard: (cardId: string) => void;
+  onCopySelection: (groupIds: string[], cardIds: string[]) => void;
+  onPasteAt: (worldX: number, worldY: number) => void;
+  onAddToArtboard: (groupIds: string[], cardIds: string[]) => void;
   onReturnCardsToOrigin: (cardIds: string[]) => void;
   onTidyCards: (cardIds: string[]) => void;
-  onDeleteCards: (cardIds: string[]) => void;
+  onDeleteSelection: (groupIds: string[], cardIds: string[]) => void;
   onUpdateGroupsTint: (groupIds: string[], tintIndex: number) => void;
   onRenameGroup: (groupId: string) => void;
   onTidyGroups: (groupIds: string[]) => void;
   onTidyAll: () => void;
   onSetGroupsCollapsed: (groupIds: string[], collapsed: boolean) => void;
-  onDeleteGroups: (groupIds: string[]) => void;
   onDeleteEdge: (edgeId: string) => void;
   onAddNoteAt: (worldX: number, worldY: number) => void;
   onAddTextAt: (worldX: number, worldY: number) => void;
@@ -159,11 +168,16 @@ export function CanvasContextMenu({
   onClose: () => void;
 }) {
   const cardIds = target.kind === "cards" ? target.cardIds : [];
+  const cardTargetGroupIds = target.kind === "cards" ? (target.groupIds ?? []) : [];
   const accentSet = new Set(cards.map((c) => c.accentIndex));
   const sharedCardAccent = accentSet.size === 1 ? Array.from(accentSet)[0] : "mixed";
   const singleCard = cards.length === 1 ? cards[0] : undefined;
+  const isEditingTargetCard = Boolean(editingCardId && cardIds.includes(editingCardId));
   const canEditSingle =
-    Boolean(singleCard) && singleCard!.type !== "image" && editingCardId !== singleCard!.id;
+    Boolean(singleCard) &&
+    cardTargetGroupIds.length === 0 &&
+    singleCard!.type !== "image" &&
+    editingCardId !== singleCard!.id;
   const hasReturnableVideoNote = cards.some(
     (c) =>
       c.type === "video-note" &&
@@ -171,12 +185,17 @@ export function CanvasContextMenu({
       (c.membershipState === "detached" || c.membershipState === "reassigned"),
   );
   const hasVideoNote = cards.some((c) => c.type === "video-note");
+  const totalCardTargetCount = cards.length + cardTargetGroupIds.length;
 
   const groupIds = target.kind === "artboard" ? target.groupIds : [];
+  const groupTargetCardIds = target.kind === "artboard" ? (target.cardIds ?? []) : [];
   const tintSet = new Set(groups.map((g) => g.tintIndex));
   const sharedGroupTint = tintSet.size === 1 ? Array.from(tintSet)[0] : "mixed";
-  const singleGroup = groups.length === 1 ? groups[0] : undefined;
+  const singleGroup =
+    groups.length === 1 && groupTargetCardIds.length === 0 ? groups[0] : undefined;
   const allGroupsCollapsed = groups.length > 0 && groups.every((g) => g.collapsed);
+  const totalGroupTargetCount = groups.length + groupTargetCardIds.length;
+  const hasStageSelection = activeSelectedCardIds.length > 0 || activeSelectedGroupIds.length > 0;
 
   if (target.kind === "cards" && cards.length === 0) return null;
   if (target.kind === "artboard" && groups.length === 0) return null;
@@ -195,9 +214,9 @@ export function CanvasContextMenu({
             />
           )}
 
-          {cards.length > 1 && (
+          {totalCardTargetCount > 1 && (
             <div className="px-2 pb-1 pt-0.5 font-mono text-[11px] font-medium text-muted-foreground">
-              {cards.length} selected
+              {totalCardTargetCount} selected
             </div>
           )}
 
@@ -213,30 +232,31 @@ export function CanvasContextMenu({
           <ContextMenuDivider />
 
           {canEditSingle && singleCard && (
+            <ContextMenuItem
+              icon={<Pencil />}
+              label="Edit"
+              onClick={() => {
+                onEditCard(singleCard.id);
+                onClose();
+              }}
+            />
+          )}
+
+          {!isEditingTargetCard && (
             <>
               <ContextMenuItem
-                icon={<Pencil />}
-                label="Edit"
+                icon={<Copy />}
+                label="Copy"
                 onClick={() => {
-                  onEditCard(singleCard.id);
+                  onCopySelection(cardTargetGroupIds, cardIds);
                   onClose();
                 }}
               />
               <ContextMenuItem
-                icon={<Copy />}
-                label="Copy note"
+                icon={<Group />}
+                label="Add to artboard"
                 onClick={() => {
-                  const text =
-                    noteHtmlToMarkdown(singleCard.htmlContent) ||
-                    stripHtmlToText(singleCard.htmlContent);
-                  if (!text.trim()) {
-                    toast("Note is empty");
-                    onClose();
-                    return;
-                  }
-                  void copyTextToClipboard(text)
-                    .then(() => toast("Note copied"))
-                    .catch(() => toast.error("Failed to copy note"));
+                  onAddToArtboard(cardTargetGroupIds, cardIds);
                   onClose();
                 }}
               />
@@ -270,7 +290,7 @@ export function CanvasContextMenu({
             label={hasVideoNote ? "Remove" : "Delete"}
             destructive
             onClick={() => {
-              onDeleteCards(cardIds);
+              onDeleteSelection(cardTargetGroupIds, cardIds);
               onClose();
             }}
           />
@@ -279,9 +299,9 @@ export function CanvasContextMenu({
 
       {target.kind === "artboard" && groups.length > 0 && (
         <>
-          {groups.length > 1 && (
+          {totalGroupTargetCount > 1 && (
             <div className="px-2 pb-1 pt-0.5 font-mono text-[11px] font-medium text-muted-foreground">
-              {groups.length} selected
+              {totalGroupTargetCount} selected
             </div>
           )}
 
@@ -304,6 +324,26 @@ export function CanvasContextMenu({
               label="Rename"
               onClick={() => {
                 onRenameGroup(singleGroup.id);
+                onClose();
+              }}
+            />
+          )}
+
+          <ContextMenuItem
+            icon={<Copy />}
+            label="Copy"
+            onClick={() => {
+              onCopySelection(groupIds, groupTargetCardIds);
+              onClose();
+            }}
+          />
+
+          {groupTargetCardIds.length > 0 && (
+            <ContextMenuItem
+              icon={<Group />}
+              label="Add to artboard"
+              onClick={() => {
+                onAddToArtboard(groupIds, groupTargetCardIds);
                 onClose();
               }}
             />
@@ -336,7 +376,7 @@ export function CanvasContextMenu({
             label="Remove"
             destructive
             onClick={() => {
-              onDeleteGroups(groupIds);
+              onDeleteSelection(groupIds, groupTargetCardIds);
               onClose();
             }}
           />
@@ -381,6 +421,42 @@ export function CanvasContextMenu({
               onClose();
             }}
           />
+          {canPaste && (
+            <>
+              <ContextMenuDivider />
+              <ContextMenuItem
+                icon={<ClipboardPaste />}
+                label="Paste"
+                onClick={() => {
+                  onPasteAt(target.worldX, target.worldY);
+                  onClose();
+                }}
+              />
+            </>
+          )}
+          {hasStageSelection && (
+            <>
+              <ContextMenuDivider />
+              <ContextMenuItem
+                icon={<Copy />}
+                label="Copy"
+                onClick={() => {
+                  onCopySelection(activeSelectedGroupIds, activeSelectedCardIds);
+                  onClose();
+                }}
+              />
+              {activeSelectedCardIds.length > 0 && (
+                <ContextMenuItem
+                  icon={<Group />}
+                  label="Add to artboard"
+                  onClick={() => {
+                    onAddToArtboard(activeSelectedGroupIds, activeSelectedCardIds);
+                    onClose();
+                  }}
+                />
+              )}
+            </>
+          )}
           {hasGroups && (
             <>
               <ContextMenuDivider />
