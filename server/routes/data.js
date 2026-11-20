@@ -58,7 +58,7 @@ router.post('/fetch-page-metadata', async (req, res) => {
         const response = await fetch(parsed.href, {
             signal: controller.signal,
             headers: {
-                'User-Agent': 'Mozilla/5.0 (compatible; TutIn/7.0)',
+                'User-Agent': 'Mozilla/5.0 (compatible; TutIn/8.0-beta)',
                 Accept: 'text/html,application/xhtml+xml',
             },
         })

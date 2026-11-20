@@ -59,6 +59,7 @@ data/
 
 # Development artifacts
 .gemini/
+.agents/
 todo.md
 
 # Data and Backups

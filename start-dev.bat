@@ -1,10 +1,10 @@
 @echo off
 setlocal
 cd /d "%~dp0"
-title TutIn v7 Launcher
+title TutIn v8.0 Beta Launcher
 
 echo ===================================================
-echo             Starting TutIn v7.0
+echo             Starting TutIn v8.0 Beta
 echo ===================================================
 echo.
 
@@ -70,7 +70,7 @@ if not exist "client\node_modules\" (
 )
 
 :: 4. Start backend API + Vite client and open browser
-echo [INFO] Starting TutIn v7.0 server (:9474) and client (:5173)...
+echo [INFO] Starting TutIn v8.0 Beta server (:9474) and client (:5173)...
 echo.
 start "" /b cmd /c "timeout /t 3 /nobreak >nul & start http://127.0.0.1:5173"
 call npm start

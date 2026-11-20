@@ -1,13 +1,13 @@
-# TutIn v7 User Guide
+# TutIn v8.0 Beta User Guide
 
 > Practical guide for organizing courses, studying lectures, annotating video timelines, mapping ideas on Canvas, and backing up your local TutIn library.
 
 ---
 
-## 1. Starting TutIn v7
+## 1. Starting TutIn v8.0 Beta
 
 - **Windows Launcher:** Double-click [`start-dev.bat`](../start-dev.bat) in the repository root. It verifies Node.js/npm, installs missing workspace/server/client packages automatically, opens `http://127.0.0.1:5173`, and runs both the backend (`127.0.0.1:9474`) and client dev server.
-- **Terminal:** Run `npm start` from the repository root.
+- **Terminal & AI Sidecar Setup:** Run `npm start` from the repository root, or follow [`docs/INSTALLATION.md`](./INSTALLATION.md) for manual installs, optional Python `.venv` / CUDA acceleration, and environment variables.
 - **Data Storage:** Your library, watch history, roadmaps, settings, and canvas boards live in `%APPDATA%/TutIn/tutin.db` (or `TUTIN_DATA_DIR/tutin.db`). Local folder courses also sync portable artifacts inside `<courseFolder>/.tutin/`.
 
 > [!NOTE]
@@ -71,5 +71,5 @@
 - **Voice:** Configure default AI dubbing engine (`Neural · Fast` vs `Clone`), neural gender (`Male` / `Female`), background audio (`Off` vs `Music & SFX`), cloning compute device (`Auto` / `GPU` / `CPU`), idle VRAM unload toggle, and view local AI model disk usage.
 - **Shortcuts:** Toggle playback shortcuts and inspect Player, Canvas, Notes Editor, and Global (`Ctrl+K` command search) keybindings.
 - **Data:** View SQLite note/course counts, **Export** full workspace JSON (`courses`, `modules`, `videos`, `notes`, `analytics`, `roadmaps`, `settings`, Canvas v2 boards), **Import** backups, or **Reset** local workspace data safely.
-- **About:** View current build (`TutIn v7.0`) and replay the 4-step **Welcome guide** anytime.
+- **About:** View current build (`TutIn v8.0 Beta` / `8.0.0-beta`) and replay the 4-step **Welcome guide** anytime.
 

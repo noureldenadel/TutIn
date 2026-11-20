@@ -96,7 +96,7 @@ try:
 except Exception as _patch_err:
     print(f"[TutIn AI] Warning: Could not patch torchaudio.load: {_patch_err}")
 
-app = FastAPI(title="TutIn AI & Dubbing Service", version="7.0.0")
+app = FastAPI(title="TutIn AI & Dubbing Service", version="8.0.0-beta")
 
 app.add_middleware(
     CORSMiddleware,

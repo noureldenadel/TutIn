@@ -858,6 +858,15 @@ export function applyMarkdownOnEnter(editor: HTMLElement, shiftKey: boolean): bo
       if (!ctx.block.querySelector(":scope > br")) {
         ctx.block.insertBefore(document.createElement("br"), firstNested);
       }
+    } else {
+      const lastOwn = firstNested ? firstNested.previousSibling : ctx.block.lastChild;
+      if (
+        lastOwn &&
+        lastOwn.nodeType === Node.ELEMENT_NODE &&
+        (lastOwn as HTMLElement).tagName === "BR"
+      ) {
+        lastOwn.parentNode?.removeChild(lastOwn);
+      }
     }
 
     const newLi = createListItemWithContent(afterFrag, { bullet, delim });
@@ -1029,6 +1038,13 @@ export function applyMarkdownOnBackspace(editor: HTMLElement): boolean {
   if (!isCaretAtStartOfScope(block, range)) return false;
 
   const prev = block.previousElementSibling as HTMLElement | null;
+
+  if (block.parentElement?.tagName.toLowerCase() === "li") {
+    if (!prev) {
+      return outdentListItem(editor, block.parentElement);
+    }
+    return false;
+  }
 
   // Deleting an empty line or divider directly above a block preserves headings, quotes, and inline marks.
   if (

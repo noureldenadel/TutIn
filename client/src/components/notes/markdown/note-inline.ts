@@ -880,6 +880,27 @@ export function handleMarkdownDelimiterBackspace(editor: HTMLElement): boolean {
     }
   }
 
+  // 5. Remove invisible standalone `\u200B` anchors (e.g. from `moveCaretBeforeInline`) so
+  //    Backspace acts directly on the real preceding `<br>` or block boundary in one keypress.
+  if (range.startContainer.nodeType === Node.TEXT_NODE) {
+    const tn = range.startContainer as Text;
+    const val = tn.nodeValue || "";
+    const prevNode = tn.previousSibling;
+    const isAfterSyntax = prevNode instanceof HTMLElement && prevNode.hasAttribute(MD_SYNTAX_ATTR);
+    if (val.length > 0 && stripZeroWidth(val) === "" && range.startOffset > 0 && !isAfterSyntax) {
+      const parent = tn.parentNode;
+      if (parent) {
+        const idx = Array.prototype.indexOf.call(parent.childNodes, tn);
+        tn.remove();
+        if (prevNode && prevNode.nodeType === Node.TEXT_NODE) {
+          placeCaret(prevNode, prevNode.nodeValue?.length ?? 0);
+        } else {
+          placeCaret(parent, Math.max(0, idx));
+        }
+      }
+    }
+  }
+
   return false;
 }
 

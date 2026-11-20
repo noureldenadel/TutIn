@@ -210,6 +210,128 @@ export function getTopLevelBlock(node: Node | null, root: HTMLElement): HTMLElem
   return null;
 }
 
+function isIgnorableBoundaryNode(node: Node, direction: "prev" | "next"): boolean {
+  if (node.nodeType === Node.TEXT_NODE) {
+    return stripZeroWidth((node.nodeValue || "").replace(/\u00A0/g, " ")).trim().length === 0;
+  }
+  if (node.nodeType !== Node.ELEMENT_NODE) return true;
+  const el = node as HTMLElement;
+  if (el.hasAttribute(MD_SYNTAX_ATTR) || el.hasAttribute("data-task-checkbox")) {
+    return true;
+  }
+  // A sole trailing sentinel `<br>` at the end of an inline container carries no content after `curr`.
+  if (direction === "next" && el.tagName === "BR" && el.nextSibling === null) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Walks upward from `block` to its top-level direct child under `editor`, returning the
+ * adjacent top-level sibling in `direction` only if no sibling text or elements sit
+ * between `block` and that top-level boundary.
+ */
+export function getTopLevelBoundarySibling(
+  editor: HTMLElement,
+  block: HTMLElement,
+  direction: "prev" | "next",
+): HTMLElement | null {
+  let curr: HTMLElement | null = block;
+  while (curr && curr.parentElement && curr.parentElement !== editor) {
+    let sib = direction === "prev" ? curr.previousSibling : curr.nextSibling;
+    while (sib) {
+      if (!isIgnorableBoundaryNode(sib, direction)) {
+        return null;
+      }
+      sib = direction === "prev" ? sib.previousSibling : sib.nextSibling;
+    }
+    curr = curr.parentElement;
+  }
+  if (!curr || curr.parentElement !== editor) return null;
+  return (
+    direction === "prev" ? curr.previousElementSibling : curr.nextElementSibling
+  ) as HTMLElement | null;
+}
+
+/**
+ * Unwraps `<p>` / `<div>` wrappers inside `<li>` into canonical tight-list inline nodes
+ * separated by `<br>` soft breaks so list editing, Backspace, Tab, and Live Preview stay consistent.
+ */
+export function unwrapParagraphsInListItems(container: HTMLElement): void {
+  const isUnwrappableWrapper = (node: Node): node is HTMLElement => {
+    if (node.nodeType !== Node.ELEMENT_NODE) return false;
+    const el = node as HTMLElement;
+    const tag = el.tagName.toLowerCase();
+    if (tag !== "p" && tag !== "div") return false;
+    if (el.hasAttribute(NOTE_IMAGE_BLOCK_ATTR)) return false;
+    if (el.querySelector("ul, ol, pre, blockquote, hr, table")) return false;
+    return true;
+  };
+
+  const isSignificantInline = (node: Node): boolean => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      return stripZeroWidth((node.nodeValue || "").replace(/\u00A0/g, " ")).trim().length > 0;
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE) return false;
+    const el = node as HTMLElement;
+    if (el.hasAttribute("data-task-checkbox") || el.hasAttribute(MD_SYNTAX_ATTR)) return false;
+    const tag = el.tagName.toLowerCase();
+    return tag !== "ul" && tag !== "ol";
+  };
+
+  for (const li of Array.from(container.querySelectorAll("li"))) {
+    if (li.closest("pre")) continue;
+    const scope = (li.hasAttribute("data-task") ? getTaskContentSpan(li) : null) || li;
+    if (!Array.from(scope.childNodes).some(isUnwrappableWrapper)) continue;
+
+    const frag = document.createDocumentFragment();
+    let hasPrevInlineLine = false;
+
+    for (const child of Array.from(scope.childNodes)) {
+      if (child.nodeType === Node.ELEMENT_NODE) {
+        const el = child as HTMLElement;
+        const tag = el.tagName.toLowerCase();
+        if (
+          tag === "ul" ||
+          tag === "ol" ||
+          el.hasAttribute("data-task-checkbox") ||
+          el.hasAttribute(MD_SYNTAX_ATTR)
+        ) {
+          frag.appendChild(child);
+          hasPrevInlineLine = false;
+          continue;
+        }
+      }
+
+      if (isUnwrappableWrapper(child)) {
+        if (hasPrevInlineLine) {
+          frag.appendChild(document.createElement("br"));
+        }
+        const onlyEmptySentinel =
+          !child.querySelector("img") && getTextWithoutArtifacts(child).trim().length === 0;
+        if (!onlyEmptySentinel) {
+          while (child.firstChild) {
+            frag.appendChild(child.firstChild);
+          }
+        }
+        child.remove();
+        hasPrevInlineLine = true;
+        continue;
+      }
+
+      frag.appendChild(child);
+      if (isSignificantInline(child)) {
+        hasPrevInlineLine = true;
+      }
+    }
+
+    scope.appendChild(frag);
+    if (!hasOwnInlineContent(li as HTMLElement)) {
+      normalizeEmptyBreak(scope as HTMLElement);
+    }
+  }
+}
+
 export function getEditableScope(block: HTMLElement): HTMLElement {
   const tag = block.tagName.toLowerCase();
   if (tag === "li" && block.hasAttribute("data-task")) {
@@ -878,6 +1000,7 @@ export function sanitizeClipboardHtml(rawHtml: string): string {
   };
 
   sanitizeChildren(doc.body);
+  unwrapParagraphsInListItems(doc.body);
   stripLiveSyntaxArtifacts(doc.body);
   return doc.body.innerHTML.trim();
 }
@@ -925,9 +1048,7 @@ export function stripChromiumInlineArtifacts(
   };
 
   const dirtyWrappers = Array.from(
-    container.querySelectorAll(
-      "font, span:not([data-task-content]):not([data-md-syntax]):not([data-md-url])",
-    ),
+    container.querySelectorAll("font, span:not([data-task-content]):not([data-md-syntax]):not([data-md-url])"),
   ).reverse();
 
   for (const el of dirtyWrappers) {
@@ -1146,6 +1267,7 @@ export function sanitizeStoredNoteHtml(rawHtml: string): string {
   };
 
   sanitizeNodeTree(doc.body);
+  unwrapParagraphsInListItems(doc.body);
   stripLiveSyntaxArtifacts(doc.body);
   convertStandaloneHrLines(doc.body);
   syncImageBlockAlignments(doc.body);
@@ -1383,11 +1505,11 @@ export function convertStandaloneHrLines(
   const savedEndpoints =
     range && sel && range.intersectsNode(container)
       ? {
-          anchorNode: sel.anchorNode,
-          anchorOffset: sel.anchorOffset,
-          focusNode: sel.focusNode,
-          focusOffset: sel.focusOffset,
-        }
+        anchorNode: sel.anchorNode,
+        anchorOffset: sel.anchorOffset,
+        focusNode: sel.focusNode,
+        focusOffset: sel.focusOffset,
+      }
       : null;
 
   let converted = false;
@@ -1465,11 +1587,11 @@ export function convertStandaloneHrLines(
       const onlyTextLike = curNodes.every((n) => n.nodeType === Node.TEXT_NODE);
       const text = onlyTextLike
         ? curNodes
-            .map((n) => n.nodeValue || "")
-            .join("")
-            .replace(/\u200B/g, "")
-            .replace(/\u00A0/g, " ")
-            .trim()
+          .map((n) => n.nodeValue || "")
+          .join("")
+          .replace(/\u200B/g, "")
+          .replace(/\u00A0/g, " ")
+          .trim()
         : "";
       const isCandidate = Boolean(onlyTextLike && HR_LINE_REGEX.test(text));
       const touched = isCandidate && isRangeTouchingNodes(block, curNodes, segStart, endIdx);

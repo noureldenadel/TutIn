@@ -70,7 +70,8 @@ app.use(express.json({ limit: '50mb' }))
 app.get('/api/health', (req, res) => {
     res.json({
         status: 'ok',
-        version: '7.0.0',
+        version: '8.0.0-beta',
+        channel: 'beta',
         port: server?.address()?.port || DEFAULT_PORT,
         dataDir: getDataDir(),
         uptime: Math.floor(process.uptime()),
@@ -153,7 +154,7 @@ async function start() {
         console.log('')
         console.log('  ╔══════════════════════════════════════════╗')
         console.log('  ║                                          ║')
-        console.log(`  ║   🎓 TutIn Server v7.0                   ║`)
+        console.log(`  ║   🎓 TutIn Server v8.0 Beta              ║`)
         console.log(`  ║   http://127.0.0.1:${port}                 ║`)
         console.log('  ║                                          ║')
         console.log(`  ║   Data: ${getDataDir()}`)

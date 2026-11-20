@@ -76,7 +76,8 @@ export function noteHtmlToMarkdown(html: string): string {
             )
             .map(renderInline)
             .join("")
-            .trim();
+            .trim()
+            .replace(/\n+/g, `\n${indent}  `);
           const bullet = getLiBulletMarker(li as HTMLElement);
           const delim = getLiDelimMarker(li as HTMLElement);
           const prefix = isTask

@@ -1123,7 +1123,7 @@ export function SettingsModal({
               {activeTab === "about" && (
                 <div className="divide-y divide-border/50">
                   <div className="space-y-1 pb-5">
-                    <p className="text-sm font-semibold">TutIn v7.0</p>
+                    <p className="text-sm font-semibold">TutIn v8.0 Beta</p>
                     <p className="text-xs text-muted-foreground">
                       Offline-first course library, player, rich notes, and visual canvas workspace.
                     </p>
@@ -1152,13 +1152,13 @@ export function SettingsModal({
                   <div className="flex items-center justify-between gap-4 pt-5">
                     <div className="space-y-0.5">
                       <span className="text-sm font-medium">App updates</span>
-                      <p className="text-xs text-muted-foreground">Current build: v7.0</p>
+                      <p className="text-xs text-muted-foreground">Current build: 8.0.0-beta</p>
                     </div>
                     <Button
                       type="button"
                       variant="secondary"
                       size="sm"
-                      onClick={() => toast.info("TutIn v7.0 is up to date.")}
+                      onClick={() => toast.info("TutIn v8.0 Beta is up to date.")}
                     >
                       Check updates
                     </Button>

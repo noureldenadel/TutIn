@@ -1,7 +1,7 @@
 {
   "name": "tutin-app",
   "private": true,
-  "version": "7.0.0",
+  "version": "8.0.0-beta",
   "author": "noor",
   "license": "MIT",
   "type": "module",

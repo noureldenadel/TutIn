@@ -9,6 +9,7 @@ import {
   getEditableScope,
   getTextWithoutArtifacts,
   getTopLevelBlock,
+  getTopLevelBoundarySibling,
   hasVisibleContent,
   hasVisibleFragmentContent,
   inferImageAlignmentFromContext,
@@ -16,6 +17,7 @@ import {
   isCaretAtEndOfScope,
   isCaretAtStartOfScope,
   isCaretOnVisualEdgeLine,
+  isInsideTag,
   normalizeEmptyBreak,
   placeCaretAtEnd,
   placeCaretAtStart,
@@ -305,34 +307,17 @@ function getAdjacentImageBlock(
   block: HTMLElement,
   direction: "prev" | "next",
 ): HTMLElement | null {
-  if (block.tagName.toLowerCase() === "li") {
-    const topBlock = getTopLevelBlock(block, editor);
-    if (!topBlock || (topBlock.tagName !== "UL" && topBlock.tagName !== "OL")) return null;
-    if (direction === "prev") {
-      if (topBlock.querySelector("li") !== block) return null;
-      return isImageBlockElement(topBlock.previousElementSibling)
-        ? (topBlock.previousElementSibling as HTMLElement)
-        : null;
-    }
-    const items = topBlock.querySelectorAll("li");
-    if (items[items.length - 1] !== block) return null;
-    return isImageBlockElement(topBlock.nextElementSibling)
-      ? (topBlock.nextElementSibling as HTMLElement)
-      : null;
-  }
-
-  const topBlock = block.parentElement === editor ? block : getTopLevelBlock(block, editor);
-  if (!topBlock) return null;
-  const sibling =
-    direction === "prev" ? topBlock.previousElementSibling : topBlock.nextElementSibling;
-  return isImageBlockElement(sibling) ? (sibling as HTMLElement) : null;
+  const sibling = getTopLevelBoundarySibling(editor, block, direction);
+  return isImageBlockElement(sibling) ? sibling : null;
 }
 
 export function resolveImageBoundaryBeforeBackspace(editor: HTMLElement): HTMLImageElement | null {
   const range = getCollapsedSelectionRange(editor);
   if (!range) return null;
   const block = getClosestBlock(range.startContainer, editor);
-  if (!block || block.tagName.toLowerCase() === "li") return null;
+  if (!block || isInsideTag(range.startContainer, editor, ["li", "blockquote", "pre"])) {
+    return null;
+  }
   if (!isCaretAtStartOfScope(block, range)) return null;
 
   const prevImgBlock = getAdjacentImageBlock(editor, block, "prev");

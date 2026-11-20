@@ -20,7 +20,7 @@ import {
   getFirstEditableTarget,
   getLiOwnChildLimit,
   getTextWithoutArtifacts,
-  getTopLevelBlock,
+  getTopLevelBoundarySibling,
   hasOwnInlineContent,
   hasVisibleContent,
   isCaretAtBlockBoundaryStart,
@@ -1765,25 +1765,7 @@ function getAdjacentHrSibling(
   block: HTMLElement,
   direction: "prev" | "next",
 ): HTMLElement | null {
-  if (block.tagName.toLowerCase() === "li") {
-    const topBlock = getTopLevelBlock(block, editor);
-    if (!topBlock || (topBlock.tagName !== "UL" && topBlock.tagName !== "OL")) return null;
-    if (direction === "prev") {
-      if (topBlock.querySelector("li") !== block) return null;
-      const prev = topBlock.previousElementSibling as HTMLElement | null;
-      return prev && prev.tagName.toLowerCase() === "hr" ? prev : null;
-    }
-    const items = topBlock.querySelectorAll("li");
-    if (items[items.length - 1] !== block) return null;
-    const next = topBlock.nextElementSibling as HTMLElement | null;
-    return next && next.tagName.toLowerCase() === "hr" ? next : null;
-  }
-
-  const topBlock = block.parentElement === editor ? block : getTopLevelBlock(block, editor);
-  if (!topBlock) return null;
-  const sibling = (
-    direction === "prev" ? topBlock.previousElementSibling : topBlock.nextElementSibling
-  ) as HTMLElement | null;
+  const sibling = getTopLevelBoundarySibling(editor, block, direction);
   return sibling && sibling.tagName.toLowerCase() === "hr" ? sibling : null;
 }
 
